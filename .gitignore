@@ -1,0 +1,29 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+
+# Test / coverage artifacts
+TestResults/
+[Cc]overage/
+*.coverage
+*.cobertura.xml
+*.opencover.xml
+lcov.info
+
+# Runtime settings — may contain clientId / account email (PII). Generated next to the exe.
+settings.json
+
+# MSAL token cache (normally under %LOCALAPPDATA%, never committed)
+msal.cache
+*.msalcache.bin
+
+# Assistant working notes and local agent guidance
+.remember/
+CLAUDE.md
+
+# OS noise
+Thumbs.db
+.DS_Store
