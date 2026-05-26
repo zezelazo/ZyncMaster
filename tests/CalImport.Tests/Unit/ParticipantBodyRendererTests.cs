@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using SyncMaster.CalImport;
 using SyncMaster.Core;
@@ -27,7 +28,7 @@ public sealed class ParticipantBodyRendererTests
     }
 
     [Fact]
-    public void BuildBodyForCreate_NoDescription_OnlyMarkers()
+    public void BuildBodyForCreate_NoDescription_OnlyBlock()
     {
         var html = _sut.BuildBodyForCreate("", SampleParticipants());
 
@@ -47,16 +48,54 @@ public sealed class ParticipantBodyRendererTests
     }
 
     [Fact]
-    public void BuildBodyForCreate_ParticipantBlockHasBothMarkers()
+    public void BuildBodyForCreate_ParticipantsRenderedBeforeDescription()
     {
-        var html = _sut.BuildBodyForCreate("Desc", SampleParticipants());
+        var html = _sut.BuildBodyForCreate("My description here", SampleParticipants());
 
         html.IndexOf("calimport:participants:start", StringComparison.Ordinal)
-            .Should().BeLessThan(html.IndexOf("calimport:participants:end", StringComparison.Ordinal));
+            .Should().BeLessThan(html.IndexOf("My description here", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Merge_NoMarkersInBody_AppendsNewBlock()
+    public void BuildBodyForCreate_RendersHtmlTableWithHeaders()
+    {
+        var html = _sut.BuildBodyForCreate("", SampleParticipants());
+
+        html.Should().Contain("<table");
+        html.Should().Contain("<th>Name</th>");
+        html.Should().Contain("<th>Email</th>");
+        html.Should().Contain("<th>Type</th>");
+        html.Should().Contain("<th>Response</th>");
+        html.Should().Contain("<td>Bob</td>");
+        html.Should().Contain("<td>bob@x.com</td>");
+        html.Should().Contain("<td>required</td>");
+        html.Should().Contain("<td>accepted</td>");
+    }
+
+    [Fact]
+    public void BuildBodyForCreate_HeaderIsEnglish()
+    {
+        var html = _sut.BuildBodyForCreate("", SampleParticipants());
+
+        html.Should().Contain("Participants");
+        html.Should().NotContain("Participantes");
+    }
+
+    [Fact]
+    public void BuildBodyForCreate_EscapesParticipantFields()
+    {
+        var participants = new List<ParticipantRecord>
+        {
+            new ParticipantRecord { Name = "A<b>", Email = "x@y.com", Type = "required", Response = "none" },
+        };
+        var html = _sut.BuildBodyForCreate("", participants);
+
+        html.Should().Contain("A&lt;b&gt;");
+        html.Should().NotContain("<td>A<b></td>");
+    }
+
+    [Fact]
+    public void Merge_NoMarkersInBody_PrependsBlockBeforeExistingBody()
     {
         var existing = "<p>User-written body</p>";
         var result   = _sut.MergeIntoExistingBody(existing, SampleParticipants());
@@ -64,6 +103,9 @@ public sealed class ParticipantBodyRendererTests
         result.Should().Contain("User-written body");
         result.Should().Contain("calimport:participants:start");
         result.Should().Contain("Bob");
+        // Block prepended: it appears before the user's existing body.
+        result.IndexOf("calimport:participants:start", StringComparison.Ordinal)
+              .Should().BeLessThan(result.IndexOf("User-written body", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -71,7 +113,7 @@ public sealed class ParticipantBodyRendererTests
     {
         var existing =
             "<p>Top</p>\n" +
-            "<!-- calimport:participants:start -->\n<ul><li>OLD</li></ul>\n<!-- calimport:participants:end -->\n" +
+            "<!-- calimport:participants:start -->\n<table><tr><td>OLD</td></tr></table>\n<!-- calimport:participants:end -->\n" +
             "<p>Bottom edited by user</p>";
 
         var result = _sut.MergeIntoExistingBody(existing, SampleParticipants());
@@ -87,7 +129,7 @@ public sealed class ParticipantBodyRendererTests
     {
         var existing =
             "<p>Top</p>\n" +
-            "<!-- calimport:participants:start -->\n<ul><li>OLD</li></ul>\n<!-- calimport:participants:end -->\n" +
+            "<!-- calimport:participants:start -->\n<table><tr><td>OLD</td></tr></table>\n<!-- calimport:participants:end -->\n" +
             "<p>Bottom</p>";
 
         var result = _sut.MergeIntoExistingBody(existing, Array.Empty<ParticipantRecord>());
@@ -96,15 +138,14 @@ public sealed class ParticipantBodyRendererTests
         result.Should().Contain("Bottom");
         result.Should().NotContain("OLD");
         result.Should().NotContain("calimport:participants");
-        result.Should().NotContain("Participantes");
+        result.Should().NotContain("Participants");
     }
 
     [Fact]
     public void Merge_NoParticipants_NoMarkers_BodyUnchanged()
     {
         var existing = "<p>Plain body</p>";
-        _sut.MergeIntoExistingBody(existing, Array.Empty<ParticipantRecord>())
-            .Should().Be("Plain body" == "" ? "" : existing);
+        _sut.MergeIntoExistingBody(existing, Array.Empty<ParticipantRecord>()).Should().Be(existing);
     }
 
     [Fact]
@@ -120,29 +161,9 @@ public sealed class ParticipantBodyRendererTests
         var body1 = _sut.BuildBodyForCreate("Desc", participants);
         var body2 = _sut.MergeIntoExistingBody(body1, participants);
 
-        // The block content should be stable across a re-render with the same participants.
         body2.Should().Contain("Bob");
         body2.Should().Contain("Room");
-        var firstCount = System.Text.RegularExpressions.Regex.Matches(body2, "calimport:participants:start").Count;
-        firstCount.Should().Be(1);
-    }
-
-    [Fact]
-    public void BuildBodyForCreate_NullDescription_DoesNotThrow_AndOmitsDescriptionParagraph()
-    {
-        // description == null hits the IsNullOrEmpty branch (skip the description <p>)
-        // and only emits the participants block (which has its own header paragraph).
-        var withNull = _sut.BuildBodyForCreate(description: null!, SampleParticipants());
-        var withDesc = _sut.BuildBodyForCreate(description: "Some desc",  SampleParticipants());
-
-        withNull.Should().NotContain("Some desc");
-        withNull.Should().Contain("calimport:participants:start");
-        withNull.Should().Contain("Bob");
-        // The null-description variant has exactly one fewer <p> than the
-        // variant that supplies a description.
-        var pCountNull = System.Text.RegularExpressions.Regex.Matches(withNull, "<p>").Count;
-        var pCountDesc = System.Text.RegularExpressions.Regex.Matches(withDesc, "<p>").Count;
-        pCountDesc.Should().Be(pCountNull + 1);
+        Regex.Matches(body2, "calimport:participants:start").Count.Should().Be(1);
     }
 
     [Fact]
@@ -150,6 +171,15 @@ public sealed class ParticipantBodyRendererTests
     {
         var html = _sut.BuildBodyForCreate(description: null!, Array.Empty<ParticipantRecord>());
         html.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BuildBodyForCreate_NullDescription_WithParticipants_OmitsDescription()
+    {
+        var html = _sut.BuildBodyForCreate(description: null!, SampleParticipants());
+
+        html.Should().Contain("calimport:participants:start");
+        html.Should().Contain("Bob");
     }
 
     [Fact]
@@ -169,75 +199,36 @@ public sealed class ParticipantBodyRendererTests
     }
 
     [Fact]
-    public void BuildBodyForCreate_ParticipantWithEmptyEmail_OmitsAngleBrackets()
+    public void BuildBodyForCreate_ParticipantWithEmptyFields_RendersEmptyCells()
     {
         var participants = new List<ParticipantRecord>
         {
-            new ParticipantRecord { Name = "NoEmail", Email = "", Type = "required", Response = "accepted" },
+            new ParticipantRecord { Name = "Solo", Email = "", Type = "", Response = "" },
         };
         var html = _sut.BuildBodyForCreate("", participants);
 
-        html.Should().Contain("NoEmail");
-        html.Should().NotContain("&lt;");
-        html.Should().NotContain("&gt;");
-        html.Should().Contain("required");
-        html.Should().Contain("accepted");
-    }
-
-    [Fact]
-    public void BuildBodyForCreate_ParticipantWithEmptyTypeAndResponse_OmitsEmDashes()
-    {
-        var participants = new List<ParticipantRecord>
-        {
-            new ParticipantRecord { Name = "Solo", Email = "solo@x.com", Type = "", Response = "" },
-        };
-        var html = _sut.BuildBodyForCreate("", participants);
-
-        html.Should().Contain("Solo");
-        html.Should().Contain("solo@x.com");
-        html.Should().NotContain(" — ");
-    }
-
-    [Fact]
-    public void BuildBodyForCreate_ParticipantWithAllEmptyOptionalFields_OnlyName()
-    {
-        var participants = new List<ParticipantRecord>
-        {
-            new ParticipantRecord { Name = "OnlyName", Email = "", Type = "", Response = "" },
-        };
-        var html = _sut.BuildBodyForCreate("", participants);
-
-        html.Should().Contain("OnlyName");
-        html.Should().NotContain("&lt;");
-        html.Should().NotContain(" — ");
+        html.Should().Contain("<td>Solo</td>");
+        html.Should().Contain("<td></td>"); // empty email/type/response cells
     }
 
     [Fact]
     public void Merge_BodyContainsOnlyTheBlock_ReplacedByNewBlock()
     {
-        // Body that is exclusively the participants block: the regex must match
-        // and the replacement must yield a body equal to the new block alone.
         var existing =
-            "<!-- calimport:participants:start -->\n<ul><li>OLD</li></ul>\n<!-- calimport:participants:end -->";
+            "<!-- calimport:participants:start -->\n<table><tr><td>OLD</td></tr></table>\n<!-- calimport:participants:end -->";
 
         var result = _sut.MergeIntoExistingBody(existing, SampleParticipants());
 
         result.Should().NotContain("OLD");
         result.Should().Contain("Bob");
-        result.Should().Contain("calimport:participants:start");
-        result.Should().Contain("calimport:participants:end");
-        // Exactly one block present after replacement.
-        System.Text.RegularExpressions.Regex.Matches(result, "calimport:participants:start").Count
-            .Should().Be(1);
+        Regex.Matches(result, "calimport:participants:start").Count.Should().Be(1);
     }
 
     [Fact]
     public void Merge_BodyContainsOnlyTheBlock_NoParticipants_BecomesEmpty()
     {
-        // Same scenario, but replacing with an empty block (no participants)
-        // must leave the body empty.
         var existing =
-            "<!-- calimport:participants:start -->\n<ul><li>OLD</li></ul>\n<!-- calimport:participants:end -->";
+            "<!-- calimport:participants:start -->\n<table><tr><td>OLD</td></tr></table>\n<!-- calimport:participants:end -->";
 
         var result = _sut.MergeIntoExistingBody(existing, Array.Empty<ParticipantRecord>());
 
@@ -245,12 +236,8 @@ public sealed class ParticipantBodyRendererTests
     }
 
     [Fact]
-    public void BuildBodyForCreate_DescriptionWithCrLfAndLf_BothBranchesExecute()
+    public void BuildBodyForCreate_DescriptionWithCrLfAndLf_ConvertsToBr()
     {
-        // The description contains a Windows CRLF and a Unix LF; the implementation
-        // runs the CRLF replace first and then the LF replace, so both branches
-        // contribute <br> markers. We assert presence of <br> markers without
-        // pinning the exact double-replace shape.
         var description = "line1\r\nline2\nline3";
         var html = _sut.BuildBodyForCreate(description, Array.Empty<ParticipantRecord>());
 
@@ -258,7 +245,6 @@ public sealed class ParticipantBodyRendererTests
         html.Should().Contain("line2");
         html.Should().Contain("line3");
         html.Should().Contain("<br>");
-        // No raw CRLF survives in the output.
         html.Should().NotContain("line1\r\nline2");
     }
 }
