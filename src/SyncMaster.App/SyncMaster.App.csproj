@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- net10.0 = cross-platform build (loopback web host, future WKWebView on macOS).
-         net10.0-windows = adds the embedded WebView2 control behind IWebHost. -->
-    <TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>
+    <!-- net10.0-windows (listed first → the default run/debug target on Windows) adds the
+         embedded WebView2 control behind IWebHost. net10.0 is the portable build (loopback
+         web host, future WKWebView on macOS); build it explicitly with -f net10.0. -->
+    <TargetFrameworks>net10.0-windows;net10.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
