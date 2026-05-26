@@ -20,3 +20,16 @@ public sealed record PendingPairing
     public string? OneTimeApiKey { get; init; }
     public DateTimeOffset CreatedUtc { get; init; }
 }
+
+public sealed record PairStartResult
+{
+    public required string PairingId { get; init; }
+    public required string Code { get; init; }
+}
+
+public sealed record PairCompleteResult
+{
+    public bool Approved { get; init; }
+    public string? ApiKey { get; init; }
+    public string? DeviceId { get; init; }
+}
