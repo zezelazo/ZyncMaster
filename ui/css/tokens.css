@@ -24,10 +24,10 @@
   --ink-2: rgba(255, 255, 255, .66);
   --ink-3: rgba(255, 255, 255, .40);
 
-  /* Accent ramp: aqua -> azure -> violet */
+  /* Accent ramp: aqua -> cyan -> azure (no violet) */
   --accent-a: #34e3d0;
-  --accent-b: #5b8cff;
-  --accent-c: #a96bff;
+  --accent-b: #41b9e8;
+  --accent-c: #5b8cff;
   --accent-grad: linear-gradient(120deg, var(--accent-a), var(--accent-b) 55%, var(--accent-c));
   --accent-soft: rgba(91, 140, 255, .22);
 
@@ -78,8 +78,8 @@
   --ink-3: rgba(14, 18, 34, .38);
 
   --accent-a: #1bc4b2;
-  --accent-b: #4878f0;
-  --accent-c: #9658ec;
+  --accent-b: #2f9fd8;
+  --accent-c: #4878f0;
   --accent-soft: rgba(72, 120, 240, .14);
 
   --aurora-opacity: .6;
@@ -102,8 +102,8 @@
     --ink-3: rgba(14, 18, 34, .38);
 
     --accent-a: #1bc4b2;
-    --accent-b: #4878f0;
-    --accent-c: #9658ec;
+    --accent-b: #2f9fd8;
+    --accent-c: #4878f0;
     --accent-soft: rgba(72, 120, 240, .14);
 
     --aurora-opacity: .6;
