@@ -7,3 +7,10 @@ public sealed record TokenResult
     public DateTimeOffset ExpiresUtc { get; init; }
     public string? UserPrincipalName { get; init; }
 }
+
+public sealed record ConnectedAccount
+{
+    public required string UserPrincipalName { get; init; }
+    public required string EncryptedRefreshToken { get; init; }
+    public DateTimeOffset ConnectedUtc { get; init; }
+}
