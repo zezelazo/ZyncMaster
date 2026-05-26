@@ -21,4 +21,11 @@
     <ProjectReference Include="..\SyncMaster.Core\SyncMaster.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Local runtime config lives in the project folder (stable, gitignored) and is
+         copied next to the exe on every build, so it survives clean/rebuild and you
+         only ever edit one file. settings.example.json is the versioned template. -->
+    <None Update="settings.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('settings.json')" />
+  </ItemGroup>
+
 </Project>

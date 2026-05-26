@@ -1,0 +1,8 @@
+{
+  "clientId": "REPLACE-WITH-YOUR-AZURE-APPLICATION-CLIENT-ID",
+  "authority": "https://login.microsoftonline.com/consumers",
+  "accountHint": "you@outlook.com",
+  "defaultCalendarId": null,
+  "reminderMinutes": 30,
+  "extendedPropertyGuid": "1c5e1a3f-6d7b-4f1a-9c2e-3a4b5c6d7e8f"
+}
