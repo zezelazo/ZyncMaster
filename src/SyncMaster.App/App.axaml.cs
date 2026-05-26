@@ -64,6 +64,11 @@ public partial class App : Application
             // pieces just stay null until a valid config is saved and the app relaunched.
             TryWireEngine();
 
+            // Debug/smoke aid: open the window on startup so the window + WebView2 path can
+            // be exercised without a tray click. Off unless SYNCMASTER_AUTOSHOW=1.
+            if (Environment.GetEnvironmentVariable("SYNCMASTER_AUTOSHOW") == "1")
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => CreateWindow().Show());
+
             desktop.Exit += (_, _) =>
             {
                 _shutdown.Cancel();
