@@ -22,7 +22,7 @@ namespace SyncMaster.App;
 public partial class App : Application
 {
     private TrayController? _tray;
-    private WebHost? _webHost;
+    private IWebHost? _webHost;
     private EngineHost? _engineHost;
     private UiBridge? _bridge;
     private readonly CancellationTokenSource _shutdown = new();
@@ -39,9 +39,21 @@ public partial class App : Application
             // Tray-resident: never quit just because the last window closed.
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
-            // Start the loopback web host that serves the bundled UI and carries the bridge.
-            _webHost = new WebHost();
-            _webHost.Load();
+            // Pick the web host: an embedded WebView2 on Windows (renders the UI inside
+            // the window and carries the bridge over window.chrome.webview), otherwise the
+            // loopback host (serves the bundled UI + an "open in browser" action).
+#if WIN_WEBVIEW2
+            if (OperatingSystem.IsWindows())
+            {
+                _webHost = new WebView2WebHost(); // navigates once mounted into the window
+            }
+            else
+#endif
+            {
+                var loopback = new WebHost();
+                loopback.Load();
+                _webHost = loopback;
+            }
 
             _tray = new TrayController(desktop, CreateWindow);
             _tray.OpenWebPanelRequested += OpenWebPanelInBrowser;
@@ -58,7 +70,7 @@ public partial class App : Application
                 _tray?.Dispose();
                 _bridge = null;
                 _engineHost?.Dispose();
-                _webHost?.Dispose();
+                (_webHost as IDisposable)?.Dispose();
                 _shutdown.Dispose();
             };
         }
@@ -87,7 +99,7 @@ public partial class App : Application
             return;
         }
 
-        var transport = new WebViewBridgeTransport(_webHost);
+        var transport = new WebViewBridgeTransport((IBridgeTransport)_webHost);
         _bridge = new UiBridge(transport, _engineHost.Actions);
 
         // Tray "Sync now" / "Pause" route through the engine too.
@@ -138,12 +150,14 @@ public partial class App : Application
 
     private void OpenWebPanelInBrowser()
     {
-        if (_webHost == null)
+        // Only meaningful for the loopback host. With the embedded WebView2 the window
+        // itself is the panel, opened from the tray's "Open SyncMaster".
+        if (_webHost is not WebHost loopback)
             return;
 
         try
         {
-            Process.Start(new ProcessStartInfo(_webHost.BaseUrl) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(loopback.BaseUrl) { UseShellExecute = true });
         }
         catch
         {

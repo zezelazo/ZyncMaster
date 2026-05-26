@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- net10.0 = cross-platform build (loopback web host, future WKWebView on macOS).
+         net10.0-windows = adds the embedded WebView2 control behind IWebHost. -->
+    <TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -10,6 +12,18 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <DefineConstants>$(DefineConstants);WIN_WEBVIEW2</DefineConstants>
+    <!-- The WebView2 package ships unused WPF/WinForms controls that reference an older
+         WindowsBase; we only use Microsoft.Web.WebView2.Core, so the resolved net10
+         WindowsBase is correct and the MSB3277 conflict is benign. Demote it to a message. -->
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3967.48" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SyncMaster.Engine\SyncMaster.Engine.csproj" />
     <ProjectReference Include="..\SyncMaster.Core\SyncMaster.Core.csproj" />

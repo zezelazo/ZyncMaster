@@ -33,6 +33,19 @@ public partial class MainWindow : Window
         _webHost = webHost ?? throw new ArgumentNullException(nameof(webHost));
         _openPanel = openPanel ?? throw new ArgumentNullException(nameof(openPanel));
 
+        // An embedded WebView host is itself a Control (the WebView2 host); mount it as
+        // the window content and let it render the UI in-window. The loopback host is not
+        // a Control, so it falls through to the URL + "open in browser" placeholder.
+        if (webHost is Control control)
+        {
+            HostPanel.Children.Clear();
+            control.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
+            control.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
+            HostPanel.Children.Add(control);
+            webHost.Load();
+            return;
+        }
+
         if (_webHost is WebHost loopback)
             HostUrlText.Text = $"Web panel served on {loopback.BaseUrl}";
 
