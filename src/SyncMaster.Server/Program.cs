@@ -33,12 +33,15 @@ var app = builder.Build();
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapDeviceEndpoints();
 app.MapConnectEndpoints();
 app.MapSyncEndpoints();
+app.MapPanelEndpoints();
 
 app.Run();
 
