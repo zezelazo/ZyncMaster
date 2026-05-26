@@ -16,6 +16,9 @@ lcov.info
 # Deployment config (clientId, authority) and user settings (account email / PII).
 # Templates appsettings.example.json / settings.example.json are versioned instead.
 appsettings.json
+# The Server's appsettings.json holds only non-secret config (authority, scopes,
+# redirect URI); secrets go in user-secrets / env vars. Keep it tracked.
+!src/SyncMaster.Server/appsettings.json
 settings.json
 
 # MSAL token cache (normally under %LOCALAPPDATA%, never committed)
