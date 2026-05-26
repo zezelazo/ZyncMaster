@@ -53,8 +53,8 @@ public sealed class EngineHost : IDisposable
         var keyStorePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SyncMaster", "App", "device.key");
-        // Task 5 swaps this for KeyStoreFactory.Create so macOS uses the Keychain.
-        var keyStore = new DpapiDeviceKeyStore(keyStorePath, clock);
+        var keyStore = Platform.KeyStoreFactory.Create(
+            new Platform.DefaultPlatform(), keyStorePath, clock);
 
         var http = new HttpClient();
         var pairingClient = new HttpPairingClient(http, engineSettings.ServerBaseUrl);
