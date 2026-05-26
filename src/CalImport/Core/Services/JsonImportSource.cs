@@ -12,10 +12,12 @@ namespace SyncMaster.CalImport;
 public sealed class JsonImportSource : IImportSource
 {
     private readonly IFileSystem _fs;
+    private readonly CompleteCalendarReader _reader;
 
     public JsonImportSource(IFileSystem fs)
     {
         _fs = fs ?? throw new ArgumentNullException(nameof(fs));
+        _reader = new CompleteCalendarReader();
     }
 
     public ImportPayload Load(string path)
@@ -25,6 +27,19 @@ public sealed class JsonImportSource : IImportSource
             throw new ImportSourceException($"File not found: {path}");
 
         var raw = _fs.ReadAllText(path);
+
+        // The Complete-JSON event shape (the events array + per-event mapping/validation)
+        // is owned by SyncMaster.Core's CompleteCalendarReader so the engine and CalImport
+        // stay DRY. CalImport layers its own header validation (period / exportedAt) on top.
+        CalendarReadResult read;
+        try
+        {
+            read = _reader.Parse(raw);
+        }
+        catch (CalendarReadException ex)
+        {
+            throw new ImportSourceException(ex.Message, ex.InnerException ?? ex);
+        }
 
         JObject root;
         try
@@ -37,9 +52,6 @@ public sealed class JsonImportSource : IImportSource
         {
             throw new ImportSourceException($"File is not valid JSON: {path}", ex);
         }
-
-        if (root["events"] is not JArray events)
-            throw new ImportSourceException("JSON is missing 'events' array. Was the file produced by CalExport Complete mode?");
 
         var exportedAt = ParseExportedAt(root);
 
@@ -61,25 +73,7 @@ public sealed class JsonImportSource : IImportSource
             foreach (var c in calendarsArr)
                 calendars.Add(c.Value<string>() ?? "");
 
-        var records = new List<AppointmentRecord>(events.Count);
-        for (int i = 0; i < events.Count; i++)
-        {
-            var ev = events[i] as JObject
-                     ?? throw new ImportSourceException($"events[{i}] is not an object.");
-
-            if (ev["id"] == null)
-                throw new ImportSourceException(
-                    $"events[{i}] is missing 'id'. This file was produced by an older CalExport. " +
-                    "Re-export with the current version.");
-
-            var id = ev["id"]?.Value<string>() ?? "";
-            if (string.IsNullOrEmpty(id))
-                throw new ImportSourceException(
-                    $"events[{i}] has empty 'id'. Each event must have a non-empty unique id.");
-
-            records.Add(ToRecord(ev, i));
-        }
-
+        var records = read.Events;
         EnsureUniqueIds(records);
 
         return new ImportPayload
@@ -153,120 +147,6 @@ public sealed class JsonImportSource : IImportSource
         if (!DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var v))
             throw new ImportSourceException($"Field 'exportedAt' is not a valid ISO 8601 timestamp: '{s}'.");
 
-        return v;
-    }
-
-    private static AppointmentRecord ToRecord(JObject ev, int index)
-    {
-        RequireProperty(ev, "subject", index);
-
-        var id              = ev["id"]?.Value<string>()                       ?? "";
-        var subject         = ev["subject"]?.Value<string>()                  ?? "";
-        var isAllDay        = ReadRequiredBool(ev, "isAllDay", index);
-        var isCancelled     = ev["isCancelled"]?.Value<bool>()                ?? false;
-        var startStr        = ev["start"]?.Value<string>()                    ?? "";
-        var endStr          = ev["end"]?.Value<string>()                      ?? "";
-        var tzId            = ev["startTimeZoneId"]?.Value<string>()          ?? "";
-        var tzDisplay       = ev["startTimeZoneDisplayName"]?.Value<string>() ?? "";
-        var durationMinutes = ReadRequiredInt(ev, "durationMinutes", index);
-        var description     = ev["description"]?.Value<string>()              ?? "";
-
-        var organizer       = ev["organizer"] as JObject;
-        var organizerName   = organizer?["name"]?.Value<string>()  ?? "";
-        var organizerEmail  = organizer?["email"]?.Value<string>() ?? "";
-
-        var startOffset = ParseOffset(startStr, $"events[{index}].start");
-        var endOffset   = ParseOffset(endStr,   $"events[{index}].end");
-
-        var participantsArr = ev["participants"] as JArray;
-        var participants    = new List<ParticipantRecord>();
-        if (participantsArr != null)
-        {
-            foreach (var p in participantsArr)
-            {
-                if (p is not JObject po) continue;
-                participants.Add(new ParticipantRecord
-                {
-                    Name     = po["name"]?.Value<string>()     ?? "",
-                    Email    = po["email"]?.Value<string>()    ?? "",
-                    Type     = po["type"]?.Value<string>()     ?? "",
-                    Response = po["response"]?.Value<string>() ?? "",
-                });
-            }
-        }
-
-        return new AppointmentRecord
-        {
-            // Per-occurrence key: the raw id (a recurring series shares one across all
-            // occurrences) combined with the occurrence start, so each occurrence upserts
-            // as its own event while staying idempotent across runs.
-            Id                       = SourceIdFactory.For(id, startOffset),
-            Start                    = startOffset.LocalDateTime,
-            Duration                 = durationMinutes,
-            IsAllDay                 = isAllDay,
-            Subject                  = subject,
-            OrganizerName            = organizerName,
-            OrganizerEmail           = organizerEmail,
-            IsCancelled              = isCancelled,
-            Description              = description,
-            StartOffset              = startOffset,
-            EndOffset                = endOffset,
-            StartTimeZoneId          = tzId,
-            StartTimeZoneDisplayName = tzDisplay,
-            Participants             = participants,
-        };
-    }
-
-    private static void RequireProperty(JObject ev, string name, int index)
-    {
-        var token = ev[name];
-        if (token == null || token.Type == JTokenType.Null)
-            throw new ImportSourceException(
-                $"events[{index}] is missing required field '{name}'.");
-    }
-
-    private static int ReadRequiredInt(JObject ev, string name, int index)
-    {
-        var token = ev[name];
-        if (token == null || token.Type == JTokenType.Null)
-            throw new ImportSourceException(
-                $"events[{index}] is missing required field '{name}'.");
-
-        try
-        {
-            return token.Value<int>();
-        }
-        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or JsonException)
-        {
-            throw new ImportSourceException(
-                $"events[{index}].{name} is not a valid integer.", ex);
-        }
-    }
-
-    private static bool ReadRequiredBool(JObject ev, string name, int index)
-    {
-        var token = ev[name];
-        if (token == null || token.Type == JTokenType.Null)
-            throw new ImportSourceException(
-                $"events[{index}] is missing required field '{name}'.");
-
-        try
-        {
-            return token.Value<bool>();
-        }
-        catch (Exception ex) when (ex is FormatException or InvalidCastException or JsonException)
-        {
-            throw new ImportSourceException(
-                $"events[{index}].{name} is not a valid boolean.", ex);
-        }
-    }
-
-    private static DateTimeOffset ParseOffset(string value, string fieldName)
-    {
-        if (string.IsNullOrEmpty(value))
-            throw new ImportSourceException($"{fieldName} is missing or empty.");
-        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var v))
-            throw new ImportSourceException($"{fieldName} is not a valid ISO 8601 timestamp: '{value}'.");
         return v;
     }
 }
