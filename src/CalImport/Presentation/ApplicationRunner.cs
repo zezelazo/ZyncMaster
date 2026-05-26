@@ -52,7 +52,7 @@ public sealed class ApplicationRunner
     {
         if (args == null) throw new ArgumentNullException(nameof(args));
 
-        var settings = LoadSettings(args);
+        var (settingsPath, settings) = LoadSettings(args);
         ValidateSettings(settings);
 
         var sourcePath = ResolveSourcePath(args);
@@ -62,7 +62,7 @@ public sealed class ApplicationRunner
 
         var calendarTarget = _calendarTargetFactory(settings);
 
-        var calendar = ResolveCalendarTarget(args, settings, calendarTarget);
+        var (calendar, reminderMinutes) = ResolveTargetAndReminder(args, settings, settingsPath, calendarTarget);
         _console.WriteLine($"Target calendar: {calendar.DisplayName} ({calendar.Owner})");
 
         var ids = payload.Events.Select(e => e.Id).Where(x => !string.IsNullOrEmpty(x)).ToList();
@@ -81,8 +81,7 @@ public sealed class ApplicationRunner
             return;
         }
 
-        var reminder = _settingsResolver.ResolveReminderMinutes(settings);
-        var result   = ExecutePlanAsync(plan, calendar, calendarTarget, reminder).GetAwaiter().GetResult();
+        var result = ExecutePlanAsync(plan, calendar, calendarTarget, reminderMinutes).GetAwaiter().GetResult();
 
         PrintResult(result);
 
@@ -106,7 +105,7 @@ public sealed class ApplicationRunner
 
     // ── Settings ──────────────────────────────────────────────────────────
 
-    private ImportSettings LoadSettings(ParsedImportArguments args)
+    private (string path, ImportSettings settings) LoadSettings(ParsedImportArguments args)
     {
         var defaultPath = Path.Combine(_exeDir, "settings.json");
         var path        = args.ConfigPath != null ? Path.GetFullPath(args.ConfigPath) : defaultPath;
@@ -117,7 +116,7 @@ public sealed class ApplicationRunner
             throw new InvalidOperationException("Unreachable");
         }
 
-        return _settingsRepo.LoadOrCreateDefault(path);
+        return (path, _settingsRepo.LoadOrCreateDefault(path));
     }
 
     private void ValidateSettings(ImportSettings settings)
@@ -176,30 +175,143 @@ public sealed class ApplicationRunner
         }
     }
 
-    // ── Calendar selection ────────────────────────────────────────────────
+    // ── Calendar + reminder resolution (export-style settings flow) ─────────
 
-    private CalendarTargetInfo ResolveCalendarTarget(
+    private (CalendarTargetInfo calendar, int reminderMinutes) ResolveTargetAndReminder(
         ParsedImportArguments args,
         ImportSettings        settings,
+        string                settingsPath,
         ICalendarTarget       target)
     {
+        var reminder = _settingsResolver.ResolveReminderMinutes(settings);
+
+        // Explicit: create a new calendar by name (scripting; no prompts, no save).
         if (!string.IsNullOrWhiteSpace(args.NewCalendarName))
-        {
-            _console.WriteLine($"Creating new calendar '{args.NewCalendarName}'...");
-            return target.CreateCalendarAsync(args.NewCalendarName!).GetAwaiter().GetResult();
-        }
+            return (CreateCalendar(target, args.NewCalendarName!), reminder);
 
         _console.WriteLine("Listing calendars from your account...");
         var calendars = target.ListCalendarsAsync().GetAwaiter().GetResult();
-        var selection = _calendarPicker.Choose(args, settings, calendars);
-
-        if (selection.IsCreateNew)
+        if (calendars.Count == 0)
         {
-            _console.WriteLine($"Creating new calendar '{selection.NewCalendarName}'...");
-            return target.CreateCalendarAsync(selection.NewCalendarName!).GetAwaiter().GetResult();
+            _terminator.ExitWithError("No calendars found in the account.");
+            throw new InvalidOperationException("Unreachable");
         }
 
-        return selection.Existing!;
+        // Explicit: use a calendar by id (scripting; no prompts, no save).
+        if (!string.IsNullOrWhiteSpace(args.CalendarId))
+        {
+            var match = FindById(calendars, args.CalendarId!);
+            if (match == null)
+            {
+                _terminator.ExitWithError($"Calendar id '{args.CalendarId}' not found in the account.");
+                throw new InvalidOperationException("Unreachable");
+            }
+            return (match, reminder);
+        }
+
+        var savedDefault = !string.IsNullOrWhiteSpace(settings.DefaultCalendarId)
+            ? FindById(calendars, settings.DefaultCalendarId!)
+            : null;
+
+        // Auto mode: use defaults, no prompts, no save.
+        if (args.AutoMode)
+        {
+            if (!string.IsNullOrWhiteSpace(settings.DefaultCalendarId) && savedDefault == null)
+            {
+                _terminator.ExitWithError(
+                    $"Default calendar id '{settings.DefaultCalendarId}' from settings was not found in the account.");
+                throw new InvalidOperationException("Unreachable");
+            }
+            var auto = savedDefault ?? calendars.FirstOrDefault(c => c.IsDefault) ?? calendars[0];
+            return (auto, reminder);
+        }
+
+        // Interactive: a valid saved default shows the settings and offers to proceed.
+        if (savedDefault != null)
+        {
+            DisplaySettings(settings, savedDefault, reminder);
+            _console.Write("Proceed with these settings? [Y/n]: ");
+            if (IsYes(_console.ReadLine(), defaultYes: true))
+                return (savedDefault, reminder);
+        }
+        else if (!string.IsNullOrWhiteSpace(settings.DefaultCalendarId))
+        {
+            _console.WriteLine();
+            _console.WriteLine($"=== WARNING: defaultCalendarId '{settings.DefaultCalendarId}' from settings was not found in the account. ===");
+            _console.WriteLine("It will be ignored; choose a calendar below.");
+        }
+
+        // Interactive selection: pick an existing calendar or create a new one.
+        var selection = _calendarPicker.PromptSelection(calendars);
+        var calendar  = selection.IsCreateNew
+            ? CreateCalendar(target, selection.NewCalendarName!)
+            : selection.Existing!;
+
+        reminder = PromptReminder(reminder);
+
+        AskSaveDefaults(settings, settingsPath, calendar, reminder);
+
+        return (calendar, reminder);
+    }
+
+    private CalendarTargetInfo CreateCalendar(ICalendarTarget target, string name)
+    {
+        _console.WriteLine($"Creating new calendar '{name}'...");
+        return target.CreateCalendarAsync(name).GetAwaiter().GetResult();
+    }
+
+    private static CalendarTargetInfo? FindById(IReadOnlyList<CalendarTargetInfo> calendars, string id)
+        => calendars.FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.OrdinalIgnoreCase));
+
+    private void DisplaySettings(ImportSettings settings, CalendarTargetInfo calendar, int reminder)
+    {
+        _console.WriteLine();
+        _console.WriteLine("Current settings (settings.json):");
+        _console.WriteLine($"  Account  : {(string.IsNullOrWhiteSpace(settings.AccountHint) ? "(sign-in account)" : settings.AccountHint)}");
+        _console.WriteLine($"  Calendar : {calendar.DisplayName}");
+        _console.WriteLine($"  Reminder : {reminder} min before");
+        _console.WriteLine();
+    }
+
+    private int PromptReminder(int current)
+    {
+        _console.Write($"Reminder minutes before each event [{current}]: ");
+        var input = _console.ReadLine()?.Trim() ?? "";
+        if (input.Length == 0)
+            return current;
+        if (int.TryParse(input, out int m) && m >= 0)
+            return m;
+
+        _console.WriteLine($"  Invalid number; keeping {current}.");
+        return current;
+    }
+
+    private void AskSaveDefaults(ImportSettings settings, string settingsPath, CalendarTargetInfo calendar, int reminder)
+    {
+        _console.Write("Save this calendar and reminder as defaults? [y/N]: ");
+        if (!IsYes(_console.ReadLine(), defaultYes: false))
+            return;
+
+        settings.DefaultCalendarId = calendar.Id;
+        settings.ReminderMinutes   = reminder;
+
+        try
+        {
+            _settingsRepo.Save(settings, settingsPath);
+            _console.WriteLine($"  Defaults saved to {settingsPath}.");
+        }
+        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+        {
+            _console.WriteError($"  Could not save settings: {ex.Message}");
+        }
+    }
+
+    private static bool IsYes(string? input, bool defaultYes)
+    {
+        var s = input?.Trim() ?? "";
+        if (s.Length == 0) return defaultYes;
+        return s.Equals("y", StringComparison.OrdinalIgnoreCase) ||
+               s.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Plan execution ────────────────────────────────────────────────────

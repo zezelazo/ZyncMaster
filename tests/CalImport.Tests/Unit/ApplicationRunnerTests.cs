@@ -626,4 +626,133 @@ public sealed class ApplicationRunnerTests
         _calendarTarget.Verify(c => c.UpdateEventAsync("ev-upd", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()), Times.Once);
         _calendarTarget.Verify(c => c.DeleteEventAsync("ev-cnc", It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // ─── Export-style settings flow (show / confirm / save) ──────────────────
+
+    [Fact]
+    public void Interactive_ValidDefault_ProceedYes_UsesDefaultWithoutPicker()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>()))
+                     .Returns(MakeSettings(defaultCalendarId: "abc"));
+        _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
+        // ReadLine 1: source path. ReadLine 2: "Proceed?" → empty = yes.
+        _console.SetupSequence(c => c.ReadLine()).Returns("x.json").Returns("");
+        SetupCalendarsList(MakeCal("zzz", "ZZZ", true), MakeCal("abc", "ABC", false));
+        SetupNoExisting();
+        _calendarTarget.Setup(c => c.CreateEventAsync("abc", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+                       .ReturnsAsync("ev");
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments());
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        _calendarTarget.Verify(c => c.CreateEventAsync("abc", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()), Times.Once);
+        _settingsRepo.Verify(r => r.Save(It.IsAny<ImportSettings>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public void Interactive_ValidDefault_ProceedNo_FallsToPicker()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>()))
+                     .Returns(MakeSettings(defaultCalendarId: "abc"));
+        _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
+        // source, Proceed=n, picker choice=2, reminder(empty), save(empty)
+        _console.SetupSequence(c => c.ReadLine())
+                .Returns("x.json").Returns("n").Returns("2").Returns("").Returns("");
+        SetupCalendarsList(MakeCal("abc", "ABC", true), MakeCal("xyz", "XYZ", false));
+        SetupNoExisting();
+        _calendarTarget.Setup(c => c.CreateEventAsync("xyz", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+                       .ReturnsAsync("ev");
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments());
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        _calendarTarget.Verify(c => c.CreateEventAsync("xyz", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public void Interactive_SaveDefaultsYes_PersistsCalendarAndReminder()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>())).Returns(MakeSettings());
+        _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
+        // source, picker=1, reminder=15, save=y
+        _console.SetupSequence(c => c.ReadLine())
+                .Returns("x.json").Returns("1").Returns("15").Returns("y");
+        SetupCalendarsList(MakeCal("abc", "ABC", true));
+        SetupNoExisting();
+        _calendarTarget.Setup(c => c.CreateEventAsync("abc", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+                       .ReturnsAsync("ev");
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments());
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        _settingsRepo.Verify(r => r.Save(
+            It.Is<ImportSettings>(s => s.DefaultCalendarId == "abc" && s.ReminderMinutes == 15),
+            It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public void Interactive_SaveDefaultsNo_DoesNotPersist()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>())).Returns(MakeSettings());
+        _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
+        // source, picker=1, reminder(empty), save=n
+        _console.SetupSequence(c => c.ReadLine())
+                .Returns("x.json").Returns("1").Returns("").Returns("n");
+        SetupCalendarsList(MakeCal("abc", "ABC", true));
+        SetupNoExisting();
+        _calendarTarget.Setup(c => c.CreateEventAsync("abc", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+                       .ReturnsAsync("ev");
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments());
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        _settingsRepo.Verify(r => r.Save(It.IsAny<ImportSettings>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public void Interactive_DefaultIdNotFound_WarnsAndFallsToPicker()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>()))
+                     .Returns(MakeSettings(defaultCalendarId: "missing"));
+        _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
+        // source, picker=1, reminder(empty), save(empty)
+        _console.SetupSequence(c => c.ReadLine())
+                .Returns("x.json").Returns("1").Returns("").Returns("");
+        SetupCalendarsList(MakeCal("abc", "ABC", true));
+        SetupNoExisting();
+        _calendarTarget.Setup(c => c.CreateEventAsync("abc", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+                       .ReturnsAsync("ev");
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments());
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        _console.Verify(
+            c => c.WriteLine(It.Is<string?>(s => s != null && s.Contains("WARNING") && s.Contains("missing"))),
+            Times.Once);
+    }
+
+    [Fact]
+    public void Interactive_CreateNewFromPicker_CreatesAndSavesAsDefault()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>())).Returns(MakeSettings());
+        _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
+        // source, picker=N, new name, reminder(empty), save=y
+        _console.SetupSequence(c => c.ReadLine())
+                .Returns("x.json").Returns("N").Returns("MyNewCal").Returns("").Returns("y");
+        SetupCalendarsList(MakeCal("abc", "ABC", true));
+        SetupNoExisting();
+        var created = new CalendarTargetInfo { Id = "new-id", DisplayName = "MyNewCal", Owner = "u" };
+        _calendarTarget.Setup(c => c.CreateCalendarAsync("MyNewCal", It.IsAny<CancellationToken>()))
+                       .ReturnsAsync(created);
+        _calendarTarget.Setup(c => c.CreateEventAsync("new-id", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+                       .ReturnsAsync("ev");
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments());
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        _calendarTarget.Verify(c => c.CreateCalendarAsync("MyNewCal", It.IsAny<CancellationToken>()), Times.Once);
+        _settingsRepo.Verify(r => r.Save(
+            It.Is<ImportSettings>(s => s.DefaultCalendarId == "new-id"),
+            It.IsAny<string>()), Times.Once);
+    }
 }

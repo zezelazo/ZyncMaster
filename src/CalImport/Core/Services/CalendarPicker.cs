@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using SyncMaster.Core;
 
 namespace SyncMaster.CalImport;
@@ -16,74 +15,20 @@ public sealed class CalendarPicker
         _terminator = terminator ?? throw new ArgumentNullException(nameof(terminator));
     }
 
-    public CalendarSelection Choose(
-        ParsedImportArguments         args,
-        ImportSettings                settings,
-        IReadOnlyList<CalendarTargetInfo> calendars)
+    // Interactive list prompt: choose an existing calendar by number, or 'N' to
+    // create a new one (prompts for its name). Non-interactive resolution
+    // (explicit --calendar / --new-calendar flags, --auto defaults, the saved
+    // defaultCalendarId, and the show/confirm/save flow) is handled by
+    // ApplicationRunner, mirroring how CalExport keeps that logic in its runner.
+    public CalendarSelection PromptSelection(IReadOnlyList<CalendarTargetInfo> calendars)
     {
-        if (args      == null) throw new ArgumentNullException(nameof(args));
-        if (settings  == null) throw new ArgumentNullException(nameof(settings));
         if (calendars == null) throw new ArgumentNullException(nameof(calendars));
-
         if (calendars.Count == 0)
         {
             _terminator.ExitWithError("No calendars found in the account.");
             throw new InvalidOperationException("Unreachable");
         }
 
-        if (!string.IsNullOrWhiteSpace(args.CalendarId))
-        {
-            var match = calendars.FirstOrDefault(c =>
-                string.Equals(c.Id, args.CalendarId, StringComparison.OrdinalIgnoreCase));
-            if (match == null)
-            {
-                _terminator.ExitWithError($"Calendar id '{args.CalendarId}' not found in the account.");
-                throw new InvalidOperationException("Unreachable");
-            }
-            return CalendarSelection.Use(match);
-        }
-
-        if (!string.IsNullOrWhiteSpace(settings.DefaultCalendarId))
-        {
-            var match = calendars.FirstOrDefault(c =>
-                string.Equals(c.Id, settings.DefaultCalendarId, StringComparison.OrdinalIgnoreCase));
-            if (match != null)
-                return CalendarSelection.Use(match);
-
-            if (args.AutoMode)
-            {
-                _terminator.ExitWithError(
-                    $"Default calendar id '{settings.DefaultCalendarId}' from settings was not found in the account.");
-                throw new InvalidOperationException("Unreachable");
-            }
-
-            // Require explicit confirmation: a silent fallback to the picker could lead the user
-            // to pick the wrong calendar without noticing that their configured default is broken.
-            _console.WriteLine();
-            _console.WriteLine($"=== WARNING: defaultCalendarId '{settings.DefaultCalendarId}' from settings was not found in the account. ===");
-            _console.WriteLine("Update or remove DefaultCalendarId in settings to fix this permanently.");
-            _console.WriteLine();
-            _console.Write("Continue and choose a calendar from the list? [Y/n]: ");
-            var answer = _console.ReadLine()?.Trim() ?? "";
-            if (answer.Equals("n", StringComparison.OrdinalIgnoreCase) ||
-                answer.Equals("no", StringComparison.OrdinalIgnoreCase))
-            {
-                _terminator.ExitWithError("Aborted because defaultCalendarId in settings is invalid.");
-                throw new InvalidOperationException("Unreachable");
-            }
-        }
-
-        if (args.AutoMode)
-        {
-            var def = calendars.FirstOrDefault(c => c.IsDefault) ?? calendars[0];
-            return CalendarSelection.Use(def);
-        }
-
-        return PromptInteractive(calendars);
-    }
-
-    private CalendarSelection PromptInteractive(IReadOnlyList<CalendarTargetInfo> calendars)
-    {
         _console.WriteLine();
         _console.WriteLine("Available calendars:");
         for (int i = 0; i < calendars.Count; i++)

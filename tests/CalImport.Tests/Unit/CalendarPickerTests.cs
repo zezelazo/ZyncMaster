@@ -31,138 +31,60 @@ public sealed class CalendarPickerTests
     }
 
     [Fact]
-    public void NoCalendars_Terminates()
+    public void PromptSelection_NullCalendars_Throws()
     {
-        Action act = () => BuildSut().Choose(
-            new ParsedImportArguments(),
-            new ImportSettings(),
-            Array.Empty<CalendarTargetInfo>());
+        Action act = () => BuildSut().PromptSelection(null!);
+        act.Should().Throw<ArgumentNullException>();
+    }
 
+    [Fact]
+    public void PromptSelection_NoCalendars_Terminates()
+    {
+        Action act = () => BuildSut().PromptSelection(Array.Empty<CalendarTargetInfo>());
         act.Should().Throw<TerminatedException>();
     }
 
     [Fact]
-    public void ExplicitCalendarId_Match_ReturnsThatCalendar()
+    public void PromptSelection_ValidNumber_ReturnsThatCalendar()
     {
+        _console.Setup(c => c.ReadLine()).Returns("2");
         var cals   = Calendars(("a", "AAA", true), ("b", "BBB", false));
-        var chosen = BuildSut().Choose(
-            new ParsedImportArguments { CalendarId = "b" },
-            new ImportSettings(),
-            cals);
+
+        var chosen = BuildSut().PromptSelection(cals);
 
         chosen.IsCreateNew.Should().BeFalse();
         chosen.Existing!.Id.Should().Be("b");
     }
 
     [Fact]
-    public void ExplicitCalendarId_NoMatch_Terminates()
-    {
-        var cals = Calendars(("a", "AAA", true));
-        Action act = () => BuildSut().Choose(
-            new ParsedImportArguments { CalendarId = "missing" },
-            new ImportSettings(),
-            cals);
-
-        act.Should().Throw<TerminatedException>();
-    }
-
-    [Fact]
-    public void AutoMode_WithDefaultIdInSettings_ReturnsIt()
-    {
-        var cals   = Calendars(("a", "AAA", true), ("b", "BBB", false));
-        var chosen = BuildSut().Choose(
-            new ParsedImportArguments { AutoMode = true },
-            new ImportSettings { DefaultCalendarId = "b" },
-            cals);
-
-        chosen.Existing!.Id.Should().Be("b");
-    }
-
-    [Fact]
-    public void AutoMode_DefaultIdNotFound_Terminates()
-    {
-        var cals = Calendars(("a", "AAA", true));
-        Action act = () => BuildSut().Choose(
-            new ParsedImportArguments { AutoMode = true },
-            new ImportSettings { DefaultCalendarId = "missing" },
-            cals);
-
-        act.Should().Throw<TerminatedException>();
-    }
-
-    [Fact]
-    public void AutoMode_NoDefault_PicksDefaultCalendar()
-    {
-        var cals   = Calendars(("a", "AAA", false), ("b", "BBB", true));
-        var chosen = BuildSut().Choose(
-            new ParsedImportArguments { AutoMode = true },
-            new ImportSettings(),
-            cals);
-
-        chosen.Existing!.Id.Should().Be("b");
-    }
-
-    [Fact]
-    public void Interactive_PromptsAndAcceptsValidNumber()
-    {
-        _console.Setup(c => c.ReadLine()).Returns("2");
-        var cals   = Calendars(("a", "AAA", true), ("b", "BBB", false));
-        var chosen = BuildSut().Choose(
-            new ParsedImportArguments(),
-            new ImportSettings(),
-            cals);
-
-        chosen.Existing!.Id.Should().Be("b");
-    }
-
-    [Fact]
-    public void Interactive_InvalidInput_Terminates()
+    public void PromptSelection_InvalidInput_Terminates()
     {
         _console.Setup(c => c.ReadLine()).Returns("not a number");
         var cals = Calendars(("a", "AAA", true));
-        Action act = () => BuildSut().Choose(
-            new ParsedImportArguments(),
-            new ImportSettings(),
-            cals);
+
+        Action act = () => BuildSut().PromptSelection(cals);
 
         act.Should().Throw<TerminatedException>();
     }
 
     [Fact]
-    public void Interactive_DefaultIdNotFound_UserConfirms_FallsToList()
+    public void PromptSelection_OutOfRangeNumber_Terminates()
     {
-        _console.SetupSequence(c => c.ReadLine()).Returns("y").Returns("1");
-        var cals   = Calendars(("a", "AAA", true), ("b", "BBB", false));
-        var chosen = BuildSut().Choose(
-            new ParsedImportArguments(),
-            new ImportSettings { DefaultCalendarId = "missing" },
-            cals);
+        _console.Setup(c => c.ReadLine()).Returns("9");
+        var cals = Calendars(("a", "AAA", true), ("b", "BBB", false));
 
-        chosen.Existing!.Id.Should().Be("a");
-    }
-
-    [Fact]
-    public void Interactive_DefaultIdNotFound_UserRefuses_Terminates()
-    {
-        _console.Setup(c => c.ReadLine()).Returns("n");
-        var cals = Calendars(("a", "AAA", true));
-        Action act = () => BuildSut().Choose(
-            new ParsedImportArguments(),
-            new ImportSettings { DefaultCalendarId = "missing" },
-            cals);
+        Action act = () => BuildSut().PromptSelection(cals);
 
         act.Should().Throw<TerminatedException>();
     }
 
-    // ── Create-new option ─────────────────────────────────────────────────
-
     [Fact]
-    public void Interactive_ChooseN_PromptsNameAndReturnsCreateNew()
+    public void PromptSelection_ChooseN_PromptsNameAndReturnsCreateNew()
     {
         _console.SetupSequence(c => c.ReadLine()).Returns("N").Returns("Trabajo Importado");
         var cals = Calendars(("a", "AAA", true), ("b", "BBB", false));
 
-        var chosen = BuildSut().Choose(new ParsedImportArguments(), new ImportSettings(), cals);
+        var chosen = BuildSut().PromptSelection(cals);
 
         chosen.IsCreateNew.Should().BeTrue();
         chosen.NewCalendarName.Should().Be("Trabajo Importado");
@@ -170,24 +92,24 @@ public sealed class CalendarPickerTests
     }
 
     [Fact]
-    public void Interactive_ChooseN_Lowercase_Works()
+    public void PromptSelection_ChooseN_Lowercase_Works()
     {
         _console.SetupSequence(c => c.ReadLine()).Returns("n").Returns("MyCal");
         var cals = Calendars(("a", "AAA", true));
 
-        var chosen = BuildSut().Choose(new ParsedImportArguments(), new ImportSettings(), cals);
+        var chosen = BuildSut().PromptSelection(cals);
 
         chosen.IsCreateNew.Should().BeTrue();
         chosen.NewCalendarName.Should().Be("MyCal");
     }
 
     [Fact]
-    public void Interactive_ChooseN_EmptyName_Terminates()
+    public void PromptSelection_ChooseN_EmptyName_Terminates()
     {
         _console.SetupSequence(c => c.ReadLine()).Returns("N").Returns("   ");
         var cals = Calendars(("a", "AAA", true));
 
-        Action act = () => BuildSut().Choose(new ParsedImportArguments(), new ImportSettings(), cals);
+        Action act = () => BuildSut().PromptSelection(cals);
 
         act.Should().Throw<TerminatedException>();
     }
