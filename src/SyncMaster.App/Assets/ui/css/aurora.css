@@ -1,0 +1,126 @@
+/* aurora.css — the signature living gradient field behind all glass.
+   Pure CSS: three drifting radial-gradient blobs in the accent ramp, each on
+   its own keyframe path and tempo so the field never visibly loops. State is
+   driven by body[data-aurora=...]; we mostly nudge opacity, hue and speed via
+   custom properties so the same blobs serve every mood. */
+
+.aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background: var(--bg-0);
+  pointer-events: none;
+}
+
+/* A faint vertical settle so the top reads darker than the floor (ambient). */
+.aurora::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .35), transparent 40%, rgba(0, 0, 0, .25));
+}
+
+.aurora__blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: var(--aurora-opacity);
+  mix-blend-mode: screen;
+  will-change: transform, opacity;
+}
+
+:root[data-theme="light"] .aurora__blob,
+:root:not([data-theme="dark"]) .aurora__blob {
+  mix-blend-mode: multiply;
+  filter: blur(70px);
+}
+
+.aurora__blob--a {
+  width: 60vmax; height: 60vmax;
+  left: -10vmax; top: -18vmax;
+  background: radial-gradient(circle at 50% 50%, var(--accent-a), transparent 62%);
+  animation: drift-a var(--aurora-speed) var(--ease-out) infinite alternate;
+}
+.aurora__blob--b {
+  width: 55vmax; height: 55vmax;
+  right: -14vmax; top: 6vmax;
+  background: radial-gradient(circle at 50% 50%, var(--accent-b), transparent 60%);
+  animation: drift-b calc(var(--aurora-speed) * 1.27) var(--ease-out) infinite alternate;
+}
+.aurora__blob--c {
+  width: 50vmax; height: 50vmax;
+  left: 18vmax; bottom: -22vmax;
+  background: radial-gradient(circle at 50% 50%, var(--accent-c), transparent 60%);
+  animation: drift-c calc(var(--aurora-speed) * 0.86) var(--ease-out) infinite alternate;
+}
+
+/* A transient bloom layer for success/error — JS toggles its colour + opacity. */
+.aurora__bloom {
+  position: absolute;
+  inset: -10%;
+  border-radius: 50%;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 60%, var(--ok), transparent 55%);
+  mix-blend-mode: screen;
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+
+@keyframes drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(14vmax, 10vmax, 0) scale(1.18); }
+}
+@keyframes drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1.05); }
+  100% { transform: translate3d(-12vmax, 14vmax, 0) scale(.9); }
+}
+@keyframes drift-c {
+  0%   { transform: translate3d(0, 0, 0) scale(.95); }
+  100% { transform: translate3d(10vmax, -12vmax, 0) scale(1.2); }
+}
+
+/* ---- State variants (set on <body data-aurora>) ---- */
+
+/* idle: calm baseline (the :root defaults already describe this). */
+body[data-aurora="idle"] { --aurora-opacity: .9; --aurora-speed: 38s; }
+
+/* syncing: brighter and noticeably faster — the field comes alive. */
+body[data-aurora="syncing"] { --aurora-opacity: 1; --aurora-speed: 12s; }
+
+/* success: handled by .aurora__bloom (green) toggled in JS; keep field lively. */
+body[data-aurora="success"] { --aurora-opacity: 1; --aurora-speed: 20s; }
+body[data-aurora="success"] .aurora__bloom {
+  background: radial-gradient(circle at 50% 60%, var(--ok), transparent 55%);
+  opacity: .55;
+}
+
+/* error: dim the field; bloom turns red and shimmers low. */
+body[data-aurora="error"] { --aurora-opacity: .55; --aurora-speed: 26s; }
+body[data-aurora="error"] .aurora__bloom {
+  background: radial-gradient(circle at 50% 60%, var(--error), transparent 55%);
+  opacity: .4;
+  animation: shimmer 1.4s var(--ease-out) 2;
+}
+
+/* paused: nearly still, drained of colour. */
+body[data-aurora="paused"] {
+  --aurora-opacity: .4;
+  --aurora-speed: 120s;
+}
+body[data-aurora="paused"] .aurora__blob { filter: blur(80px) saturate(.35); }
+
+@keyframes shimmer {
+  0%, 100% { opacity: .2; }
+  50%      { opacity: .5; }
+}
+
+/* Reduced motion: freeze everything to a single static gradient. */
+@media (prefers-reduced-motion: reduce) {
+  .aurora__blob,
+  body[data-aurora="error"] .aurora__bloom {
+    animation: none !important;
+  }
+  .aurora__blob--a { transform: translate3d(8vmax, 4vmax, 0) scale(1.1); }
+  .aurora__blob--b { transform: translate3d(-6vmax, 8vmax, 0) scale(.96); }
+  .aurora__blob--c { transform: translate3d(6vmax, -6vmax, 0) scale(1.08); }
+}

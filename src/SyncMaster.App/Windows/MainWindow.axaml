@@ -16,11 +16,24 @@
           Background="#101522"
           ClipToBounds="True">
     <Panel x:Name="HostPanel">
-      <TextBlock Text="SyncMaster"
-                 Foreground="White"
-                 FontSize="22"
-                 HorizontalAlignment="Center"
-                 VerticalAlignment="Center" />
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
+        <TextBlock Text="SyncMaster"
+                   Foreground="White"
+                   FontSize="24"
+                   FontWeight="SemiBold"
+                   HorizontalAlignment="Center" />
+        <TextBlock x:Name="HostUrlText"
+                   Text="Starting web panel…"
+                   Foreground="#9FB0CC"
+                   FontSize="13"
+                   HorizontalAlignment="Center"
+                   TextAlignment="Center"
+                   TextWrapping="Wrap"
+                   MaxWidth="340" />
+        <Button x:Name="OpenPanelButton"
+                Content="Open web panel"
+                HorizontalAlignment="Center" />
+      </StackPanel>
     </Panel>
   </Border>
 </Window>

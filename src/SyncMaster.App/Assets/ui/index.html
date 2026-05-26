@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>SyncMaster</title>
+  <meta name="color-scheme" content="dark light" />
+  <link rel="stylesheet" href="css/tokens.css" />
+  <link rel="stylesheet" href="css/glass.css" />
+  <link rel="stylesheet" href="css/aurora.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/layout.css" />
+</head>
+<body data-aurora="idle">
+
+  <!-- Living gradient field behind all glass -->
+  <div class="aurora" aria-hidden="true">
+    <span class="aurora__blob aurora__blob--a"></span>
+    <span class="aurora__blob aurora__blob--b"></span>
+    <span class="aurora__blob aurora__blob--c"></span>
+    <span class="aurora__bloom"></span>
+  </div>
+
+  <!-- ARIA live region: announces sync state changes to assistive tech -->
+  <div id="liveRegion" class="sr-only" aria-live="polite" role="status"
+       style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);"></div>
+
+  <!-- The frameless app window -->
+  <main class="window glass">
+
+    <!-- Title bar -->
+    <header class="titlebar">
+      <span class="titlebar__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="titlebar__title"><b>Sync</b>Master</span>
+      <span class="titlebar__spacer"></span>
+      <button class="btn btn--icon" id="themeToggle" type="button" title="Toggle theme" aria-label="Toggle theme">
+        <span data-icon="gear" data-icon-size="20"></span>
+      </button>
+    </header>
+
+    <!-- Views -->
+    <div class="views">
+
+      <!-- ============ Dashboard ============ -->
+      <section class="view" data-view="dashboard" id="view-dashboard">
+        <div class="hero">
+          <div class="orb" id="orb" data-state="ok" role="img" aria-label="Sync status">
+            <span class="orb__core"></span>
+            <span class="orb__glass"></span>
+            <span class="orb__icon"></span>
+          </div>
+          <div class="hero__status" id="statusLabel">Connected</div>
+          <div class="hero__sub" id="statusSub">Last sync 2 min ago</div>
+          <div class="hero__next" id="nextWrap">Next sync in <b class="tnum" id="nextSync">07:43</b></div>
+        </div>
+
+        <button class="btn btn--primary btn--lg btn--block syncbtn" id="syncBtn" type="button" data-act="sync">
+          <span class="label">Sync now</span>
+          <span class="ring" aria-hidden="true"></span>
+          <span class="count tnum" aria-hidden="true"></span>
+          <svg class="check" viewBox="0 0 28 28" aria-hidden="true"><path d="M6 14.5l5 5L22 8"/></svg>
+        </button>
+
+        <div class="section-title">Recent activity</div>
+        <div class="glass activity-list" id="activityList"></div>
+
+        <!-- demo affordances (also a real error path) -->
+        <div class="row" style="gap:8px;">
+          <select class="select" id="stateDemo" aria-label="Demo connection state" style="flex:1">
+            <option value="connected">State: Connected</option>
+            <option value="unpaired">State: Not paired</option>
+            <option value="offline">State: Offline</option>
+          </select>
+          <button class="btn btn--secondary" id="simErrorBtn" type="button" title="Simulate a failed sync">
+            <span data-icon="alert" data-icon-size="20"></span>
+          </button>
+        </div>
+
+        <div class="dash-footer">
+          <button class="btn btn--ghost" type="button" data-go="config">
+            <span data-icon="gear" data-icon-size="20"></span> Configuration
+          </button>
+          <button class="btn btn--ghost" type="button" data-go="config">
+            <span data-icon="monitor" data-icon-size="20"></span> Open panel
+          </button>
+        </div>
+      </section>
+
+      <!-- ============ Configuration ============ -->
+      <section class="view" data-view="config" id="view-config">
+        <div class="saved-anchor" style="position:absolute;inset:0;pointer-events:none;">
+          <span class="toast" id="savedToast"></span>
+        </div>
+
+        <!-- Calendar -->
+        <div class="glass config-group">
+          <div class="config-group__head"><span data-icon="calendar"></span> Calendar</div>
+          <select class="select" aria-label="Target calendar">
+            <option>Personal</option>
+            <option>Work</option>
+            <option>Family</option>
+            <option value="__new">Create new calendar…</option>
+          </select>
+        </div>
+
+        <!-- Sync window -->
+        <div class="glass config-group">
+          <div class="config-group__head"><span data-icon="sync"></span> Sync window</div>
+          <div class="row">
+            <span class="row__label">From today → <span class="slider-val" id="windowVal">+14 days</span></span>
+          </div>
+          <input class="slider" id="windowSlider" type="range" min="1" max="60" value="14"
+                 aria-label="Days ahead to sync" />
+          <p class="caption">Past events are never touched.</p>
+        </div>
+
+        <!-- Schedule -->
+        <div class="glass config-group">
+          <div class="config-group__head"><span data-icon="bolt"></span> Schedule</div>
+          <div class="row">
+            <div class="row__text"><span class="row__label">Auto-sync</span></div>
+            <div class="toggle" role="switch" aria-checked="true" tabindex="0" aria-label="Auto-sync">
+              <span class="toggle__thumb"></span>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row__label">Interval</span>
+            <select class="select" style="max-width:150px" aria-label="Sync interval">
+              <option>Every 8 min</option>
+              <option>Every 15 min</option>
+              <option>Every 30 min</option>
+              <option>Hourly</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="row__text"><span class="row__label">Run at startup</span></div>
+            <div class="toggle" role="switch" aria-checked="false" tabindex="0" aria-label="Run at startup">
+              <span class="toggle__thumb"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- This device -->
+        <div class="glass config-group">
+          <div class="config-group__head"><span data-icon="monitor"></span> This device</div>
+          <div class="field" id="deviceNameField">
+            <label class="field__label" for="deviceName">Device name</label>
+            <input id="deviceName" type="text" value="Ezequiel Mac" autocomplete="off" />
+            <span class="field__error">Device name can’t be empty.</span>
+          </div>
+          <div class="row">
+            <div class="row__text">
+              <span class="row__label">Paired</span>
+              <span class="row__hint key-chip">key ••••3f2a</span>
+            </div>
+            <button class="btn btn--ghost" id="unpairBtn" type="button" style="color:var(--error)">
+              <span data-icon="link" data-icon-size="20"></span> Unpair
+            </button>
+          </div>
+          <div class="confirm-inline" id="unpairConfirm" hidden>
+            <span>Unpair this device?</span>
+            <button class="btn btn--ghost" id="unpairCancel" type="button">Cancel</button>
+            <button class="btn btn--secondary" id="unpairYes" type="button" style="color:var(--error)">Unpair</button>
+          </div>
+        </div>
+
+        <!-- Appearance -->
+        <div class="glass config-group">
+          <div class="config-group__head"><span data-icon="gear"></span> Appearance</div>
+          <div class="seg" id="appearanceSeg" role="tablist" aria-label="Theme">
+            <span class="seg__thumb" aria-hidden="true"></span>
+            <button class="seg__opt" role="tab" data-theme="auto" aria-selected="true">Auto</button>
+            <button class="seg__opt" role="tab" data-theme="light" aria-selected="false">Light</button>
+            <button class="seg__opt" role="tab" data-theme="dark" aria-selected="false">Dark</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ Pairing ============ -->
+      <section class="view" data-view="pairing" id="view-pairing">
+        <div class="pair">
+          <div class="stepper pair__stepper">
+            <span class="stepper__node is-active" data-node="1">1</span>
+            <span class="stepper__link" data-link="1"></span>
+            <span class="stepper__node" data-node="2">2</span>
+            <span class="stepper__link" data-link="2"></span>
+            <span class="stepper__node" data-node="3">3</span>
+          </div>
+
+          <div class="pair__body">
+            <!-- Step 1 -->
+            <div class="pair__step is-current" data-step="1">
+              <div class="pair__h">Name this device</div>
+              <p class="pair__p">Choose a name so you can recognise it later in your synced devices.</p>
+              <div class="field" id="pairNameField">
+                <label class="field__label" for="pairName">Device name</label>
+                <input id="pairName" type="text" placeholder="e.g. Work laptop" autocomplete="off" />
+                <span class="field__error">Please enter a name.</span>
+              </div>
+              <div class="pair__actions">
+                <button class="btn btn--ghost" type="button" data-go="dashboard">Cancel</button>
+                <button class="btn btn--primary" id="pairContinue" type="button">Continue</button>
+              </div>
+            </div>
+
+            <!-- Step 2 -->
+            <div class="pair__step" data-step="2">
+              <div class="bigspin" aria-hidden="true"></div>
+              <div class="pair__h">Approve in your browser</div>
+              <p class="pair__p">A browser window opened to confirm pairing. If it didn’t, copy the link below.</p>
+              <div class="glass copyrow">
+                <code>https://outlook.office.com/pair/9F2A-3D7C</code>
+                <button class="btn btn--icon" id="pairCopy" type="button" aria-label="Copy link">
+                  <span data-icon="copy" data-icon-size="18"></span>
+                </button>
+              </div>
+              <div class="pair__actions">
+                <button class="btn btn--ghost" id="pairRestart" type="button">Start over</button>
+              </div>
+            </div>
+
+            <!-- Step 3 -->
+            <div class="pair__step" data-step="3">
+              <svg class="bigcheck" viewBox="0 0 80 80" aria-hidden="true"><path d="M20 42l13 13L60 26"/></svg>
+              <div class="pair__h">Paired!</div>
+              <p class="pair__p">This device is connected. Your calendar will start syncing automatically.</p>
+              <div class="pair__actions">
+                <button class="btn btn--primary btn--block" id="pairDone" type="button">Go to dashboard</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Bottom nav -->
+    <nav class="nav" aria-label="Primary">
+      <button class="nav__item is-active" type="button" data-go="dashboard">
+        <span data-icon="home" data-icon-size="22"></span> Home
+      </button>
+      <button class="nav__item" type="button" data-go="config">
+        <span data-icon="gear" data-icon-size="22"></span> Settings
+      </button>
+      <button class="nav__item" type="button" data-go="pairing">
+        <span data-icon="link" data-icon-size="22"></span> Pair
+      </button>
+    </nav>
+
+    <!-- floating toast -->
+    <span class="toast" id="toast" role="status" aria-live="polite"></span>
+
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

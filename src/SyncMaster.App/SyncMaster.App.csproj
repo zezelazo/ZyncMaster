@@ -14,6 +14,11 @@
     <ProjectReference Include="..\SyncMaster.Engine\SyncMaster.Engine.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The built web UI is served by WebHost over a loopback HttpListener. Ship it
+         next to the exe so the host can resolve it at runtime. -->
+    <Content Include="Assets\ui\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.3" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.3" />

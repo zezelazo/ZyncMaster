@@ -1,0 +1,82 @@
+/* glass.css — the single reusable translucent material.
+   Depth comes from light, not drop-shadows-everywhere: an inset top rim
+   (the bright sliver where light catches the edge) + one ambient cast shadow. */
+
+.glass {
+  position: relative;
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-stroke);
+  border-radius: var(--r-lg);
+  box-shadow:
+    0 1px 0 var(--glass-rim) inset,
+    0 18px 48px rgba(0, 0, 0, .45);
+  transition:
+    background var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-spring),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+
+:root[data-theme="light"] .glass,
+:root:not([data-theme="dark"]) .glass {
+  box-shadow:
+    0 1px 0 var(--glass-rim) inset,
+    0 18px 40px rgba(28, 38, 74, .14);
+}
+
+/* Specular rim: a 1px gradient "border" that is bright at the top-left and
+   fades out, faked with a padded gradient clipped to the border-box via mask
+   so it never fills the interior. This is the trick that reads as caught light. */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    150deg,
+    var(--glass-rim),
+    transparent 32%,
+    transparent 70%,
+    rgba(255, 255, 255, .12)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: .8;
+  pointer-events: none;
+}
+
+/* Interactive lift for hoverable glass (cards/rows opt in with .glass--hover). */
+.glass--hover {
+  cursor: pointer;
+}
+.glass--hover:hover {
+  background: var(--glass-fill-strong);
+  transform: translateY(-2px);
+  box-shadow:
+    0 1px 0 var(--glass-rim) inset,
+    0 22px 56px rgba(0, 0, 0, .5);
+}
+
+/* Opaque fallback when backdrop-filter is unsupported (older WebViews). */
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .glass {
+    background: var(--glass-fill-strong);
+    background-color: color-mix(in srgb, var(--bg-2) 92%, transparent);
+  }
+}
+
+/* Reduced transparency: kill the blur, lean on the solid fill from tokens.css. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
