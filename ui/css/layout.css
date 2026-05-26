@@ -73,6 +73,18 @@ body {
    title bar (cosmetic mac dots, duplicate title, theme toggle) is hidden. */
 .native-shell .titlebar { display: none; }
 
+/* In the native shell the window IS the OS window: fill the whole viewport instead of
+   rendering a fixed-size centred "app window" mockup, and drop the outer padding/rounding
+   so there are no black gaps and the content reflows when the window is resized. */
+.native-shell body { display: block; padding: 0; min-height: 100vh; }
+.native-shell .window {
+  width: 100%;
+  max-width: none;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+}
+
 /* ---- Views ---- */
 .views {
   flex: 1;

@@ -122,8 +122,16 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     private void UpdateBounds()
     {
         if (_controller == null) return;
+
+        // WebView2 Bounds are in PHYSICAL pixels, but Avalonia's Bounds are logical
+        // (device-independent). Multiply by the render scale so the control fills the whole
+        // HWND (no uncovered gaps) and the CSS viewport equals the window's logical size.
+        var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         var b = Bounds;
-        _controller.Bounds = new System.Drawing.Rectangle(0, 0, (int)b.Width, (int)b.Height);
+        _controller.Bounds = new System.Drawing.Rectangle(
+            0, 0,
+            Math.Max(0, (int)Math.Round(b.Width * scale)),
+            Math.Max(0, (int)Math.Round(b.Height * scale)));
     }
 
     protected override Size ArrangeOverride(Size finalSize)
