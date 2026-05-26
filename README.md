@@ -14,7 +14,7 @@ Both tools share a `SyncMaster.Core` library and follow the same layered SOLID a
 | Requirement | Details |
 |---|---|
 | OS | Windows 10 / 11 |
-| .NET | .NET Framework 4.8 (included in Windows 10 1903+) |
+| .NET | .NET 10 SDK/runtime |
 | Outlook | Outlook Classic (2016 / 2019 / Microsoft 365 desktop) must be installed and signed in |
 
 ---
@@ -25,7 +25,7 @@ Both tools share a `SyncMaster.Core` library and follow the same layered SOLID a
 dotnet build -c Release
 ```
 
-The output executable is placed in `src\CalExport\bin\Release\net48\CalExport.exe`.  
+The output executable is placed in `src\CalExport\bin\Release\net10.0-windows\CalExport.exe`.  
 Copy `CalExport.exe` to any folder — it is self-contained for runtime use.
 
 ---
@@ -298,7 +298,7 @@ CalImport takes the JSON file produced by CalExport's **Complete** mode and writ
 | Requirement | Details |
 |---|---|
 | OS | Windows 10 / 11 |
-| .NET | .NET Framework 4.8 |
+| .NET | .NET 10 SDK/runtime |
 | Network | Internet access to `login.microsoftonline.com` and `graph.microsoft.com` |
 | Account | A personal Microsoft account (`outlook.com`, `hotmail.com`, `live.com`, `msn.com`) **or** a work/school account. Outlook does **not** need to be installed on the target machine |
 | Azure app | A one-time app registration (5–10 minutes, no Azure subscription needed) |
@@ -325,7 +325,7 @@ No client secret is required — the public-client + PKCE flow is the correct on
 dotnet build -c Release
 ```
 
-The output is at `src\CalImport\bin\Release\net48\CalImport.exe`.
+The output is at `src\CalImport\bin\Release\net10.0\CalImport.exe`.
 
 ## Usage
 
@@ -456,13 +456,12 @@ SyncMaster/
 ├── SyncMaster.sln
 │
 ├── src/
-│   ├── SyncMaster.Core/                        # Shared library: models, contracts, helpers, polyfills
+│   ├── SyncMaster.Core/                        # Shared library: models, contracts, helpers
 │   │   ├── Models/      AppointmentRecord, ParticipantRecord, ExportMode
 │   │   ├── Contracts/   IFileSystem, IConsoleIO, IApplicationTerminator, ISettingsRepository<T>
 │   │   ├── Services/    MonthNames, UuidV5, SettingsRepository<T>
 │   │   ├── Infrastructure/ PhysicalFileSystem
-│   │   ├── Presentation/   ConsoleIO, ConsoleApplicationTerminator
-│   │   └── Polyfills/      IsExternalInit, DoesNotReturn
+│   │   └── Presentation/   ConsoleIO, ConsoleApplicationTerminator
 │   │
 │   ├── CalExport/                              # Outlook Classic → JSON / TXT
 │   │   ├── Program.cs                          # Composition root
@@ -530,7 +529,6 @@ CalExport:
 |---|---|---|
 | `Microsoft.Office.Interop.Outlook` | 15.0.4797.1003 | Outlook COM interop |
 | `Newtonsoft.Json` | 13.0.3 | JSON serialization |
-| `Microsoft.CSharp` | (framework) | Required for `dynamic` bindings to COM objects |
 
 CalImport:
 

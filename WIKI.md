@@ -88,7 +88,7 @@ Dependency direction: outer layers depend on inner layers only through interface
 
 #### `AppointmentRecord`
 
-Immutable record holding a single calendar event. All properties use `init` setters (requires `IsExternalInit` polyfill on net48).
+Immutable record holding a single calendar event. All properties use `init` setters.
 
 | Property | Type | Description |
 |---|---|---|
@@ -223,7 +223,7 @@ Wraps `Console.Write`, `Console.WriteLine`, `Console.Error.WriteLine`, and `Cons
 [DoesNotReturn] void ExitWithError(string message, int code = 1);
 ```
 
-Both methods are annotated `[DoesNotReturn]` (requires `DoesNotReturn` polyfill on net48), which informs the compiler that code after a call to either method is unreachable. This allows callers to write `_terminator.ExitWithError(…); throw new InvalidOperationException("Unreachable");` without triggering a CS0162 warning.
+Both methods are annotated `[DoesNotReturn]`, which informs the compiler that code after a call to either method is unreachable. This allows callers to write `_terminator.ExitWithError(…); throw new InvalidOperationException("Unreachable");` without triggering a CS0162 warning.
 
 In tests, the mock throws instead of calling `Environment.Exit`, allowing exit-path logic to be tested without terminating the test process. Implemented by `ConsoleApplicationTerminator`.
 
@@ -937,14 +937,9 @@ No other code changes are needed.
 
 `OutlookCalendarService` depends on the `Microsoft.Office.Interop.Outlook` COM automation interface. Outlook Classic must be installed, configured, and signed in on the machine where the tool runs. It does not work with the new Outlook (web-based) or Outlook for Mac. If Outlook is not running when the tool starts, Outlook will be launched silently, used, and then quit automatically.
 
-### .NET Framework 4.8 Polyfills
+### Target Frameworks
 
-The project targets `net48` for compatibility with corporate Windows environments that may not have .NET 5+. Two features from newer runtimes require manual polyfills in `Polyfills/`:
-
-- **`IsExternalInit`** — enables `init`-only property setters (`init` accessor). Located in `System.Runtime.CompilerServices`.
-- **`DoesNotReturnAttribute`** — enables the `[DoesNotReturn]` attribute on methods. Located in `System.Diagnostics.CodeAnalysis`.
-
-Both are declared `internal` so they do not leak into any consumer's namespace.
+`SyncMaster.Core` and `CalImport` target `net10.0`. `CalExport` targets `net10.0-windows` because it depends on the Outlook COM interop, which is Windows-only. `init`-only setters and the `[DoesNotReturn]` attribute are provided natively by the .NET 10 runtime, so no polyfills are needed.
 
 ### `Environment.Exit` in Program.cs
 
@@ -968,6 +963,6 @@ Appointments are deduplicated using the composite key `"{start:yyyy-MM-dd HH:mm}
 
 `GlobalAppointmentID` is not used as the dedup key despite being Outlook's canonical identity field. The reason is that accessing `GlobalAppointmentID` on a recurring-series occurrence after `IncludeRecurrences = true` can corrupt the COM occurrence context, causing subsequent reads of `Start` on the same item to return the series master start date instead of the occurrence date. The `(start, subject)` key is reliable and safe. The trade-off is that two genuinely different events at the same time with the same subject would be deduplicated as one — an acceptable limitation for the intended use case.
 
-### `dynamic` Keyword and Microsoft.CSharp Reference
+### `dynamic` Keyword
 
-`OutlookCalendarService` uses the `dynamic` keyword to access `AppointmentItem.StartTimeZone.ID` and `.Name` without a strongly-typed COM reference to the timezone interface. The `Microsoft.CSharp` assembly reference in `CalExport.csproj` is required for `dynamic` binding to work in SDK-style `net48` projects. Without it, the project compiles but throws a `RuntimeBinderException` at run time when `dynamic` dispatch is attempted.
+`OutlookCalendarService` uses the `dynamic` keyword to access `AppointmentItem.StartTimeZone.ID` and `.Name` without a strongly-typed COM reference to the timezone interface. On .NET 10 the `dynamic` binder ships with the runtime, so no separate `Microsoft.CSharp` reference is required.
