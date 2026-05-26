@@ -25,5 +25,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\SyncMaster.Engine\SyncMaster.Engine.csproj" />
     <ProjectReference Include="..\..\src\SyncMaster.Core\SyncMaster.Core.csproj" />
+    <ProjectReference Include="..\..\src\SyncMaster.Cli\SyncMaster.Cli.csproj" />
   </ItemGroup>
 </Project>

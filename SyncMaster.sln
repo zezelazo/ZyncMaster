@@ -31,6 +31,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SyncMaster.Engine", "src\Sy
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SyncMaster.Engine.Tests", "tests\SyncMaster.Engine.Tests\SyncMaster.Engine.Tests.csproj", "{E55085E1-841B-46A3-8BE0-070E566087BD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SyncMaster.Cli", "src\SyncMaster.Cli\SyncMaster.Cli.csproj", "{65CDA011-89A4-4AC8-A002-E848EAF2A46C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -185,6 +187,18 @@ Global
 		{E55085E1-841B-46A3-8BE0-070E566087BD}.Release|x64.Build.0 = Release|Any CPU
 		{E55085E1-841B-46A3-8BE0-070E566087BD}.Release|x86.ActiveCfg = Release|Any CPU
 		{E55085E1-841B-46A3-8BE0-070E566087BD}.Release|x86.Build.0 = Release|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Debug|x64.Build.0 = Debug|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Debug|x86.Build.0 = Debug|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Release|x64.ActiveCfg = Release|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Release|x64.Build.0 = Release|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Release|x86.ActiveCfg = Release|Any CPU
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -202,6 +216,7 @@ Global
 		{33D2F867-9B9A-40A8-A400-CB0E094C76E8} = {B0000000-0000-0000-0000-000000000002}
 		{8D2C7191-8A7A-44C6-8904-285CACFF79AD} = {B0000000-0000-0000-0000-000000000001}
 		{E55085E1-841B-46A3-8BE0-070E566087BD} = {B0000000-0000-0000-0000-000000000002}
+		{65CDA011-89A4-4AC8-A002-E848EAF2A46C} = {B0000000-0000-0000-0000-000000000001}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {4C28F1A2-4630-4E20-BD4E-482CF7C2D6AF}
