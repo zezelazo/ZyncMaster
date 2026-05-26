@@ -117,15 +117,9 @@ public sealed class TrayController : IDisposable
         PauseToggled?.Invoke(_paused);
     }
 
-    private string PauseItemText() => _paused ? "Resume auto-sync" : "Pause auto-sync";
+    private string PauseItemText() => TrayStatusText.PauseItem(_paused);
 
-    private string StatusHeaderText() => _status switch
-    {
-        SyncStatus.Syncing => "SyncMaster — Syncing…",
-        SyncStatus.Error   => "SyncMaster — Error",
-        SyncStatus.Paused  => "SyncMaster — Paused",
-        _                  => "SyncMaster — Idle",
-    };
+    private string StatusHeaderText() => TrayStatusText.Header(_status);
 
     public void Dispose()
     {
