@@ -15,18 +15,7 @@ app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-app.MapGet("/api/devices", async (IDeviceStore store) =>
-{
-    var devices = await store.ListAsync();
-    return Results.Ok(devices.Select(d => new
-    {
-        id = d.Id,
-        name = d.Name,
-        targetCalendarId = d.TargetCalendarId,
-        createdUtc = d.CreatedUtc,
-        lastSeenUtc = d.LastSeenUtc,
-    }));
-}).RequireAuthorization();
+app.MapDeviceEndpoints();
 
 app.Run();
 
