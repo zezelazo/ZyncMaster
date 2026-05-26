@@ -19,6 +19,7 @@ public sealed class ArgumentParser
         string? newCalendarName = null;
         bool    autoMode        = false;
         bool    dryRun          = false;
+        bool    overwrite       = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -61,6 +62,11 @@ public sealed class ArgumentParser
                     dryRun = true;
                     break;
 
+                case "-w":
+                case "--overwrite":
+                    overwrite = true;
+                    break;
+
                 default:
                     throw new ArgumentParsingException($"Unknown argument '{args[i]}'.");
             }
@@ -77,6 +83,7 @@ public sealed class ArgumentParser
             CalendarId      = calendarId,
             NewCalendarName = newCalendarName,
             DryRun          = dryRun,
+            Overwrite       = overwrite,
         };
     }
 }

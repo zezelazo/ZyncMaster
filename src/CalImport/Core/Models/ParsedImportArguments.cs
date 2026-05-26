@@ -8,4 +8,5 @@ public sealed class ParsedImportArguments
     public string? CalendarId      { get; init; }
     public string? NewCalendarName { get; init; }
     public bool    DryRun          { get; init; }
+    public bool    Overwrite       { get; init; }
 }

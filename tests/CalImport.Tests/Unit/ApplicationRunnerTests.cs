@@ -63,7 +63,8 @@ public sealed class ApplicationRunnerTests
     private static AppointmentRecord MakeRecord(
         string id,
         string subject = "Meeting",
-        bool isCancelled = false)
+        bool isCancelled = false,
+        string description = "")
         => new AppointmentRecord
         {
             Id              = id,
@@ -74,6 +75,7 @@ public sealed class ApplicationRunnerTests
             StartTimeZoneId = "UTC",
             Duration        = 60,
             IsCancelled     = isCancelled,
+            Description     = description,
         };
 
     private static ImportPayload MakePayload(params AppointmentRecord[] records)
@@ -656,9 +658,9 @@ public sealed class ApplicationRunnerTests
     {
         _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>())).Returns(MakeSettings());
         _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
-        // source, picker=1, reminder=15, save=y
+        // source, picker=1, reminder=15, overwrite=n, save=y
         _console.SetupSequence(c => c.ReadLine())
-                .Returns("x.json").Returns("1").Returns("15").Returns("y");
+                .Returns("x.json").Returns("1").Returns("15").Returns("n").Returns("y");
         SetupCalendarsList(MakeCal("abc", "ABC", true));
         SetupNoExisting();
         _calendarTarget.Setup(c => c.CreateEventAsync("abc", It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
@@ -718,9 +720,9 @@ public sealed class ApplicationRunnerTests
     {
         _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>())).Returns(MakeSettings());
         _importSource.Setup(s => s.Load(It.IsAny<string>())).Returns(MakePayload(MakeRecord("id-1")));
-        // source, picker=N, new name, reminder(empty), save=y
+        // source, picker=N, new name, reminder(empty), overwrite(empty), save=y
         _console.SetupSequence(c => c.ReadLine())
-                .Returns("x.json").Returns("N").Returns("MyNewCal").Returns("").Returns("y");
+                .Returns("x.json").Returns("N").Returns("MyNewCal").Returns("").Returns("").Returns("y");
         SetupCalendarsList(MakeCal("abc", "ABC", true));
         SetupNoExisting();
         var created = new CalendarTargetInfo { Id = "new-id", DisplayName = "MyNewCal", Owner = "u" };
@@ -736,5 +738,56 @@ public sealed class ApplicationRunnerTests
         _settingsRepo.Verify(r => r.Save(
             It.Is<ImportSettings>(s => s.DefaultCalendarId == "new-id"),
             It.IsAny<string>()), Times.Once);
+    }
+
+    // ─── Overwrite (--overwrite) ─────────────────────────────────────────────
+
+    [Fact]
+    public void ExecutePlan_Overwrite_RebuildsBodyFromFile()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>())).Returns(MakeSettings());
+        _importSource.Setup(s => s.Load(It.IsAny<string>()))
+                     .Returns(MakePayload(MakeRecord("id-1", description: "NEW DESC FROM FILE")));
+        SetupCalendarsList(MakeCal());
+        SetupExisting(("id-1", "graph-ev", "<p>OLD USER EDIT</p>"));
+        EventDraft? captured = null;
+        _calendarTarget
+            .Setup(c => c.UpdateEventAsync(It.IsAny<string>(), It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+            .Callback<string, EventDraft, CancellationToken>((_, d, _) => captured = d)
+            .Returns(Task.CompletedTask);
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments
+        {
+            SourcePath = "x.json",
+            AutoMode   = true,
+            Overwrite  = true,
+        });
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.BodyHtml.Should().Contain("NEW DESC FROM FILE");
+        captured.BodyHtml.Should().NotContain("OLD USER EDIT");
+    }
+
+    [Fact]
+    public void ExecutePlan_NoOverwrite_PreservesExistingBody()
+    {
+        _settingsRepo.Setup(r => r.LoadOrCreateDefault(It.IsAny<string>())).Returns(MakeSettings());
+        _importSource.Setup(s => s.Load(It.IsAny<string>()))
+                     .Returns(MakePayload(MakeRecord("id-1", description: "NEW DESC FROM FILE")));
+        SetupCalendarsList(MakeCal());
+        SetupExisting(("id-1", "graph-ev", "<p>OLD USER EDIT</p>"));
+        EventDraft? captured = null;
+        _calendarTarget
+            .Setup(c => c.UpdateEventAsync(It.IsAny<string>(), It.IsAny<EventDraft>(), It.IsAny<CancellationToken>()))
+            .Callback<string, EventDraft, CancellationToken>((_, d, _) => captured = d)
+            .Returns(Task.CompletedTask);
+
+        Action act = () => BuildSut().Run(new ParsedImportArguments { SourcePath = "x.json", AutoMode = true });
+
+        act.Should().Throw<TerminatedException>().Which.Code.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.BodyHtml.Should().Contain("OLD USER EDIT");
+        captured.BodyHtml.Should().NotContain("NEW DESC FROM FILE");
     }
 }

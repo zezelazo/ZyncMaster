@@ -331,7 +331,7 @@ The output is at `src\CalImport\bin\Release\net48\CalImport.exe`.
 
 ```
 CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
-              [-k|--calendar <id>] [-n|--new-calendar <name>] [--dry-run]
+              [-k|--calendar <id>] [-n|--new-calendar <name>] [-w|--overwrite] [--dry-run]
 ```
 
 | Flag | Description |
@@ -342,6 +342,7 @@ CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
 | `-c <path>` / `--config <path>` | Use a specific `settings.json` instead of the one next to the exe |
 | `-k <id>` / `--calendar <id>` | Use this calendar id as the destination |
 | `-n <name>` / `--new-calendar <name>` | Create a new calendar with this name and use it (mutually exclusive with `-k`) |
+| `-w` / `--overwrite` | On re-import, rebuild each updated event's body from the file (description + participants), replacing what's in the destination. Without it, your manual edits to the body are preserved and only the participants table is refreshed. Interactive mode asks this as a question. |
 | `--dry-run` | Print the plan (Create / Update / Cancel / Skip per event) without touching Graph |
 
 ### Examples
@@ -397,7 +398,7 @@ Created on first run next to the exe. All fields except `clientId` have sensible
 2. On every run, CalImport queries the target calendar for events that have a `CalImportSourceId` matching any `id` in the file.
 3. For each input event:
    - **Not found** + active → **Create** new event.
-   - **Found** + active → **Update** existing event (body merge preserves user-edited text — see below).
+   - **Found** + active → **Update** existing event. By default the body merge preserves user-edited text and only refreshes the participants table; pass `-w`/`--overwrite` to rebuild the body from the file instead.
    - **Found** + `isCancelled: true` → **Delete** existing event.
    - **Not found** + `isCancelled: true` → **Skip**.
 

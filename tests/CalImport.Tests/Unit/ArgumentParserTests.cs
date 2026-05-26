@@ -20,6 +20,7 @@ public sealed class ArgumentParserTests
         r.NewCalendarName.Should().BeNull();
         r.AutoMode.Should().BeFalse();
         r.DryRun.Should().BeFalse();
+        r.Overwrite.Should().BeFalse();
     }
 
     [Theory]
@@ -67,6 +68,14 @@ public sealed class ArgumentParserTests
     public void DryRunFlag_SetsDryRun()
     {
         _sut.Parse(new[] { "--dry-run" }).DryRun.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("-w")]
+    [InlineData("--overwrite")]
+    public void OverwriteFlag_SetsOverwrite(string flag)
+    {
+        _sut.Parse(new[] { flag }).Overwrite.Should().BeTrue();
     }
 
     [Fact]

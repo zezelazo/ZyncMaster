@@ -61,7 +61,7 @@ public sealed class ApplicationRunner
 
         var calendarTarget = _calendarTargetFactory(settings);
 
-        var (calendar, reminderMinutes) = ResolveTargetAndReminder(args, settings, settingsPath, calendarTarget);
+        var (calendar, reminderMinutes, overwrite) = ResolveTargetAndReminder(args, settings, settingsPath, calendarTarget);
         _console.WriteLine($"Target calendar: {calendar.DisplayName} ({calendar.Owner})");
 
         var ids = payload.Events.Select(e => e.Id).Where(x => !string.IsNullOrEmpty(x)).ToList();
@@ -80,7 +80,7 @@ public sealed class ApplicationRunner
             return;
         }
 
-        var result = ExecutePlanAsync(plan, calendar, calendarTarget, reminderMinutes).GetAwaiter().GetResult();
+        var result = ExecutePlanAsync(plan, calendar, calendarTarget, reminderMinutes, overwrite).GetAwaiter().GetResult();
 
         PrintResult(result);
 
@@ -158,7 +158,7 @@ public sealed class ApplicationRunner
 
     // ── Calendar + reminder resolution (export-style settings flow) ─────────
 
-    private (CalendarTargetInfo calendar, int reminderMinutes) ResolveTargetAndReminder(
+    private (CalendarTargetInfo calendar, int reminderMinutes, bool overwrite) ResolveTargetAndReminder(
         ParsedImportArguments args,
         ImportSettings        settings,
         string                settingsPath,
@@ -168,7 +168,7 @@ public sealed class ApplicationRunner
 
         // Explicit: create a new calendar by name (scripting; no prompts, no save).
         if (!string.IsNullOrWhiteSpace(args.NewCalendarName))
-            return (CreateCalendar(target, args.NewCalendarName!), reminder);
+            return (CreateCalendar(target, args.NewCalendarName!), reminder, args.Overwrite);
 
         _console.WriteLine("Listing calendars from your account...");
         var calendars = target.ListCalendarsAsync().GetAwaiter().GetResult();
@@ -187,7 +187,7 @@ public sealed class ApplicationRunner
                 _terminator.ExitWithError($"Calendar id '{args.CalendarId}' not found in the account.");
                 throw new InvalidOperationException("Unreachable");
             }
-            return (match, reminder);
+            return (match, reminder, args.Overwrite);
         }
 
         var savedDefault = !string.IsNullOrWhiteSpace(settings.DefaultCalendarId)
@@ -204,7 +204,7 @@ public sealed class ApplicationRunner
                 throw new InvalidOperationException("Unreachable");
             }
             var auto = savedDefault ?? calendars.FirstOrDefault(c => c.IsDefault) ?? calendars[0];
-            return (auto, reminder);
+            return (auto, reminder, args.Overwrite);
         }
 
         // Interactive: a valid saved default shows the settings and offers to proceed.
@@ -213,7 +213,7 @@ public sealed class ApplicationRunner
             DisplaySettings(settings, savedDefault, reminder);
             _console.Write("Proceed with these settings? [Y/n]: ");
             if (IsYes(_console.ReadLine(), defaultYes: true))
-                return (savedDefault, reminder);
+                return (savedDefault, reminder, args.Overwrite);
         }
         else if (!string.IsNullOrWhiteSpace(settings.DefaultCalendarId))
         {
@@ -230,9 +230,19 @@ public sealed class ApplicationRunner
 
         reminder = PromptReminder(reminder);
 
+        var overwrite = args.Overwrite || PromptOverwrite();
+
         AskSaveDefaults(settings, settingsPath, calendar, reminder);
 
-        return (calendar, reminder);
+        return (calendar, reminder, overwrite);
+    }
+
+    private bool PromptOverwrite()
+    {
+        // Per-run choice (not persisted): forcing overwrite every run would silently
+        // clobber descriptions the user edited in Outlook. Only affects Update actions.
+        _console.Write("Overwrite existing event descriptions from the file? [y/N]: ");
+        return IsYes(_console.ReadLine(), defaultYes: false);
     }
 
     private CalendarTargetInfo CreateCalendar(ICalendarTarget target, string name)
@@ -312,7 +322,8 @@ public sealed class ApplicationRunner
         IReadOnlyList<ImportPlanItem> plan,
         CalendarTargetInfo            calendar,
         ICalendarTarget               target,
-        int                           reminderMinutes)
+        int                           reminderMinutes,
+        bool                          overwrite)
     {
         var result = new ImportResult();
         int n      = 0;
@@ -334,7 +345,7 @@ public sealed class ApplicationRunner
                     }
                     case ImportAction.Update:
                     {
-                        // ForUpdate factory guarantees ExistingEventId/ExistingBodyHtml are non-null;
+                        // ForUpdate/ForCancel factories guarantee ExistingEventId is non-null;
                         // a runtime guard (instead of Debug.Assert, which is stripped in Release)
                         // protects against a factory regression instead of crashing with an opaque NRE.
                         // This InvalidOperationException is intentionally not caught below — a broken
@@ -342,10 +353,23 @@ public sealed class ApplicationRunner
                         if (item.ExistingEventId == null)
                             throw new InvalidOperationException(
                                 "ImportPlanItem with Action=Update has null ExistingEventId — factory invariant broken.");
-                        if (item.ExistingBodyHtml == null)
-                            throw new InvalidOperationException(
-                                "ImportPlanItem with Action=Update has null ExistingBodyHtml — factory invariant broken.");
-                        var draft = _draftBuilder.BuildForUpdate(item.Record, reminderMinutes, item.ExistingBodyHtml);
+
+                        EventDraft draft;
+                        if (overwrite)
+                        {
+                            // Force: rebuild the body from the file (description + participants),
+                            // replacing whatever is in the destination event.
+                            draft = _draftBuilder.BuildForCreate(item.Record, reminderMinutes);
+                        }
+                        else
+                        {
+                            if (item.ExistingBodyHtml == null)
+                                throw new InvalidOperationException(
+                                    "ImportPlanItem with Action=Update has null ExistingBodyHtml — factory invariant broken.");
+                            // Default: preserve the destination body, only refresh the participants block.
+                            draft = _draftBuilder.BuildForUpdate(item.Record, reminderMinutes, item.ExistingBodyHtml);
+                        }
+
                         await target.UpdateEventAsync(item.ExistingEventId, draft).ConfigureAwait(false);
                         _console.WriteLine($"  UPDATE {label}");
                         result.Updated++;
