@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SyncMaster.Core\SyncMaster.Core.csproj" />
+    <ProjectReference Include="..\SyncMaster.Graph\SyncMaster.Graph.csproj" />
   </ItemGroup>
 
   <ItemGroup>

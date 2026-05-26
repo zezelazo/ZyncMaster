@@ -1,6 +1,6 @@
 using System;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 // Raised when token acquisition (silent or interactive) fails in a way that will
 // keep failing on subsequent attempts: bad client id, missing/withdrawn consent,

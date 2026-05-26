@@ -1,4 +1,4 @@
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 public enum ImportAction
 {

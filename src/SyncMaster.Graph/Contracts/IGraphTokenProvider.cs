@@ -1,9 +1,9 @@
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
-public interface IImportAuthenticator
+public interface IGraphTokenProvider
 {
     // Acquires an access token for Microsoft Graph. Performs an interactive
     // browser sign-in on first run, then refreshes silently from a DPAPI-protected cache.

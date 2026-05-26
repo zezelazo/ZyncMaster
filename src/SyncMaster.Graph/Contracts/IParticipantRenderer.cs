@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using SyncMaster.Core;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 public interface IParticipantRenderer
 {

@@ -10,14 +10,14 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 public sealed class GraphCalendarTarget : ICalendarTarget
 {
     private const string GraphBaseUrl = "https://graph.microsoft.com/v1.0/";
 
     private readonly HttpClient                  _http;
-    private readonly IImportAuthenticator        _auth;
+    private readonly IGraphTokenProvider         _auth;
     private readonly string                      _extendedPropertyId;
 
     // Per-run cache of bodies already re-fetched from /me/events/{id}?$select=body.
@@ -29,7 +29,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
     private readonly Dictionary<string, string>  _bodyCacheBySourceId =
         new Dictionary<string, string>(StringComparer.Ordinal);
 
-    public GraphCalendarTarget(HttpClient http, IImportAuthenticator auth, Guid extendedPropertyGuid)
+    public GraphCalendarTarget(HttpClient http, IGraphTokenProvider auth, Guid extendedPropertyGuid)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));

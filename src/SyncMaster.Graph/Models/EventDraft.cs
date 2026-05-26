@@ -1,6 +1,6 @@
 using System;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 public sealed class EventDraft
 {

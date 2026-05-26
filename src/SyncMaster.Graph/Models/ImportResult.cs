@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 public sealed class ImportResult
 {

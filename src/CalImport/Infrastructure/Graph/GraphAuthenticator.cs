@@ -5,10 +5,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Identity.Client;
 using Microsoft.Identity.Client.Extensions.Msal;
+using SyncMaster.Graph;
 
 namespace SyncMaster.CalImport;
 
-public sealed class GraphAuthenticator : IImportAuthenticator
+public sealed class GraphAuthenticator : IGraphTokenProvider
 {
     private const           string   CacheFileName = "msal.cache";
     private static readonly string[] Scopes        = new[]

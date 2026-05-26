@@ -6,6 +6,7 @@ using FluentAssertions;
 using Moq;
 using SyncMaster.CalImport;
 using SyncMaster.Core;
+using SyncMaster.Graph;
 using Xunit;
 
 namespace SyncMaster.CalImport.Tests;

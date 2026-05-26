@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using SyncMaster.Core;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 public sealed class ParticipantBodyRenderer : IParticipantRenderer
 {

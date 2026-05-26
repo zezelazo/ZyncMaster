@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using SyncMaster.Core;
+using SyncMaster.Graph;
 
 namespace SyncMaster.CalImport;
 

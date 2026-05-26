@@ -1,6 +1,6 @@
 using System;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 // Raised for per-item Graph failures that should not abort the entire run:
 // transport errors after retries are exhausted, non-auth 4xx (404, 409, 422),

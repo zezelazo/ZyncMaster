@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using SyncMaster.Core;
+using SyncMaster.Graph;
 
 namespace SyncMaster.CalImport;
 

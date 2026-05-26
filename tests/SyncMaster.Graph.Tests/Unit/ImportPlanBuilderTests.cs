@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
 using FluentAssertions;
-using SyncMaster.CalImport;
+using SyncMaster.Graph;
 using SyncMaster.Core;
 using Xunit;
 
-namespace SyncMaster.CalImport.Tests;
+namespace SyncMaster.Graph.Tests;
 
 public sealed class ImportPlanBuilderTests
 {

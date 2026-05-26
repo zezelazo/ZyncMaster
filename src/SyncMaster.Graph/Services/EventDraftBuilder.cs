@@ -1,7 +1,7 @@
 using System;
 using SyncMaster.Core;
 
-namespace SyncMaster.CalImport;
+namespace SyncMaster.Graph;
 
 public sealed class EventDraftBuilder
 {

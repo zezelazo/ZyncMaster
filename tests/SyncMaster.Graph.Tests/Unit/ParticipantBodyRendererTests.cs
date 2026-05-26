@@ -2,11 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using FluentAssertions;
-using SyncMaster.CalImport;
+using SyncMaster.Graph;
 using SyncMaster.Core;
 using Xunit;
 
-namespace SyncMaster.CalImport.Tests;
+namespace SyncMaster.Graph.Tests;
 
 public sealed class ParticipantBodyRendererTests
 {

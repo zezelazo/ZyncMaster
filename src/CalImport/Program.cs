@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Text;
 using SyncMaster.CalImport;
 using SyncMaster.Core;
+using SyncMaster.Graph;
 
 Console.OutputEncoding = Encoding.UTF8;
 Console.WriteLine("=== Outlook Calendar Import ===");
