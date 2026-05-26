@@ -12,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\SyncMaster.Engine\SyncMaster.Engine.csproj" />
+    <ProjectReference Include="..\SyncMaster.Core\SyncMaster.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- The built web UI is served by WebHost over a loopback HttpListener. Ship it
@@ -23,5 +24,6 @@
     <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.3" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 </Project>

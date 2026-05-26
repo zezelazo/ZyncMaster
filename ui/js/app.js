@@ -11,6 +11,94 @@ import { icon, hydrateIcons } from './icons.js';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+// ---------------- Native bridge (optional) ----------------
+// When SyncMaster runs inside the desktop host the UI is served over a loopback
+// HttpListener that exposes /__bridge/send (web->native) and /__bridge/poll
+// (native->web long-poll), or a real embedded WebView injects window.chrome.webview.
+// In either case we route getStatus/syncNow/pair/saveConfig/setPaused to the host and
+// listen for unsolicited {event:"status"} messages. When NO bridge is present (the
+// page opened standalone as file:// in a plain browser) everything falls back to the
+// existing mock behaviour, so index.html still works on its own.
+const Bridge = (() => {
+  const hasWebView = typeof window !== 'undefined' && window.chrome && window.chrome.webview;
+  // Loopback host: served over http(s) from 127.0.0.1/localhost (not file://).
+  const isLoopback =
+    typeof location !== 'undefined' &&
+    /^https?:$/.test(location.protocol) &&
+    /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
+  const available = !!hasWebView || isLoopback;
+
+  const pending = new Map(); // correlationId -> { resolve, reject }
+  let statusCb = null;
+  let seq = 0;
+
+  function newId() { return `c${Date.now()}_${seq++}`; }
+
+  function handleInbound(text) {
+    let msg;
+    try { msg = JSON.parse(text); } catch (_) { return; }
+    if (msg && msg.event === 'status') { if (statusCb) statusCb(msg.payload); return; }
+    if (msg && msg.correlationId && pending.has(msg.correlationId)) {
+      const p = pending.get(msg.correlationId);
+      pending.delete(msg.correlationId);
+      if (msg.ok) p.resolve(msg.payload ? safeParse(msg.payload) : null);
+      else p.reject(new Error(msg.error || 'bridge error'));
+    }
+  }
+
+  function safeParse(s) { try { return JSON.parse(s); } catch (_) { return s; } }
+
+  function send(obj) {
+    if (hasWebView) { window.chrome.webview.postMessage(JSON.stringify(obj)); return; }
+    fetch('/__bridge/send', { method: 'POST', body: JSON.stringify(obj) }).catch(() => {});
+  }
+
+  // For the loopback host, long-poll for native->web messages. WebView2 instead
+  // raises window.chrome.webview 'message' events, wired below.
+  async function pollLoop() {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const res = await fetch('/__bridge/poll');
+        if (res.status === 200) handleInbound(await res.text());
+      } catch (_) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  function start() {
+    if (!available) return;
+    if (hasWebView) {
+      window.chrome.webview.addEventListener('message', (e) => {
+        const data = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
+        handleInbound(data);
+      });
+    } else {
+      pollLoop();
+    }
+  }
+
+  function call(action, payload) {
+    if (!available) return Promise.reject(new Error('no bridge'));
+    const correlationId = newId();
+    return new Promise((resolve, reject) => {
+      pending.set(correlationId, { resolve, reject });
+      send({ action, correlationId, payload: payload == null ? null : String(payload) });
+      setTimeout(() => {
+        if (pending.has(correlationId)) { pending.delete(correlationId); reject(new Error('bridge timeout')); }
+      }, 120000);
+    });
+  }
+
+  return {
+    get available() { return available; },
+    start,
+    call,
+    onStatus(cb) { statusCb = cb; },
+  };
+})();
+
 // setIcon — replace an element's content with a controlled icon SVG only.
 function setIcon(el, name, size) {
   el.innerHTML = icon(name, size ? { size } : {}); // safe: name maps to static markup
@@ -166,12 +254,41 @@ function renderDashboard() {
   });
 }
 
+// ---------------- Native status mapping ----------------
+// Translate a native AppStatus into the mock view-model the renderer already drives,
+// so the existing dashboard rendering is reused unchanged.
+function applyNativeStatus(s) {
+  if (!s) return;
+  if (!s.paired) MOCK.status = 'unpaired';
+  else if (s.status === 'Error') MOCK.status = 'offline';
+  else MOCK.status = 'connected';
+
+  if (s.lastSyncUtc) {
+    const mins = Math.max(0, Math.round((Date.now() - new Date(s.lastSyncUtc).getTime()) / 60000));
+    MOCK.lastSyncMinutes = mins;
+  }
+  MOCK.device.paired = !!s.paired;
+  renderDashboard();
+}
+
 // ---------------- Sync state machine ----------------
 let syncing = false;
 function runSync({ fail = false } = {}) {
   const btn = $('#syncBtn');
   if (syncing || btn.disabled) return;
-  if (btn.dataset.act === 'pair') { showView('pairing'); resetPairing(); return; }
+  if (btn.dataset.act === 'pair') {
+    if (Bridge.available) { Bridge.call('pair').catch(() => {}); }
+    showView('pairing'); resetPairing(); return;
+  }
+
+  // When a native bridge is present, ask the host to run a real cycle and reflect the
+  // result; otherwise fall through to the mock progress animation below.
+  if (Bridge.available && !fail) {
+    Bridge.call('syncNow')
+      .then(() => Bridge.call('getStatus'))
+      .then((s) => applyNativeStatus(s))
+      .catch(() => {});
+  }
 
   syncing = true;
   btn.classList.remove('is-done', 'shake');
@@ -312,6 +429,8 @@ function wireConfig() {
 
 let savedTimer;
 function pulseSaved() {
+  // Persist the current config to the host when running inside the desktop app.
+  pushConfigToHost();
   const t = $('#savedToast');
   if (!t) return;
   setIcon(t, 'check', 15);
@@ -381,9 +500,32 @@ function wirePairing() {
 }
 
 // ---------------- Boot ----------------
+// Collect the current config from the panel inputs into a settings object the host
+// understands (matches SyncMaster.App.Configuration.AppSettings JSON shape).
+function collectConfig() {
+  const deviceName = $('#deviceName') ? $('#deviceName').value.trim() : '';
+  const slider = $('#windowSlider');
+  const cfg = {};
+  if (deviceName) cfg.deviceName = deviceName;
+  if (slider) cfg.syncWindowDays = Number(slider.value);
+  return cfg;
+}
+
+function pushConfigToHost() {
+  if (!Bridge.available) return;
+  Bridge.call('saveConfig', JSON.stringify(collectConfig())).catch(() => {});
+}
+
 function boot() {
   hydrateIcons();
   applyTheme(currentTheme());
+
+  // Wire the native bridge first so initial status (if any) drives the dashboard.
+  if (Bridge.available) {
+    Bridge.start();
+    Bridge.onStatus((s) => applyNativeStatus(s));
+    Bridge.call('getStatus').then((s) => applyNativeStatus(s)).catch(() => {});
+  }
 
   // nav + any [data-go] navigation control
   $$('[data-go]').forEach((b) => b.addEventListener('click', () => {
