@@ -26,6 +26,9 @@ msal.cache
 .remember/
 CLAUDE.md
 
+# Internal design docs (specs, plans, UI design) — not part of the repo
+docs/
+
 # OS noise
 Thumbs.db
 .DS_Store
