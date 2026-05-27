@@ -33,7 +33,7 @@ public sealed class CliSettingsResolverTests
         engine.DeviceName.Should().Be(Environment.MachineName);
         engine.SyncWindowDays.Should().Be(14);
         engine.IntervalMinutes.Should().Be(10);
-        engine.CalExportPath.Should().Be("CalExport.exe");
+        engine.CalExportPath.Should().Be("SyncMaster.CalExport.exe");
         engine.CalendarNames.Should().BeNull();
     }
 

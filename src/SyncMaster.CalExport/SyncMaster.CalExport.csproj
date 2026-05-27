@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>CalExport</AssemblyName>
+    <AssemblyName>SyncMaster.CalExport</AssemblyName>
     <RootNamespace>SyncMaster.CalExport</RootNamespace>
   </PropertyGroup>
 

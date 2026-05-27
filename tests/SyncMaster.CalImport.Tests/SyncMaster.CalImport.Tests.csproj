@@ -1,11 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
-    <RootNamespace>SyncMaster.CalExport.Tests</RootNamespace>
-    <AssemblyName>CalExport.Tests</AssemblyName>
+    <RootNamespace>SyncMaster.CalImport.Tests</RootNamespace>
+    <AssemblyName>SyncMaster.CalImport.Tests</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
@@ -23,6 +23,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\CalExport\CalExport.csproj" />
+    <ProjectReference Include="..\..\src\SyncMaster.CalImport\SyncMaster.CalImport.csproj" />
+    <ProjectReference Include="..\..\src\SyncMaster.Core\SyncMaster.Core.csproj" />
   </ItemGroup>
 </Project>

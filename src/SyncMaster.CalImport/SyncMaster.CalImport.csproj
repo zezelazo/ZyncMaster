@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>CalImport</AssemblyName>
+    <AssemblyName>SyncMaster.CalImport</AssemblyName>
     <RootNamespace>SyncMaster.CalImport</RootNamespace>
   </PropertyGroup>
 

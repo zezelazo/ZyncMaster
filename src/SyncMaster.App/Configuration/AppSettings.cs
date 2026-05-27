@@ -24,8 +24,8 @@ public sealed class AppSettings
     [JsonProperty("intervalMinutes")]
     public int IntervalMinutes { get; set; } = 10;
 
-    // Path to CalExport.exe used to read the local Outlook calendar. Defaults to
-    // "CalExport.exe" (resolved on PATH / next to the host).
+    // Path to SyncMaster.CalExport.exe used to read the local Outlook calendar. Defaults to
+    // "SyncMaster.CalExport.exe" (resolved on PATH / next to the host).
     [JsonProperty("calExportPath")]
     public string? CalExportPath { get; set; }
 

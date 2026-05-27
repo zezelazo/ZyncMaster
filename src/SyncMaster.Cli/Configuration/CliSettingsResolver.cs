@@ -9,7 +9,7 @@ namespace SyncMaster.Cli;
 // Mirrors CalImport's ImportSettingsResolver style.
 public sealed class CliSettingsResolver
 {
-    private const string DefaultCalExportPath = "CalExport.exe";
+    private const string DefaultCalExportPath = "SyncMaster.CalExport.exe";
 
     public EngineSettings Resolve(CliSettings settings)
     {

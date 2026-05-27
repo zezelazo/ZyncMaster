@@ -25,8 +25,8 @@ Both tools share a `SyncMaster.Core` library and follow the same layered SOLID a
 dotnet build -c Release
 ```
 
-The output executable is placed in `src\CalExport\bin\Release\net10.0-windows\CalExport.exe`.  
-Copy `CalExport.exe` to any folder — it is self-contained for runtime use.
+The output executable is placed in `src\SyncMaster.CalExport\bin\Release\net10.0-windows\SyncMaster.CalExport.exe`.  
+Copy `SyncMaster.CalExport.exe` to any folder — it is self-contained for runtime use.
 
 ---
 
@@ -35,7 +35,7 @@ Copy `CalExport.exe` to any folder — it is self-contained for runtime use.
 Run the executable with no arguments for the fully interactive flow:
 
 ```
-CalExport.exe
+SyncMaster.CalExport.exe
 ```
 
 On first run a `settings.json` file is created next to the executable with sensible defaults. The tool will then walk you through every option.
@@ -45,7 +45,7 @@ On first run a `settings.json` file is created next to the executable with sensi
 ## Usage
 
 ```
-CalExport.exe [-a|--auto] [-c|--config <path>] [-o|--output <path>]
+SyncMaster.CalExport.exe [-a|--auto] [-c|--config <path>] [-o|--output <path>]
 ```
 
 | Flag | Description |
@@ -59,13 +59,13 @@ All flags are **independent** — any combination is valid:
 
 ```
 # Silent export with all defaults
-CalExport.exe -a
+SyncMaster.CalExport.exe -a
 
 # Interactive export using a custom config file
-CalExport.exe -c "D:\work\my-settings.json"
+SyncMaster.CalExport.exe -c "D:\work\my-settings.json"
 
 # Silent export to a specific folder using a custom config
-CalExport.exe -a -c "D:\work\my-settings.json" -o "D:\exports\calendar"
+SyncMaster.CalExport.exe -a -c "D:\work\my-settings.json" -o "D:\exports\calendar"
 ```
 
 ### Missing config file (`-c` with a non-existent path)
@@ -237,8 +237,8 @@ The file is created automatically on first run next to the executable. All field
 You can maintain separate configs for different scenarios:
 
 ```
-CalExport.exe -a -c "D:\configs\work.json"     -o "D:\timesheets"
-CalExport.exe -a -c "D:\configs\personal.json" -o "D:\personal\calendar"
+SyncMaster.CalExport.exe -a -c "D:\configs\work.json"     -o "D:\timesheets"
+SyncMaster.CalExport.exe -a -c "D:\configs\personal.json" -o "D:\personal\calendar"
 ```
 
 ---
@@ -325,12 +325,12 @@ No client secret is required — the public-client + PKCE flow is the correct on
 dotnet build -c Release
 ```
 
-The output is at `src\CalImport\bin\Release\net10.0\CalImport.exe`.
+The output is at `src\SyncMaster.CalImport\bin\Release\net10.0\SyncMaster.CalImport.exe`.
 
 ## Usage
 
 ```
-CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
+SyncMaster.CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
               [-k|--calendar <id>] [-n|--new-calendar <name>] [-w|--overwrite] [--dry-run]
 ```
 
@@ -349,19 +349,19 @@ CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
 
 ```
 # Fully interactive (asks for file and calendar)
-CalImport.exe
+SyncMaster.CalImport.exe
 
 # Import to the default calendar, no prompts
-CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json"
+SyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json"
 
 # Preview what would happen
-CalImport.exe -s "D:\export\Calendar_2026_May_complete_20260523.json" --dry-run
+SyncMaster.CalImport.exe -s "D:\export\Calendar_2026_May_complete_20260523.json" --dry-run
 
 # Send everything into a brand-new calendar named "Migrated-2026-05"
-CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -n "Migrated-2026-05"
+SyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -n "Migrated-2026-05"
 
 # Import to an explicit existing calendar id
-CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -k "AAMkAGI0MTU2ZGEx..."
+SyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -k "AAMkAGI0MTU2ZGEx..."
 ```
 
 ### First run
@@ -463,7 +463,7 @@ SyncMaster/
 │   │   ├── Infrastructure/ PhysicalFileSystem
 │   │   └── Presentation/   ConsoleIO, ConsoleApplicationTerminator
 │   │
-│   ├── CalExport/                              # Outlook Classic → JSON / TXT
+│   ├── SyncMaster.CalExport/                   # Outlook Classic → JSON / TXT
 │   │   ├── Program.cs                          # Composition root
 │   │   ├── Core/        ExportContext, IAppointmentExporter, ICalendarService,
 │   │   │                AppointmentExportService, CalendarFolderMatcher,
@@ -472,7 +472,7 @@ SyncMaster/
 │   │   ├── Infrastructure/Outlook/OutlookCalendarService   # COM interop
 │   │   └── Presentation/   ApplicationRunner, ArgumentParser
 │   │
-│   └── CalImport/                              # JSON → Microsoft Graph
+│   └── SyncMaster.CalImport/                   # JSON → Microsoft Graph
 │       ├── Program.cs                          # Composition root
 │       ├── Core/Contracts/  IImportSource, IImportAuthenticator, ICalendarTarget, IParticipantRenderer
 │       ├── Core/Models/     ImportPayload, ImportPlanItem, ImportAction, ImportResult,
@@ -485,8 +485,8 @@ SyncMaster/
 │
 └── tests/
     ├── SyncMaster.Core.Tests/                  # Tests for shared library
-    ├── CalExport.Tests/                        # Tests for CalExport
-    └── CalImport.Tests/                        # Tests for CalImport
+    ├── SyncMaster.CalExport.Tests/             # Tests for CalExport
+    └── SyncMaster.CalImport.Tests/             # Tests for CalImport
 ```
 
 For a full architectural description of every CalExport class, see [WIKI.md](WIKI.md).
@@ -494,7 +494,7 @@ For a full architectural description of every CalExport class, see [WIKI.md](WIK
 ### Running the tests
 
 ```
-dotnet test tests/CalExport.Tests/CalExport.Tests.csproj
+dotnet test tests/SyncMaster.CalExport.Tests/SyncMaster.CalExport.Tests.csproj
 ```
 
 Or from the solution root (builds and runs all test projects):
@@ -505,7 +505,7 @@ dotnet test
 
 ### Test coverage
 
-The test suite contains **203 unit tests** across the three projects (`SyncMaster.Core.Tests`, `CalExport.Tests`, `CalImport.Tests`) covering all Core services, configuration, CLI parsing, export formatting, import planning and HTML body merge. Infrastructure wrappers around external systems (`OutlookCalendarService`, `PhysicalFileSystem`, `GraphAuthenticator`, `GraphCalendarTarget`) are excluded from unit tests by design — these require Outlook COM, the local filesystem, MSAL, or live Microsoft Graph, respectively.
+The test suite contains **203 unit tests** across the three projects (`SyncMaster.Core.Tests`, `SyncMaster.CalExport.Tests`, `SyncMaster.CalImport.Tests`) covering all Core services, configuration, CLI parsing, export formatting, import planning and HTML body merge. Infrastructure wrappers around external systems (`OutlookCalendarService`, `PhysicalFileSystem`, `GraphAuthenticator`, `GraphCalendarTarget`) are excluded from unit tests by design — these require Outlook COM, the local filesystem, MSAL, or live Microsoft Graph, respectively.
 
 To generate an HTML coverage report:
 

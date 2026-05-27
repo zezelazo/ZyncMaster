@@ -10,7 +10,7 @@ using Newtonsoft.Json.Linq;
 
 namespace SyncMaster.Engine;
 
-// Drives the headless CalExport.exe to produce a single month's Complete-mode JSON.
+// Drives the headless SyncMaster.CalExport.exe to produce a single month's Complete-mode JSON.
 //
 // This is an untested process boundary (like OutlookCalendarService): it shells out
 // to an external executable and reads its file output. It is consumed through
