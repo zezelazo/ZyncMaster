@@ -26,6 +26,10 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3967.48" />
   </ItemGroup>
   <ItemGroup>
+    <AvaloniaResource Include="Assets\icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SyncMaster.Engine\SyncMaster.Engine.csproj" />
     <ProjectReference Include="..\SyncMaster.Core\SyncMaster.Core.csproj" />
   </ItemGroup>

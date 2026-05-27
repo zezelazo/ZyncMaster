@@ -26,11 +26,13 @@ public sealed class UiBridge
 
     private readonly IBridgeTransport _transport;
     private readonly IEngineActions _engine;
+    private readonly Func<IWindowControl?>? _windowProvider;
 
-    public UiBridge(IBridgeTransport transport, IEngineActions engine)
+    public UiBridge(IBridgeTransport transport, IEngineActions engine, Func<IWindowControl?>? windowProvider = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _windowProvider = windowProvider;
         _transport.Received += OnReceived;
     }
 
@@ -114,6 +116,19 @@ public sealed class UiBridge
                 await _engine.SetPausedAsync(paused, ct);
                 return null;
             }
+            // Frameless window controls driven by the custom web title bar (fire-and-forget).
+            case "windowMinimize":
+                _windowProvider?.Invoke()?.Minimize();
+                return null;
+            case "windowToggleMaximize":
+                _windowProvider?.Invoke()?.ToggleMaximize();
+                return null;
+            case "windowClose":
+                _windowProvider?.Invoke()?.Close();
+                return null;
+            case "windowDragMove":
+                _windowProvider?.Invoke()?.BeginDragMove();
+                return null;
             default:
                 throw new InvalidOperationException($"Unknown action '{message.Action}'.");
         }

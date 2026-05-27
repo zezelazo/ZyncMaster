@@ -94,6 +94,12 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
             UpdateBounds();
 
             var core = _controller.CoreWebView2;
+
+            // Let the web title bar mark draggable regions with CSS `app-region: drag`
+            // (the reliable way to move a frameless window from WebView2 content).
+            try { core.Settings.IsNonClientRegionSupportEnabled = true; }
+            catch { /* older WebView2 runtime: the bridge drag fallback still applies */ }
+
             core.SetVirtualHostNameToFolderMapping(
                 VirtualHost, _uiRoot, CoreWebView2HostResourceAccessKind.Allow);
             core.WebMessageReceived += OnWebMessageReceived;

@@ -1,7 +1,10 @@
 using System;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
+using SyncMaster.App.Bridge;
 
 namespace SyncMaster.App.Windows;
 
@@ -11,7 +14,7 @@ namespace SyncMaster.App.Windows;
 // the default browser; a real WebView implementation would mount its control into
 // HostPanel instead. Closing the window does NOT quit the app: it cancels the close and
 // hides the window so the process stays resident in the tray.
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IWindowControl
 {
     private IWebHost? _webHost;
     private Action? _openPanel;
@@ -72,4 +75,35 @@ public partial class MainWindow : Window
         Hide();
         base.OnClosing(e);
     }
+
+    // ---- IWindowControl: driven by the web title bar through the bridge ----
+    // The window is frameless (BorderOnly: resizable border, no OS title bar), so these
+    // provide minimize / maximize / close / move. All marshal to the UI thread.
+
+    public void Minimize() => Dispatcher.UIThread.Post(() => WindowState = WindowState.Minimized);
+
+    public void ToggleMaximize() => Dispatcher.UIThread.Post(() =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized);
+
+    void IWindowControl.Close() => Dispatcher.UIThread.Post(Hide); // hide to tray, do not quit
+
+    public void BeginDragMove() => Dispatcher.UIThread.Post(() =>
+    {
+        // Primary drag is handled by WebView2's non-client region support (CSS app-region:
+        // drag). This is a fallback for Windows using the classic caption-move message.
+        if (!OperatingSystem.IsWindows()) return;
+        var hwnd = TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+        if (hwnd == IntPtr.Zero) return;
+        ReleaseCapture();
+        SendMessage(hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+    });
+
+    private const uint WM_NCLBUTTONDOWN = 0x00A1;
+    private const int HTCAPTION = 2;
+
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }

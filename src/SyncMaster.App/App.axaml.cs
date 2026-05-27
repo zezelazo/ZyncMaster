@@ -25,6 +25,7 @@ public partial class App : Application
     private IWebHost? _webHost;
     private EngineHost? _engineHost;
     private UiBridge? _bridge;
+    private MainWindow? _mainWindow;
     private readonly CancellationTokenSource _shutdown = new();
 
     public override void Initialize()
@@ -105,7 +106,7 @@ public partial class App : Application
         }
 
         var transport = new WebViewBridgeTransport((IBridgeTransport)_webHost);
-        _bridge = new UiBridge(transport, _engineHost.Actions);
+        _bridge = new UiBridge(transport, _engineHost.Actions, () => _mainWindow);
 
         // Tray "Sync now" / "Pause" route through the engine too.
         _tray!.SyncNowRequested += () => _ = SafeSyncNow();
@@ -148,6 +149,7 @@ public partial class App : Application
     private MainWindow CreateWindow()
     {
         var window = new MainWindow();
+        _mainWindow = window;
         if (_webHost != null)
             window.AttachWebHost(_webHost, OpenWebPanelInBrowser);
         return window;

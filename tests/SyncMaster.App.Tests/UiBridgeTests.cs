@@ -70,6 +70,15 @@ public class UiBridgeTests
         }
     }
 
+    private sealed class FakeWindowControl : IWindowControl
+    {
+        public int Minimized, Maximized, Closed, Dragged;
+        public void Minimize() => Minimized++;
+        public void ToggleMaximize() => Maximized++;
+        public void Close() => Closed++;
+        public void BeginDragMove() => Dragged++;
+    }
+
     private static string Message(string action, string? correlationId, string? payload = null)
     {
         var obj = new Dictionary<string, object?>
@@ -207,6 +216,25 @@ public class UiBridgeTests
         var act = () => transport.PushInbound("this is not json {");
 
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Window_actions_route_to_the_window_control()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        var win = new FakeWindowControl();
+        _ = new UiBridge(transport, engine, () => win);
+
+        transport.PushInbound(Message("windowMinimize", null));
+        transport.PushInbound(Message("windowToggleMaximize", null));
+        transport.PushInbound(Message("windowClose", null));
+        transport.PushInbound(Message("windowDragMove", null));
+
+        win.Minimized.Should().Be(1);
+        win.Maximized.Should().Be(1);
+        win.Closed.Should().Be(1);
+        win.Dragged.Should().Be(1);
     }
 
     [Fact]
