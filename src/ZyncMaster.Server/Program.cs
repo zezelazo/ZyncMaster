@@ -26,6 +26,23 @@ builder.Services.AddSingleton<Func<string, ZyncMaster.Graph.ICalendarTarget>>(sp
     return new ZyncMaster.Graph.GraphCalendarTarget(http, provider, Guid.Parse(opts.ExtendedPropertyGuid));
 });
 
+// Per-account Microsoft Graph provider (reader + writer). A null/empty accountRef
+// normalizes to the connected-account store's "default" key.
+builder.Services.AddSingleton<Func<string?, MicrosoftGraphProvider>>(sp => accountRef =>
+{
+    var upn = string.IsNullOrWhiteSpace(accountRef) ? "" : accountRef;
+    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("graph");
+    var readHttp = sp.GetRequiredService<IHttpClientFactory>().CreateClient("graph");
+    var tokens = sp.GetRequiredService<IMicrosoftTokenService>();
+    var accounts = sp.GetRequiredService<IConnectedAccountStore>();
+    var opts = sp.GetRequiredService<IOptions<ServerOptions>>().Value;
+    var tokenProvider = new ServerGraphTokenProvider(tokens, accounts, upn);
+    var target = new ZyncMaster.Graph.GraphCalendarTarget(http, tokenProvider, Guid.Parse(opts.ExtendedPropertyGuid));
+    return new MicrosoftGraphProvider(readHttp, tokenProvider, target);
+});
+builder.Services.AddSingleton<ProviderRegistry>();
+builder.Services.AddSingleton<ISyncPairStore, InMemorySyncPairStore>();
+
 builder.Services.AddAuthentication("ApiKey").AddApiKeyAuth();
 builder.Services.AddAuthorization();
 
