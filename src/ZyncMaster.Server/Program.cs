@@ -59,6 +59,7 @@ app.MapDeviceEndpoints();
 app.MapConnectEndpoints();
 app.MapSyncEndpoints();
 app.MapPanelEndpoints();
+app.MapPairEndpoints();
 
 app.Run();
 
