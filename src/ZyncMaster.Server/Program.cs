@@ -28,7 +28,11 @@ builder.Services.AddDataProtection()
 builder.Services.AddHttpClient<IMicrosoftTokenService, MicrosoftTokenService>();
 builder.Services.AddHttpClient("graph");
 
-builder.Services.AddSingleton<ICurrentUserAccessor, DefaultCurrentUserAccessor>();
+// The accessor is a SINGLETON over IHttpContextAccessor and reads HttpContext per call,
+// so injecting it into the singleton EF stores does not capture a single request's user.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<ICurrentUserAccessor, HttpContextCurrentUserAccessor>();
+builder.Services.AddSingleton<IUserStore, EfUserStore>();
 builder.Services.AddSingleton<IDeviceStore, EfDeviceStore>();
 builder.Services.AddSingleton<ISyncStateStore, EfSyncStateStore>();
 builder.Services.AddSingleton<ISecretProvider, ConfigurationSecretProvider>();
@@ -63,7 +67,33 @@ builder.Services.AddSingleton<Func<string?, MicrosoftGraphProvider>>(sp => accou
 builder.Services.AddSingleton<ProviderRegistry>();
 builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 
-builder.Services.AddAuthentication("ApiKey").AddApiKeyAuth();
+// ApiKey stays the default scheme so device endpoints (/api/*) keep working as before;
+// the Cookie scheme is added alongside it for the human panel. Cookies are HttpOnly,
+// SameSite=Lax, sliding-expiration, and Secure only over https (so the http test host
+// still round-trips the cookie).
+builder.Services.AddAuthentication(AuthSchemes.ApiKey)
+    .AddApiKeyAuth()
+    .AddCookie(AuthSchemes.Cookie, options =>
+    {
+        options.Cookie.Name = "sm_session";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.SlidingExpiration = true;
+        options.ExpireTimeSpan = TimeSpan.FromDays(14);
+        // The panel is an API surface, not an MVC app: return status codes instead of
+        // redirecting unauthenticated/forbidden callers to a login/access-denied page.
+        options.Events.OnRedirectToLogin = ctx =>
+        {
+            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return Task.CompletedTask;
+        };
+        options.Events.OnRedirectToAccessDenied = ctx =>
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return Task.CompletedTask;
+        };
+    });
 builder.Services.AddAuthorization();
 
 var app = builder.Build();

@@ -23,6 +23,6 @@ public static class SyncEndpoints
             }
 
             return Results.Ok(outcome.Response);
-        }).RequireAuthorization();
+        }).RequireApiKey();
     }
 }

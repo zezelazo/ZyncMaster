@@ -49,6 +49,6 @@ public static class DeviceEndpoints
                 createdUtc = d.CreatedUtc,
                 lastSeenUtc = d.LastSeenUtc,
             }));
-        }).RequireAuthorization();
+        }).RequireApiKey();
     }
 }

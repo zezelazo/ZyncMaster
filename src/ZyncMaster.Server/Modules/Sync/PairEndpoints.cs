@@ -19,7 +19,7 @@ public static class PairEndpoints
                     || list.Count == 1,
             }).ToList();
             return Results.Ok(infos);
-        }).RequireAuthorization();
+        }).RequireCookie();
 
         app.MapDelete("/api/accounts/{accountRef}", async (
             string accountRef,
@@ -47,7 +47,7 @@ public static class PairEndpoints
             await accounts.RemoveAsync(accountRef, ct);
 
             return Results.Ok(new { affectedPairIds = affected.Select(p => p.Id).ToList() });
-        }).RequireAuthorization();
+        }).RequireCookie();
 
         app.MapGet("/api/accounts/{accountRef}/calendars", async (
             string accountRef, ProviderRegistry registry) =>
@@ -67,7 +67,7 @@ public static class PairEndpoints
                 isDefault = c.IsDefault,
                 owner = c.Owner,
             }));
-        }).RequireAuthorization();
+        }).RequireCookie();
 
         app.MapPost("/api/pairs", async (CreatePairRequest req, ISyncPairStore store) =>
         {
@@ -86,10 +86,10 @@ public static class PairEndpoints
             };
             await store.AddAsync(pair);
             return Results.Ok(pair);
-        }).RequireAuthorization();
+        }).RequireCookie();
 
         app.MapGet("/api/pairs", async (ISyncPairStore store) =>
-            Results.Ok(await store.ListAsync())).RequireAuthorization();
+            Results.Ok(await store.ListAsync())).RequireCookie();
 
         app.MapPatch("/api/pairs/{id}", async (string id, UpdatePairRequest req, ISyncPairStore store) =>
         {
@@ -109,13 +109,13 @@ public static class PairEndpoints
             };
             await store.UpdateAsync(updated);
             return Results.Ok(updated);
-        }).RequireAuthorization();
+        }).RequireCookie();
 
         app.MapDelete("/api/pairs/{id}", async (string id, ISyncPairStore store) =>
         {
             await store.RemoveAsync(id);
             return Results.NoContent();
-        }).RequireAuthorization();
+        }).RequireCookie();
 
         app.MapPost("/api/pairs/{id}/push", async (
             string id,
@@ -139,7 +139,7 @@ public static class PairEndpoints
 
             await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
             return Results.Ok(result);
-        }).RequireAuthorization();
+        }).RequireApiKey();
 
         app.MapPost("/api/pairs/{id}/run", async (
             string id,
@@ -173,7 +173,7 @@ public static class PairEndpoints
 
             await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
             return Results.Ok(result);
-        }).RequireAuthorization();
+        }).RequireApiKey();
     }
 
     private const int ReminderMinutes = 30;
