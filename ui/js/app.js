@@ -711,7 +711,8 @@ function renderAddPair(root) {
   }
 }
 function completeAddPair() {
-  if (Bridge.available) Bridge.call('saveConfig', JSON.stringify({ addPair: { ...addPair } })).catch(() => {});
+  // Mock/standalone-only path (the bridged shell routes through renderAddPairLive →
+  // createPair). No bridge call here: persisting a near-empty config would clobber settings.
   addPair.step = 0; addPair.srcId = null; addPair.dstId = null; addPair.name = '';
   navigate('calendar');
 }

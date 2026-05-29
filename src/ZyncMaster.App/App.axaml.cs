@@ -140,7 +140,17 @@ public partial class App : Application
             // recorded status on the same cadence as the scheduler runs in the background.
             _ = Task.Run(() => PublishStatusLoopAsync(_shutdown.Token));
 
-            await scheduler.RunAsync(_shutdown.Token);
+            try
+            {
+                await scheduler.RunAsync(_shutdown.Token);
+            }
+            catch (OperationCanceledException) { /* shutdown */ }
+            catch (Exception ex)
+            {
+                // The scheduler should never throw out (per-pair failures are isolated), but
+                // if it does, surface it as a status message instead of a silent dead loop.
+                _bridge?.PushStatus(new AppStatus { Status = SyncStatus.Error, LastMessage = $"Sync scheduler stopped: {ex.Message}" });
+            }
         });
     }
 
