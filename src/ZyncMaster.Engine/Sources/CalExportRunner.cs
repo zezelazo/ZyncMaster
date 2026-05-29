@@ -32,45 +32,10 @@ public sealed class CalExportRunner : ICalExportRunner
 
         try
         {
-            JToken calendars = calendarNames is { Count: > 0 }
-                ? new JArray(calendarNames.Cast<object>().ToArray())
-                : new JValue("all");
-
-            var config = new JObject
-            {
-                ["year"] = year,
-                ["month"] = month,
-                ["mode"] = "complete",
-                ["includeCancelled"] = true,
-                ["calendars"] = calendars,
-                ["outputPath"] = JValue.CreateNull(),
-            };
+            var config = BuildConfig(year, month, "complete", calendarNames, outputPath: null);
             await File.WriteAllTextAsync(configPath, config.ToString(Formatting.Indented), ct);
 
-            var psi = new ProcessStartInfo
-            {
-                FileName = _calExportExePath,
-                UseShellExecute = false,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("-a");
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(configPath);
-            psi.ArgumentList.Add("-o");
-            psi.ArgumentList.Add(tempDir);
-
-            using var process = new Process { StartInfo = psi };
-            if (!process.Start())
-                throw new InvalidOperationException($"Failed to start CalExport at '{_calExportExePath}'.");
-
-            var stderrTask = process.StandardError.ReadToEndAsync(ct);
-            await process.WaitForExitAsync(ct);
-            var stderr = await stderrTask;
-
-            if (process.ExitCode != 0)
-                throw new InvalidOperationException(
-                    $"CalExport exited with code {process.ExitCode}. {stderr}".TrimEnd());
+            await RunProcessAsync(configPath, tempDir, ct);
 
             var produced = Directory
                 .EnumerateFiles(tempDir, "*.json")
@@ -84,12 +49,83 @@ public sealed class CalExportRunner : ICalExportRunner
         }
         finally
         {
-            try
-            {
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
-            }
-            catch { /* best effort cleanup */ }
+            TryDelete(tempDir);
         }
+    }
+
+    public async Task ExportSimpleAsync(int year, int month, IReadOnlyList<string>? calendarNames, string outputFilePath, CancellationToken ct)
+    {
+        if (outputFilePath == null) throw new ArgumentNullException(nameof(outputFilePath));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "calexport_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var configPath = Path.Combine(tempDir, "config.json");
+
+        try
+        {
+            var config = BuildConfig(year, month, "simple", calendarNames, outputFilePath);
+            await File.WriteAllTextAsync(configPath, config.ToString(Formatting.Indented), ct);
+
+            await RunProcessAsync(configPath, tempDir, ct);
+        }
+        finally
+        {
+            TryDelete(tempDir);
+        }
+    }
+
+    private static JObject BuildConfig(int year, int month, string mode, IReadOnlyList<string>? calendarNames, string? outputPath)
+    {
+        JToken calendars = calendarNames is { Count: > 0 }
+            ? new JArray(calendarNames.Cast<object>().ToArray())
+            : new JValue("all");
+
+        return new JObject
+        {
+            ["year"] = year,
+            ["month"] = month,
+            ["mode"] = mode,
+            ["includeCancelled"] = true,
+            ["calendars"] = calendars,
+            ["outputPath"] = outputPath == null ? JValue.CreateNull() : new JValue(outputPath),
+        };
+    }
+
+    private async Task RunProcessAsync(string configPath, string outputDir, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = _calExportExePath,
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("-a");
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(configPath);
+        psi.ArgumentList.Add("-o");
+        psi.ArgumentList.Add(outputDir);
+
+        using var process = new Process { StartInfo = psi };
+        if (!process.Start())
+            throw new InvalidOperationException($"Failed to start CalExport at '{_calExportExePath}'.");
+
+        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+        var stderr = await stderrTask;
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(
+                $"CalExport exited with code {process.ExitCode}. {stderr}".TrimEnd());
+    }
+
+    private static void TryDelete(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+        catch { /* best effort cleanup */ }
     }
 }

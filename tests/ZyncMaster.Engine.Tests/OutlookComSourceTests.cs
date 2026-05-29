@@ -27,6 +27,9 @@ public sealed class OutlookComSourceTests
             Calls.Add((year, month, calendarNames));
             return Task.FromResult(_byMonth.TryGetValue((year, month), out var json) ? json : EmptyMonth(year, month));
         }
+
+        public Task ExportSimpleAsync(int year, int month, IReadOnlyList<string>? calendarNames, string outputFilePath, CancellationToken ct)
+            => Task.CompletedTask;
     }
 
     private static string EmptyMonth(int year, int month) => $@"{{
