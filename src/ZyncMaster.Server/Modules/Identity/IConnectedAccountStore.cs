@@ -6,4 +6,6 @@ public interface IConnectedAccountStore
     Task<string?> GetRefreshTokenAsync(string userPrincipalName, CancellationToken ct = default);
     Task<ConnectedAccount?> GetAsync(string userPrincipalName, CancellationToken ct = default);
     Task<bool> HasAnyAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<ConnectedAccount>> ListAsync(CancellationToken ct = default);
+    Task RemoveAsync(string userPrincipalName, CancellationToken ct = default);
 }

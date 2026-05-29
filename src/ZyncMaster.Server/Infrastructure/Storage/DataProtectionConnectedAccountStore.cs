@@ -51,6 +51,16 @@ public sealed class DataProtectionConnectedAccountStore : IConnectedAccountStore
     public Task<bool> HasAnyAsync(CancellationToken ct = default) =>
         Task.FromResult(!_accounts.IsEmpty);
 
+    public Task<IReadOnlyList<ConnectedAccount>> ListAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ConnectedAccount>>(_accounts.Values.ToList());
+
+    public Task RemoveAsync(string userPrincipalName, CancellationToken ct = default)
+    {
+        var key = NormalizeKey(userPrincipalName);
+        _accounts.TryRemove(key, out _);
+        return Task.CompletedTask;
+    }
+
     private static string NormalizeKey(string? userPrincipalName) =>
         string.IsNullOrWhiteSpace(userPrincipalName) ? DefaultKey : userPrincipalName;
 }

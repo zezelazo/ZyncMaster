@@ -1,4 +1,5 @@
-﻿using System.Threading.Tasks;
+﻿using System.Linq;
+using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
 using Xunit;
@@ -62,5 +63,49 @@ public class ConnectedAccountStoreTests
 
         (await store.GetRefreshTokenAsync("")).Should().Be("rt-default");
         (await store.GetRefreshTokenAsync("default")).Should().Be("rt-default");
+    }
+
+    [Fact]
+    public async Task List_returns_all_connected_accounts()
+    {
+        var store = BuildStore();
+        await store.SetAsync("alice@test", "rt-a");
+        await store.SetAsync("bob@test", "rt-b");
+
+        var accounts = await store.ListAsync();
+
+        accounts.Select(a => a.UserPrincipalName)
+            .Should().BeEquivalentTo(new[] { "alice@test", "bob@test" });
+    }
+
+    [Fact]
+    public async Task List_is_empty_when_no_accounts()
+    {
+        var store = BuildStore();
+
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Remove_deletes_account()
+    {
+        var store = BuildStore();
+        await store.SetAsync("alice@test", "rt-a");
+
+        await store.RemoveAsync("alice@test");
+
+        (await store.GetAsync("alice@test")).Should().BeNull();
+        (await store.HasAnyAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Remove_normalizes_empty_to_default_key()
+    {
+        var store = BuildStore();
+        await store.SetAsync("", "rt-default");
+
+        await store.RemoveAsync("");
+
+        (await store.GetRefreshTokenAsync("default")).Should().BeNull();
     }
 }
