@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 
 namespace ZyncMaster.Server;
@@ -6,6 +7,7 @@ namespace ZyncMaster.Server;
 public static class ConnectEndpoints
 {
     private const string StateCookieName = "sm_oauth_state";
+    private const string ReturnToCookieName = "sm_oauth_returnto";
 
     public static void MapConnectEndpoints(this WebApplication app)
     {
@@ -25,6 +27,19 @@ public static class ConnectEndpoints
                 Secure = context.Request.IsHttps,
             });
 
+            // Stash where to return after sign-in (e.g. /pair?code=...). Only same-site
+            // relative paths are honored at callback time to avoid open-redirects.
+            var returnTo = context.Request.Query["returnTo"].ToString();
+            if (!string.IsNullOrEmpty(returnTo))
+            {
+                context.Response.Cookies.Append(ReturnToCookieName, returnTo, new CookieOptions
+                {
+                    HttpOnly = true,
+                    SameSite = SameSiteMode.Lax,
+                    Secure = context.Request.IsHttps,
+                });
+            }
+
             var authorizeUrl =
                 $"{options.Authority.TrimEnd('/')}/authorize" +
                 $"?client_id={Uri.EscapeDataString(options.MicrosoftClientId)}" +
@@ -40,7 +55,8 @@ public static class ConnectEndpoints
         app.MapGet("/connect/callback", async (
             HttpContext context,
             IMicrosoftTokenService tokenService,
-            IConnectedAccountStore store) =>
+            IConnectedAccountStore store,
+            IUserStore users) =>
         {
             var query = context.Request.Query;
 
@@ -73,9 +89,41 @@ public static class ConnectEndpoints
                 return Results.BadRequest("Missing authorization code.");
 
             var result = await tokenService.ExchangeCodeAsync(code);
-            await store.SetAsync(result.UserPrincipalName ?? "", result.RefreshToken);
 
-            return Results.Redirect("/");
+            // Upsert the ZyncMaster user from the id_token identity. Fall back to the UPN
+            // for subject when the provider omitted oid/sub so we always have a stable key.
+            var subject = string.IsNullOrEmpty(result.Subject)
+                ? (result.UserPrincipalName ?? "")
+                : result.Subject;
+            var email = result.Email ?? result.UserPrincipalName ?? "";
+            var displayName = result.DisplayName ?? email;
+            var user = await users.UpsertAsync("microsoft", subject, email, displayName, context.RequestAborted);
+
+            // The cookie issued below is not active within THIS request, so the ambient
+            // ICurrentUserAccessor would still resolve "default". Pin the just-created user
+            // for the rest of this request AND write the connected account explicitly under
+            // that user id — never relying on the ambient default.
+            context.Items[HttpContextCurrentUserAccessor.OverrideItemKey] = user.Id;
+            await store.SetForUserAsync(
+                user.Id, result.UserPrincipalName ?? "", result.RefreshToken, context.RequestAborted);
+
+            var principal = AuthSchemes.BuildCookiePrincipal(user.Id, user.Email, user.DisplayName);
+            await context.SignInAsync(AuthSchemes.Cookie, principal);
+
+            // Consume the returnTo cookie and honor only same-site relative paths.
+            var returnTo = context.Request.Cookies[ReturnToCookieName];
+            context.Response.Cookies.Delete(ReturnToCookieName);
+            var destination = IsSafeLocalPath(returnTo) ? returnTo! : "/";
+
+            return Results.Redirect(destination);
         });
     }
+
+    // Accepts only single-leading-slash relative paths ("/pair?code=x"); rejects absolute
+    // URLs and protocol-relative ("//host") to prevent open redirects.
+    private static bool IsSafeLocalPath(string? path) =>
+        !string.IsNullOrEmpty(path) &&
+        path.StartsWith('/') &&
+        !path.StartsWith("//", StringComparison.Ordinal) &&
+        !path.StartsWith("/\\", StringComparison.Ordinal);
 }

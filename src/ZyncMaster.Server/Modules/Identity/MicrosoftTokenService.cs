@@ -78,14 +78,17 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
             ? secs
             : 0;
 
-        var upn = TryGetUpnFromIdToken(GetString(root, "id_token"));
+        var identity = ParseIdToken(GetString(root, "id_token"));
 
         return new TokenResult
         {
             AccessToken = accessToken,
             RefreshToken = refreshToken,
             ExpiresUtc = DateTimeOffset.UtcNow.AddSeconds(expiresIn),
-            UserPrincipalName = upn,
+            UserPrincipalName = identity.Upn,
+            Subject = identity.Subject,
+            Email = identity.Email,
+            DisplayName = identity.DisplayName,
         };
     }
 
@@ -94,34 +97,41 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
             ? el.GetString()
             : null;
 
-    // Best-effort: decode the JWT payload of an id_token and read a UPN-like claim.
-    // Returns null on any malformed input; callers tolerate a null UPN (the store
-    // falls back to a "default" key for the single-user scenario).
-    private static string? TryGetUpnFromIdToken(string? idToken)
+    private readonly record struct IdTokenIdentity(string? Subject, string? Email, string? DisplayName, string? Upn);
+
+    // Best-effort: decode the JWT payload of an id_token and read the identity claims.
+    // Subject = oid (stable per-tenant object id) falling back to sub; email/upn from the
+    // usual username-like claims; name from the "name" claim. Returns all-null on any
+    // malformed input; callers tolerate nulls (the connected-account store falls back to a
+    // "default" key for the single-user scenario).
+    private static IdTokenIdentity ParseIdToken(string? idToken)
     {
         if (string.IsNullOrWhiteSpace(idToken))
-            return null;
+            return default;
 
         var parts = idToken.Split('.');
         if (parts.Length < 2)
-            return null;
+            return default;
 
         try
         {
             var payload = Base64UrlDecode(parts[1]);
             using var doc = JsonDocument.Parse(payload);
             var root = doc.RootElement;
-            return GetString(root, "preferred_username")
+            var subject = GetString(root, "oid") ?? GetString(root, "sub");
+            var email = GetString(root, "preferred_username")
                 ?? GetString(root, "upn")
                 ?? GetString(root, "email");
+            var name = GetString(root, "name");
+            return new IdTokenIdentity(subject, email, name, email);
         }
         catch (FormatException)
         {
-            return null;
+            return default;
         }
         catch (JsonException)
         {
-            return null;
+            return default;
         }
     }
 

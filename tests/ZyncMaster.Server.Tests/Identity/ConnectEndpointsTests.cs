@@ -17,13 +17,20 @@ public class ConnectEndpointsTests
 {
     private sealed class FakeTokenService : IMicrosoftTokenService
     {
+        public string? Subject { get; init; }
+        public string Upn { get; init; } = "user@test";
+        public string? Name { get; init; }
+
         public Task<TokenResult> ExchangeCodeAsync(string code, CancellationToken ct = default) =>
             Task.FromResult(new TokenResult
             {
                 AccessToken = "at",
                 RefreshToken = "rt",
                 ExpiresUtc = DateTimeOffset.UtcNow.AddHours(1),
-                UserPrincipalName = "user@test",
+                UserPrincipalName = Upn,
+                Subject = Subject,
+                Email = Upn,
+                DisplayName = Name,
             });
 
         public Task<TokenResult> RefreshAsync(string refreshToken, CancellationToken ct = default) =>
@@ -85,7 +92,7 @@ public class ConnectEndpointsTests
     }
 
     [Fact]
-    public async Task Callback_happy_path_stores_account_and_redirects_home()
+    public async Task Callback_happy_path_upserts_user_sets_cookie_stores_account_and_redirects_home()
     {
         using var factory = CreateFactory();
         var client = NoRedirectClient(factory);
@@ -103,8 +110,66 @@ public class ConnectEndpointsTests
         resp.StatusCode.Should().Be(HttpStatusCode.Redirect);
         resp.Headers.Location!.ToString().Should().Be("/");
 
-        var store = factory.Services.GetRequiredService<IConnectedAccountStore>();
-        (await store.HasAnyAsync()).Should().BeTrue();
+        // The session cookie was issued.
+        resp.Headers.GetValues("Set-Cookie")
+            .Any(c => c.StartsWith("sm_session=", StringComparison.Ordinal))
+            .Should().BeTrue();
+
+        // The user was upserted (subject fell back to the UPN) and the account persisted
+        // under that user — verified against the DB directly since HasAnyAsync() outside a
+        // request scopes to the seeded "default" user, not the just-created one.
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMaster.Server.Data.ZyncMasterDbContext>();
+        var user = db.Users.FirstOrDefault(u => u.Provider == "microsoft" && u.Subject == "user@test");
+        user.Should().NotBeNull();
+        user!.Email.Should().Be("user@test");
+        db.ConnectedAccounts.Any(a => a.UserId == user.Id).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Callback_honors_returnTo_redirect()
+    {
+        using var factory = CreateFactory();
+        var client = NoRedirectClient(factory);
+
+        // returnTo is stashed at /connect and consumed at callback.
+        var connectResp = await client.GetAsync("/connect?returnTo=%2Fpair%3Fcode%3Dxyz");
+        var state = ExtractStateFromLocation(connectResp.Headers.Location!);
+        var stateCookie = ExtractStateCookie(connectResp);
+        var returnToCookie = connectResp.Headers.GetValues("Set-Cookie")
+            .First(c => c.StartsWith("sm_oauth_returnto=", StringComparison.Ordinal)).Split(';')[0];
+
+        var callback = new HttpRequestMessage(
+            HttpMethod.Get, $"/connect/callback?code=abc&state={Uri.EscapeDataString(state)}");
+        callback.Headers.Add("Cookie", stateCookie);
+        callback.Headers.Add("Cookie", returnToCookie);
+
+        var resp = await client.SendAsync(callback);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        resp.Headers.Location!.ToString().Should().Be("/pair?code=xyz");
+    }
+
+    [Fact]
+    public async Task Callback_ignores_offsite_returnTo()
+    {
+        using var factory = CreateFactory();
+        var client = NoRedirectClient(factory);
+
+        var connectResp = await client.GetAsync("/connect?returnTo=https%3A%2F%2Fevil.example%2Fx");
+        var state = ExtractStateFromLocation(connectResp.Headers.Location!);
+        var stateCookie = ExtractStateCookie(connectResp);
+        var returnToCookie = connectResp.Headers.GetValues("Set-Cookie")
+            .First(c => c.StartsWith("sm_oauth_returnto=", StringComparison.Ordinal)).Split(';')[0];
+
+        var callback = new HttpRequestMessage(
+            HttpMethod.Get, $"/connect/callback?code=abc&state={Uri.EscapeDataString(state)}");
+        callback.Headers.Add("Cookie", stateCookie);
+        callback.Headers.Add("Cookie", returnToCookie);
+
+        var resp = await client.SendAsync(callback);
+
+        resp.Headers.Location!.ToString().Should().Be("/");
     }
 
     [Fact]

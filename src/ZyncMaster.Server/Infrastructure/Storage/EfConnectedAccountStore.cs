@@ -29,19 +29,24 @@ public sealed class EfConnectedAccountStore : IConnectedAccountStore
         _protector = dp.CreateProtector("ZyncMaster.RefreshToken");
     }
 
-    public async Task SetAsync(string userPrincipalName, string refreshToken, CancellationToken ct = default)
+    public Task SetAsync(string userPrincipalName, string refreshToken, CancellationToken ct = default) =>
+        SetForUserAsync(_currentUser.UserId, userPrincipalName, refreshToken, ct);
+
+    public async Task SetForUserAsync(
+        string userId, string userPrincipalName, string refreshToken, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(userId);
         ArgumentNullException.ThrowIfNull(refreshToken);
         var key = NormalizeKey(userPrincipalName);
         await using var db = await _factory.CreateDbContextAsync(ct);
         var row = await db.ConnectedAccounts
-            .FirstOrDefaultAsync(a => a.UserId == _currentUser.UserId && a.AccountRef == key, ct);
+            .FirstOrDefaultAsync(a => a.UserId == userId && a.AccountRef == key, ct);
         if (row is null)
         {
             row = new ConnectedAccountRow
             {
-                Id = RowId(key),
-                UserId = _currentUser.UserId,
+                Id = RowId(userId, key),
+                UserId = userId,
                 Provider = ProviderName,
                 AccountRef = key,
             };
@@ -102,7 +107,7 @@ public sealed class EfConnectedAccountStore : IConnectedAccountStore
         ConnectedUtc = r.ConnectedUtc,
     };
 
-    private string RowId(string accountRef) => $"{_currentUser.UserId}|{accountRef}";
+    private static string RowId(string userId, string accountRef) => $"{userId}|{accountRef}";
 
     private static string NormalizeKey(string? userPrincipalName) =>
         string.IsNullOrWhiteSpace(userPrincipalName) ? DefaultKey : userPrincipalName;

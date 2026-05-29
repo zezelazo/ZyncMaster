@@ -25,6 +25,9 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
         {
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IMicrosoftTokenService>();
+                services.AddSingleton<IMicrosoftTokenService>(new CookieAuthHelper.FakeIdentityTokenService());
+
                 services.RemoveAll<IConnectedAccountStore>();
                 services.AddSingleton<IConnectedAccountStore>(_ =>
                 {
@@ -39,21 +42,9 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
             });
         });
 
-    private static async Task<HttpClient> AuthedClientAsync(WebApplicationFactory<Program> factory)
-    {
-        var store = factory.Services.GetRequiredService<IDeviceStore>();
-        var key = ApiKeyGenerator.Generate();
-        await store.AddAsync(new Device
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Name = "Laptop",
-            ApiKeyHash = ApiKeyHasher.Hash(key),
-            CreatedUtc = DateTimeOffset.UtcNow,
-        });
-        var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("X-Api-Key", key);
-        return client;
-    }
+    // Pairs-management endpoints are cookie-gated, so authenticate via the real OAuth flow.
+    private static Task<HttpClient> AuthedClientAsync(WebApplicationFactory<Program> factory) =>
+        CookieAuthHelper.SignInAsync(factory);
 
     private static SyncPair Pair(string id, string? src, string? dst) => new()
     {
@@ -128,11 +119,31 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
     }
 
     [Fact]
-    public async Task Delete_account_requires_api_key()
+    public async Task Delete_account_requires_cookie()
     {
         var factory = Build();
         var client = factory.CreateClient();
 
+        (await client.DeleteAsync("/api/accounts/alice@test")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Delete_account_rejects_api_key()
+    {
+        var factory = Build();
+        var store = factory.Services.GetRequiredService<IDeviceStore>();
+        var key = ApiKeyGenerator.Generate();
+        await store.AddAsync(new Device
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = "Laptop",
+            ApiKeyHash = ApiKeyHasher.Hash(key),
+            CreatedUtc = DateTimeOffset.UtcNow,
+        });
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", key);
+
+        // Cookie-gated endpoint must not accept a device api key.
         (await client.DeleteAsync("/api/accounts/alice@test")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 }

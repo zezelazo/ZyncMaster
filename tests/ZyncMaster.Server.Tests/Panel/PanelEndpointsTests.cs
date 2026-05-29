@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
+using ZyncMaster.Server.Tests;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Panel;
@@ -28,9 +29,21 @@ public class PanelEndpointsTests : IClassFixture<ServerTestFactory>
     }
 
     [Fact]
-    public async Task Panel_status_returns_connected_and_device_count()
+    public async Task Panel_status_requires_cookie()
     {
         var client = _factory.WithWebHostBuilder(_ => { }).CreateClient();
+
+        var resp = await client.GetAsync("/api/panel/status");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Panel_status_returns_connected_and_device_count()
+    {
+        var fake = new CookieAuthHelper.FakeIdentityTokenService();
+        var factory = new ServerTestFactory().WithFakeIdentity(fake);
+        var client = await CookieAuthHelper.SignInAsync(factory);
 
         var resp = await client.GetAsync("/api/panel/status");
 

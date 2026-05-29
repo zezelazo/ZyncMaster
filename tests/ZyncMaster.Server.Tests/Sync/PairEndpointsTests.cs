@@ -56,6 +56,13 @@ public class PairEndpointsTests : IClassFixture<ServerTestFactory>
         {
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IMicrosoftTokenService>();
+                // Empty UPN so the callback's connected-account write normalizes to the
+                // "default" key and overwrites the seed rather than adding a second account
+                // (the account-listing assertions expect exactly the one seeded account).
+                services.AddSingleton<IMicrosoftTokenService>(
+                    new CookieAuthHelper.FakeIdentityTokenService { Upn = "" });
+
                 services.RemoveAll<ProviderRegistry>();
                 services.AddSingleton(new ProviderRegistry(_ =>
                     new MicrosoftGraphProvider(new HttpClient(), new StubTokenProvider(), new FakeTarget())));
@@ -74,21 +81,10 @@ public class PairEndpointsTests : IClassFixture<ServerTestFactory>
             });
         });
 
-    private static async Task<HttpClient> AuthedClientAsync(WebApplicationFactory<Program> factory)
-    {
-        var store = factory.Services.GetRequiredService<IDeviceStore>();
-        var key = ApiKeyGenerator.Generate();
-        await store.AddAsync(new Device
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Name = "Laptop",
-            ApiKeyHash = ApiKeyHasher.Hash(key),
-            CreatedUtc = DateTimeOffset.UtcNow,
-        });
-        var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("X-Api-Key", key);
-        return client;
-    }
+    // Pairs-management endpoints (accounts, calendars, pair CRUD) are cookie-gated;
+    // authenticate via the real OAuth sign-in flow to obtain a session cookie.
+    private static Task<HttpClient> AuthedClientAsync(WebApplicationFactory<Program> factory) =>
+        CookieAuthHelper.SignInAsync(factory);
 
     private static object MakeCreateBody(string name = "My pair", int interval = 15) => new
     {
@@ -99,11 +95,32 @@ public class PairEndpointsTests : IClassFixture<ServerTestFactory>
     };
 
     [Fact]
-    public async Task Pairs_endpoints_require_api_key()
+    public async Task Pairs_endpoints_require_cookie()
     {
         var factory = Build();
         var client = factory.CreateClient();
 
+        (await client.GetAsync("/api/pairs")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await client.GetAsync("/api/accounts")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Pairs_endpoints_reject_api_key()
+    {
+        var factory = Build();
+        var deviceStore = factory.Services.GetRequiredService<IDeviceStore>();
+        var key = ApiKeyGenerator.Generate();
+        await deviceStore.AddAsync(new Device
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = "Laptop",
+            ApiKeyHash = ApiKeyHasher.Hash(key),
+            CreatedUtc = DateTimeOffset.UtcNow,
+        });
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", key);
+
+        // A device api key must not unlock the human-only pairs-management surface.
         (await client.GetAsync("/api/pairs")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await client.GetAsync("/api/accounts")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }

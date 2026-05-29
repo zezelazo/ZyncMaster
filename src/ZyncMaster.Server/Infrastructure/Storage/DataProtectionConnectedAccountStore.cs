@@ -32,6 +32,12 @@ public sealed class DataProtectionConnectedAccountStore : IConnectedAccountStore
         return Task.CompletedTask;
     }
 
+    // This in-memory double is not user-partitioned; the explicit user id is irrelevant to
+    // its single keyspace, so it simply stores under the UPN like SetAsync.
+    public Task SetForUserAsync(
+        string userId, string userPrincipalName, string refreshToken, CancellationToken ct = default) =>
+        SetAsync(userPrincipalName, refreshToken, ct);
+
     public Task<string?> GetRefreshTokenAsync(string userPrincipalName, CancellationToken ct = default)
     {
         var key = NormalizeKey(userPrincipalName);
