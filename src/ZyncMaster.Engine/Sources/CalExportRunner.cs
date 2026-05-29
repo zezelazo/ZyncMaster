@@ -63,10 +63,23 @@ public sealed class CalExportRunner : ICalExportRunner
 
         try
         {
-            var config = BuildConfig(year, month, "simple", calendarNames, outputFilePath);
+            // CalExport ignores the config outputPath as a file target — it always writes an
+            // auto-named file into the -o directory. So we run into the temp dir, then move
+            // the produced .txt to the caller's requested path.
+            var config = BuildConfig(year, month, "simple", calendarNames, outputPath: null);
             await File.WriteAllTextAsync(configPath, config.ToString(Formatting.Indented), ct);
 
             await RunProcessAsync(configPath, tempDir, ct);
+
+            var produced = Directory.EnumerateFiles(tempDir, "*.txt").ToList();
+            if (produced.Count == 0)
+                throw new InvalidOperationException("CalExport produced no TXT output file.");
+
+            var destDir = Path.GetDirectoryName(Path.GetFullPath(outputFilePath));
+            if (!string.IsNullOrEmpty(destDir))
+                Directory.CreateDirectory(destDir);
+
+            File.Move(produced[0], outputFilePath, overwrite: true);
         }
         finally
         {

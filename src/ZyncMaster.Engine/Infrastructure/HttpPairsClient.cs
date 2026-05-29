@@ -53,7 +53,7 @@ public sealed class HttpPairsClient : IPairsClient
         if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
         if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
 
-        var arr = await SendAsync(HttpMethod.Get, $"/api/accounts/{accountRef}/calendars", apiKey, null, ct) as JArray ?? new JArray();
+        var arr = await SendAsync(HttpMethod.Get, $"/api/accounts/{Uri.EscapeDataString(accountRef)}/calendars", apiKey, null, ct) as JArray ?? new JArray();
 
         var list = new List<CalendarInfo>();
         foreach (var item in arr)
@@ -144,7 +144,7 @@ public sealed class HttpPairsClient : IPairsClient
         if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
         if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
 
-        var root = await SendAsync(HttpMethod.Delete, $"/api/accounts/{accountRef}", apiKey, null, ct) as JObject ?? new JObject();
+        var root = await SendAsync(HttpMethod.Delete, $"/api/accounts/{Uri.EscapeDataString(accountRef)}", apiKey, null, ct) as JObject ?? new JObject();
 
         var ids = new List<string>();
         if (root["affectedPairIds"] is JArray arr)
