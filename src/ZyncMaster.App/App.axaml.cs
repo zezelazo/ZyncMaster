@@ -1,12 +1,15 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using ZyncMaster.App.Bridge;
 using ZyncMaster.App.Configuration;
 using ZyncMaster.App.State;
@@ -66,10 +69,14 @@ public partial class App : Application
             // pieces just stay null until a valid config is saved and the app relaunched.
             TryWireEngine();
 
+            // --silent (used by login auto-start): stay in the tray, never surface a window.
+            var silent = IsSilentLaunch(desktop.Args);
+
             // Debug/smoke aid: open the window on startup so the window + WebView2 path can
-            // be exercised without a tray click. Off unless ZYNCMASTER_AUTOSHOW=1.
-            if (Environment.GetEnvironmentVariable("ZYNCMASTER_AUTOSHOW") == "1")
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => CreateWindow().Show());
+            // be exercised without a tray click. Off unless ZYNCMASTER_AUTOSHOW=1, and never
+            // when launched with --silent.
+            if (!silent && Environment.GetEnvironmentVariable("ZYNCMASTER_AUTOSHOW") == "1")
+                Dispatcher.UIThread.Post(() => CreateWindow().Show());
 
             desktop.Exit += (_, _) =>
             {
@@ -96,7 +103,7 @@ public partial class App : Application
         IEngineActions actions;
         try
         {
-            _engineHost = EngineHost.Create();
+            _engineHost = EngineHost.Create(ShowSaveTxtDialogAsync, HostExePath());
             actions = _engineHost.Actions;
         }
         catch (SettingsValidationException)
@@ -111,30 +118,117 @@ public partial class App : Application
         var transport = new WebViewBridgeTransport((IBridgeTransport)_webHost);
         _bridge = new UiBridge(transport, actions, () => _mainWindow);
 
-        // Auto-sync (the background loop + tray sync/pause) only runs once configured.
+        // Auto-sync (the background scheduler + tray sync/pause) only runs once configured.
         if (_engineHost == null)
             return;
 
         _tray!.SyncNowRequested += () => _ = SafeSyncNow();
         _tray!.PauseToggled += paused => _ = _engineHost.Actions.SetPausedAsync(paused, _shutdown.Token);
 
-        var cycle = new StatusPushingCycle(
-            _engineHost.SyncCycle,
-            _engineHost.Actions,
-            _bridge,
-            status => Dispatch(() => _tray?.SetStatus(status)));
+        // Multi-pair scheduler replaces the single SyncLoop: it drives every configured pair
+        // on its own cadence. After each tick we refresh status and push it to the UI + tray.
+        var scheduler = _engineHost.Scheduler;
 
-        var interval = TimeSpan.FromMinutes(_engineHost.Settings.IntervalMinutes);
-        var loop = new SyncLoop(cycle, interval);
-
-        // Delay the first cycle so the heavy Outlook COM read + push does not compete with
+        // Delay the first tick so the heavy Outlook COM read + push does not compete with
         // app/window startup (it would otherwise spike CPU/IO the moment the app opens).
         _ = Task.Run(async () =>
         {
             try { await Task.Delay(TimeSpan.FromSeconds(5), _shutdown.Token); }
             catch (OperationCanceledException) { return; }
-            await loop.RunAsync(_shutdown.Token);
+
+            // Push status to the UI/tray after each scheduler tick by polling the engine's
+            // recorded status on the same cadence as the scheduler runs in the background.
+            _ = Task.Run(() => PublishStatusLoopAsync(_shutdown.Token));
+
+            await scheduler.RunAsync(_shutdown.Token);
         });
+    }
+
+    // Mirrors the scheduler's heartbeat onto the UI/tray. The scheduler itself has no
+    // status callback, so we periodically read EngineActions' status snapshot and push it.
+    private async Task PublishStatusLoopAsync(CancellationToken ct)
+    {
+        if (_engineHost == null || _bridge == null)
+            return;
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var status = await _engineHost.Actions.GetStatusAsync(ct);
+                _bridge.PushStatus(status);
+                Dispatch(() => _tray?.SetStatus(status.Status));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown — exit cleanly.
+        }
+        catch
+        {
+            // Never let status publishing crash the app.
+        }
+    }
+
+    // The host executable path registered for login auto-start.
+    private static string HostExePath()
+    {
+        var exe = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(exe))
+            return exe;
+        return Assembly.GetExecutingAssembly().Location;
+    }
+
+    private static bool IsSilentLaunch(string[]? args)
+    {
+        if (args == null)
+            return false;
+        foreach (var a in args)
+            if (string.Equals(a, "--silent", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    // Shows a native Save-As dialog for the basic .txt export and returns the chosen path,
+    // or null if the user cancelled. Runs on the UI thread; creates a window to host the
+    // picker if one is not already open (the app is tray-resident).
+    private Task<string?> ShowSaveTxtDialogAsync(string suggestedName)
+    {
+        var tcs = new TaskCompletionSource<string?>();
+
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                var window = _mainWindow ?? CreateWindow();
+                var provider = window.StorageProvider;
+                if (provider == null || !provider.CanSave)
+                {
+                    tcs.TrySetResult(null);
+                    return;
+                }
+
+                var file = await provider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = "Export calendar to .txt",
+                    SuggestedFileName = suggestedName,
+                    DefaultExtension = "txt",
+                    FileTypeChoices = new[]
+                    {
+                        new FilePickerFileType("Text file") { Patterns = new[] { "*.txt" } },
+                    },
+                });
+
+                tcs.TrySetResult(file?.TryGetLocalPath());
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        });
+
+        return tcs.Task;
     }
 
     private static UnconfiguredEngineActions MakeUnconfiguredActions()

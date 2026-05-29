@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Threading;
@@ -15,6 +16,10 @@ namespace ZyncMaster.App.Bridge;
 // key store, CalExportRunner -> CompleteCalendarReader -> OutlookComSource,
 // DefaultBrowserLauncher, SystemClock, PairingService and SyncEngine.
 //
+// For the WS3 sync-pair lifecycle it also holds an IPairsClient (the server's
+// pairs/accounts REST surface), a BasicTxtExporter, an IAutoStartManager, and a
+// save-dialog delegate the App provides (an Avalonia save picker; a fake in tests).
+//
 // It also holds the live status the host pushes to the UI: the last SyncResult, whether
 // a key is present (paired), and the user-controlled paused flag the SyncLoop honours.
 public sealed class EngineActions : IEngineActions, IDisposable
@@ -26,6 +31,13 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly AppSettingsResolver _resolver;
     private readonly string _settingsPath;
     private readonly HttpClient? _ownedHttp;
+
+    private readonly IPairsClient _pairs;
+    private readonly BasicTxtExporter _txtExporter;
+    private readonly IAutoStartManager _autoStart;
+    private readonly EngineSettings _engineSettings;
+    private readonly Func<string, Task<string?>> _saveDialog;
+    private readonly string _autoStartExePath;
 
     private SyncStatus _status = SyncStatus.Idle;
     private bool _paused;
@@ -41,6 +53,12 @@ public sealed class EngineActions : IEngineActions, IDisposable
         ISettingsRepository<AppSettings> settingsRepo,
         AppSettingsResolver resolver,
         string settingsPath,
+        IPairsClient pairs,
+        BasicTxtExporter txtExporter,
+        IAutoStartManager autoStart,
+        EngineSettings engineSettings,
+        Func<string, Task<string?>> saveDialog,
+        string autoStartExePath,
         HttpClient? ownedHttp = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
@@ -49,6 +67,12 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _settingsRepo = settingsRepo ?? throw new ArgumentNullException(nameof(settingsRepo));
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _settingsPath = settingsPath ?? throw new ArgumentNullException(nameof(settingsPath));
+        _pairs = pairs ?? throw new ArgumentNullException(nameof(pairs));
+        _txtExporter = txtExporter ?? throw new ArgumentNullException(nameof(txtExporter));
+        _autoStart = autoStart ?? throw new ArgumentNullException(nameof(autoStart));
+        _engineSettings = engineSettings ?? throw new ArgumentNullException(nameof(engineSettings));
+        _saveDialog = saveDialog ?? throw new ArgumentNullException(nameof(saveDialog));
+        _autoStartExePath = autoStartExePath ?? throw new ArgumentNullException(nameof(autoStartExePath));
         _ownedHttp = ownedHttp;
     }
 
@@ -112,6 +136,112 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return Task.CompletedTask;
     }
 
+    // ---------------- WS3: sync-pair lifecycle ----------------
+
+    public async Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(CancellationToken ct = default)
+    {
+        var key = await RequireKeyAsync(ct);
+        return await _pairs.ListAccountsAsync(key, ct);
+    }
+
+    public async Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default)
+    {
+        if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
+        var key = await RequireKeyAsync(ct);
+        return await _pairs.ListCalendarsAsync(key, accountRef, ct);
+    }
+
+    public async Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default)
+    {
+        if (requestJson == null) throw new ArgumentNullException(nameof(requestJson));
+        var key = await RequireKeyAsync(ct);
+
+        var dto = Newtonsoft.Json.JsonConvert.DeserializeObject<CreatePairDto>(requestJson)
+                  ?? throw new InvalidOperationException("Invalid create-pair request.");
+
+        var interval = dto.IntervalMin ?? _engineSettings.IntervalMinutes;
+        return await _pairs.CreatePairAsync(
+            key,
+            dto.Name ?? "",
+            dto.Source?.ToEndpoint() ?? new Endpoint(),
+            dto.Destination?.ToEndpoint() ?? new Endpoint(),
+            interval,
+            ct);
+    }
+
+    public async Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default)
+    {
+        var key = await RequireKeyAsync(ct);
+        return await _pairs.ListPairsAsync(key, ct);
+    }
+
+    public async Task<SyncPair> UpdatePairAsync(string requestJson, CancellationToken ct = default)
+    {
+        if (requestJson == null) throw new ArgumentNullException(nameof(requestJson));
+        var key = await RequireKeyAsync(ct);
+
+        var dto = Newtonsoft.Json.JsonConvert.DeserializeObject<UpdatePairDto>(requestJson)
+                  ?? throw new InvalidOperationException("Invalid update-pair request.");
+        if (string.IsNullOrEmpty(dto.Id))
+            throw new InvalidOperationException("update-pair request is missing 'id'.");
+
+        return await _pairs.UpdatePairAsync(key, dto.Id, dto.Name, dto.IntervalMin, dto.State, ct);
+    }
+
+    public async Task DeletePairAsync(string id, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+        var key = await RequireKeyAsync(ct);
+        await _pairs.DeletePairAsync(key, id, ct);
+    }
+
+    public async Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+        var key = await RequireKeyAsync(ct);
+        return await _pairs.RunPairAsync(key, id, ct);
+    }
+
+    public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(accountRef)) throw new ArgumentNullException(nameof(accountRef));
+        var key = await RequireKeyAsync(ct);
+        return await _pairs.UnlinkAccountAsync(key, accountRef, ct);
+    }
+
+    public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
+    {
+        var now = DateTime.Now;
+        var suggested = $"ZyncMaster-{now:yyyy-MM}.txt";
+
+        var path = await _saveDialog(suggested);
+        if (string.IsNullOrEmpty(path))
+            return null; // user cancelled
+
+        await _txtExporter.ExportAsync(now.Year, now.Month, _engineSettings.CalendarNames, path, ct);
+        return path;
+    }
+
+    public Task<bool> GetAutoStartAsync(CancellationToken ct = default)
+        => Task.FromResult(_autoStart.IsEnabled());
+
+    public Task SetAutoStartAsync(bool enabled, CancellationToken ct = default)
+    {
+        if (enabled)
+            _autoStart.Enable(_autoStartExePath, "--silent");
+        else
+            _autoStart.Disable();
+        return Task.CompletedTask;
+    }
+
+    private async Task<string> RequireKeyAsync(CancellationToken ct)
+    {
+        var key = await _keys.LoadAsync(ct);
+        if (string.IsNullOrEmpty(key))
+            throw new InvalidOperationException("This device is not paired yet. Pair it before managing sync pairs.");
+        return key;
+    }
+
     // Captures the outcome of a cycle so GetStatus / PushStatus reflect it. Called by the
     // SyncLoop wrapper as well as SyncNowAsync.
     public void RecordResult(SyncResult result)
@@ -141,5 +271,39 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public void Dispose()
     {
         _ownedHttp?.Dispose();
+    }
+
+    // ---- request DTOs for the JSON payloads the web layer sends ----
+
+    private sealed class CreatePairDto
+    {
+        [Newtonsoft.Json.JsonProperty("name")] public string? Name { get; set; }
+        [Newtonsoft.Json.JsonProperty("source")] public EndpointDto? Source { get; set; }
+        [Newtonsoft.Json.JsonProperty("destination")] public EndpointDto? Destination { get; set; }
+        [Newtonsoft.Json.JsonProperty("intervalMin")] public int? IntervalMin { get; set; }
+    }
+
+    private sealed class UpdatePairDto
+    {
+        [Newtonsoft.Json.JsonProperty("id")] public string? Id { get; set; }
+        [Newtonsoft.Json.JsonProperty("name")] public string? Name { get; set; }
+        [Newtonsoft.Json.JsonProperty("intervalMin")] public int? IntervalMin { get; set; }
+        [Newtonsoft.Json.JsonProperty("state")] public string? State { get; set; }
+    }
+
+    private sealed class EndpointDto
+    {
+        [Newtonsoft.Json.JsonProperty("provider")] public string? Provider { get; set; }
+        [Newtonsoft.Json.JsonProperty("accountRef")] public string? AccountRef { get; set; }
+        [Newtonsoft.Json.JsonProperty("calendarId")] public string? CalendarId { get; set; }
+        [Newtonsoft.Json.JsonProperty("calendarName")] public string? CalendarName { get; set; }
+
+        public Endpoint ToEndpoint() => new()
+        {
+            Provider = Provider ?? "",
+            AccountRef = AccountRef,
+            CalendarId = CalendarId ?? "",
+            CalendarName = CalendarName ?? "",
+        };
     }
 }

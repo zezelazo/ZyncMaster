@@ -2,6 +2,7 @@
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
+using System.Threading.Tasks;
 using ZyncMaster.App.Bridge;
 using ZyncMaster.Core;
 using ZyncMaster.Engine;
@@ -19,15 +20,20 @@ public sealed class EngineHost : IDisposable
 
     // The raw sync cycle (SyncEngine) the background loop drives, wrapped by the app's
     // StatusPushingCycle. Exposed separately from Actions because the loop needs the
-    // ISyncCycle, while the bridge needs the IEngineActions facade.
+    // ISyncCycle, while the bridge needs the IEngineActions facade. The PairScheduler is
+    // built separately by the App from the pieces it needs.
     public ISyncCycle SyncCycle { get; }
+
+    // The multi-pair scheduler the App runs in the background instead of the single SyncLoop.
+    public PairScheduler Scheduler { get; }
 
     private readonly HttpClient _http;
 
-    private EngineHost(EngineActions actions, ISyncCycle syncCycle, EngineSettings settings, HttpClient http)
+    private EngineHost(EngineActions actions, ISyncCycle syncCycle, PairScheduler scheduler, EngineSettings settings, HttpClient http)
     {
         Actions = actions;
         SyncCycle = syncCycle;
+        Scheduler = scheduler;
         Settings = settings;
         _http = http;
     }
@@ -35,7 +41,11 @@ public sealed class EngineHost : IDisposable
     // Builds the engine from settings.json next to the exe (created with defaults if
     // absent). Throws SettingsValidationException if the resolved settings are invalid
     // and SettingsLoadException if the file exists but cannot be parsed.
-    public static EngineHost Create()
+    //
+    // saveDialog: shows a Save-As picker (the App supplies an Avalonia IStorageProvider
+    // implementation) and returns the chosen path or null when cancelled.
+    // autoStartExePath: the host executable registered for login auto-start.
+    public static EngineHost Create(Func<string, Task<string?>> saveDialog, string autoStartExePath)
     {
         var exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
                      ?? Directory.GetCurrentDirectory();
@@ -59,6 +69,7 @@ public sealed class EngineHost : IDisposable
         var http = new HttpClient();
         var pairingClient = new HttpPairingClient(http, engineSettings.ServerBaseUrl);
         var syncClient = new HttpSyncClient(http, engineSettings.ServerBaseUrl);
+        var pairsClient = new HttpPairsClient(http, engineSettings.ServerBaseUrl);
 
         var calExportRunner = new CalExportRunner(engineSettings.CalExportPath);
         var calendarReader = new CompleteCalendarReader();
@@ -68,10 +79,19 @@ public sealed class EngineHost : IDisposable
         var pairingService = new PairingService(pairingClient, browser, keyStore, engineSettings);
         var syncEngine = new SyncEngine(keyStore, calendarSource, syncClient, clock, engineSettings);
 
-        var actions = new EngineActions(
-            keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath, ownedHttp: null);
+        var txtExporter = new BasicTxtExporter(calExportRunner);
+        var autoStart = new WindowsAutoStartManager(new WindowsRegistry());
 
-        return new EngineHost(actions, syncEngine, engineSettings, http);
+        var actions = new EngineActions(
+            keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
+            pairsClient, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
+            ownedHttp: null);
+
+        // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
+        // pairs are read locally and pushed; the rest are mirrored server-side.
+        var scheduler = new PairScheduler(pairsClient, calendarSource, keyStore, clock, engineSettings);
+
+        return new EngineHost(actions, syncEngine, scheduler, engineSettings, http);
     }
 
     public void Dispose()
