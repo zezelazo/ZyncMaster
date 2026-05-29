@@ -128,7 +128,7 @@ public sealed class PairingServiceTests
         pairing.StartCallCount.Should().Be(1);
         pairing.LastDeviceName.Should().Be("Test-Device");
         browser.OpenCallCount.Should().Be(1);
-        browser.LastUrl.Should().Be("https://srv.example.com/connect");
+        browser.LastUrl.Should().Be("https://srv.example.com/pair?code=AB12");
         keys.SavedKey.Should().Be("k");
         outcome.Success.Should().BeTrue();
         outcome.ApiKey.Should().Be("k");

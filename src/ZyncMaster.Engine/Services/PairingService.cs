@@ -44,8 +44,8 @@ public sealed class PairingService
 
         var start = await _pairing.StartAsync(_settings.DeviceName, ct);
 
-        var connectUrl = $"{_settings.ServerBaseUrl.TrimEnd('/')}/connect";
-        _browser.Open(connectUrl);
+        var approvalUrl = $"{_settings.ServerBaseUrl.TrimEnd('/')}/pair?code={start.Code}";
+        _browser.Open(approvalUrl);
 
         for (var attempt = 0; attempt < attempts; attempt++)
         {
