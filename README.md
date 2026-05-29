@@ -1,11 +1,11 @@
-# SyncMaster — CalExport + CalImport
+﻿# Zync Master — CalExport + CalImport
 
-The **SyncMaster** suite is two complementary Windows console tools that round-trip Outlook calendar data:
+The **Zync Master** suite is two complementary Windows console tools that round-trip Outlook calendar data:
 
 - **CalExport** — connects to **Outlook Classic** on the source machine via COM and exports a month of events to a plain-text file (Simple mode) or a structured JSON file (Complete mode). No Graph API, no EWS, no credentials required.
 - **CalImport** — on the target machine, reads the JSON produced by CalExport's Complete mode and creates / updates / deletes events in a chosen calendar of an outlook.com (or work/school) account via the **Microsoft Graph API**. Works whether the target uses Outlook Classic *or* the "new Outlook for Windows" (which does not expose COM). Idempotent: re-importing the same file updates existing events instead of duplicating them.
 
-Both tools share a `SyncMaster.Core` library and follow the same layered SOLID architecture with dependency-injected interfaces, enabling full unit-test coverage of business logic without requiring Outlook or network access.
+Both tools share a `ZyncMaster.Core` library and follow the same layered SOLID architecture with dependency-injected interfaces, enabling full unit-test coverage of business logic without requiring Outlook or network access.
 
 ---
 
@@ -25,8 +25,8 @@ Both tools share a `SyncMaster.Core` library and follow the same layered SOLID a
 dotnet build -c Release
 ```
 
-The output executable is placed in `src\SyncMaster.CalExport\bin\Release\net10.0-windows\SyncMaster.CalExport.exe`.  
-Copy `SyncMaster.CalExport.exe` to any folder — it is self-contained for runtime use.
+The output executable is placed in `src\ZyncMaster.CalExport\bin\Release\net10.0-windows\ZyncMaster.CalExport.exe`.  
+Copy `ZyncMaster.CalExport.exe` to any folder — it is self-contained for runtime use.
 
 ---
 
@@ -35,7 +35,7 @@ Copy `SyncMaster.CalExport.exe` to any folder — it is self-contained for runti
 Run the executable with no arguments for the fully interactive flow:
 
 ```
-SyncMaster.CalExport.exe
+ZyncMaster.CalExport.exe
 ```
 
 On first run a `settings.json` file is created next to the executable with sensible defaults. The tool will then walk you through every option.
@@ -45,7 +45,7 @@ On first run a `settings.json` file is created next to the executable with sensi
 ## Usage
 
 ```
-SyncMaster.CalExport.exe [-a|--auto] [-c|--config <path>] [-o|--output <path>]
+ZyncMaster.CalExport.exe [-a|--auto] [-c|--config <path>] [-o|--output <path>]
 ```
 
 | Flag | Description |
@@ -59,13 +59,13 @@ All flags are **independent** — any combination is valid:
 
 ```
 # Silent export with all defaults
-SyncMaster.CalExport.exe -a
+ZyncMaster.CalExport.exe -a
 
 # Interactive export using a custom config file
-SyncMaster.CalExport.exe -c "D:\work\my-settings.json"
+ZyncMaster.CalExport.exe -c "D:\work\my-settings.json"
 
 # Silent export to a specific folder using a custom config
-SyncMaster.CalExport.exe -a -c "D:\work\my-settings.json" -o "D:\exports\calendar"
+ZyncMaster.CalExport.exe -a -c "D:\work\my-settings.json" -o "D:\exports\calendar"
 ```
 
 ### Missing config file (`-c` with a non-existent path)
@@ -237,8 +237,8 @@ The file is created automatically on first run next to the executable. All field
 You can maintain separate configs for different scenarios:
 
 ```
-SyncMaster.CalExport.exe -a -c "D:\configs\work.json"     -o "D:\timesheets"
-SyncMaster.CalExport.exe -a -c "D:\configs\personal.json" -o "D:\personal\calendar"
+ZyncMaster.CalExport.exe -a -c "D:\configs\work.json"     -o "D:\timesheets"
+ZyncMaster.CalExport.exe -a -c "D:\configs\personal.json" -o "D:\personal\calendar"
 ```
 
 ---
@@ -325,12 +325,12 @@ No client secret is required — the public-client + PKCE flow is the correct on
 dotnet build -c Release
 ```
 
-The output is at `src\SyncMaster.CalImport\bin\Release\net10.0\SyncMaster.CalImport.exe`.
+The output is at `src\ZyncMaster.CalImport\bin\Release\net10.0\ZyncMaster.CalImport.exe`.
 
 ## Usage
 
 ```
-SyncMaster.CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
+ZyncMaster.CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
               [-k|--calendar <id>] [-n|--new-calendar <name>] [-w|--overwrite] [--dry-run]
 ```
 
@@ -349,24 +349,24 @@ SyncMaster.CalImport.exe [-s|--source <path>] [-a|--auto] [-c|--config <path>]
 
 ```
 # Fully interactive (asks for file and calendar)
-SyncMaster.CalImport.exe
+ZyncMaster.CalImport.exe
 
 # Import to the default calendar, no prompts
-SyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json"
+ZyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json"
 
 # Preview what would happen
-SyncMaster.CalImport.exe -s "D:\export\Calendar_2026_May_complete_20260523.json" --dry-run
+ZyncMaster.CalImport.exe -s "D:\export\Calendar_2026_May_complete_20260523.json" --dry-run
 
 # Send everything into a brand-new calendar named "Migrated-2026-05"
-SyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -n "Migrated-2026-05"
+ZyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -n "Migrated-2026-05"
 
 # Import to an explicit existing calendar id
-SyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -k "AAMkAGI0MTU2ZGEx..."
+ZyncMaster.CalImport.exe -a -s "D:\export\Calendar_2026_May_complete_20260523.json" -k "AAMkAGI0MTU2ZGEx..."
 ```
 
 ### First run
 
-On the first run the tool opens your default browser, you sign in with your Microsoft account, and Microsoft asks you to consent to read/write your calendar. The refresh token is then cached encrypted with Windows DPAPI under `%LOCALAPPDATA%\SyncMaster\CalImport\msal.cache`; later runs sign in silently.
+On the first run the tool opens your default browser, you sign in with your Microsoft account, and Microsoft asks you to consent to read/write your calendar. The refresh token is then cached encrypted with Windows DPAPI under `%LOCALAPPDATA%\Zync Master\CalImport\msal.cache`; later runs sign in silently.
 
 ## `settings.json` reference
 
@@ -443,7 +443,7 @@ The id you passed to `-k` or stored in `defaultCalendarId` doesn't exist in the 
 You hit Microsoft Graph rate limits. Wait a few minutes and re-run; CalImport will skip already-imported events thanks to the upsert.
 
 **Want to start over from scratch**  
-Delete the `%LOCALAPPDATA%\SyncMaster\CalImport\msal.cache` file (re-prompts for sign-in) and/or the destination calendar in outlook.com.
+Delete the `%LOCALAPPDATA%\Zync Master\CalImport\msal.cache` file (re-prompts for sign-in) and/or the destination calendar in outlook.com.
 
 ---
 
@@ -452,18 +452,18 @@ Delete the `%LOCALAPPDATA%\SyncMaster\CalImport\msal.cache` file (re-prompts for
 ### Project structure
 
 ```
-SyncMaster/
-├── SyncMaster.sln
+Zync Master/
+├── Zync Master.sln
 │
 ├── src/
-│   ├── SyncMaster.Core/                        # Shared library: models, contracts, helpers
+│   ├── ZyncMaster.Core/                        # Shared library: models, contracts, helpers
 │   │   ├── Models/      AppointmentRecord, ParticipantRecord, ExportMode
 │   │   ├── Contracts/   IFileSystem, IConsoleIO, IApplicationTerminator, ISettingsRepository<T>
 │   │   ├── Services/    MonthNames, UuidV5, SettingsRepository<T>
 │   │   ├── Infrastructure/ PhysicalFileSystem
 │   │   └── Presentation/   ConsoleIO, ConsoleApplicationTerminator
 │   │
-│   ├── SyncMaster.CalExport/                   # Outlook Classic → JSON / TXT
+│   ├── ZyncMaster.CalExport/                   # Outlook Classic → JSON / TXT
 │   │   ├── Program.cs                          # Composition root
 │   │   ├── Core/        ExportContext, IAppointmentExporter, ICalendarService,
 │   │   │                AppointmentExportService, CalendarFolderMatcher,
@@ -472,7 +472,7 @@ SyncMaster/
 │   │   ├── Infrastructure/Outlook/OutlookCalendarService   # COM interop
 │   │   └── Presentation/   ApplicationRunner, ArgumentParser
 │   │
-│   └── SyncMaster.CalImport/                   # JSON → Microsoft Graph
+│   └── ZyncMaster.CalImport/                   # JSON → Microsoft Graph
 │       ├── Program.cs                          # Composition root
 │       ├── Core/Contracts/  IImportSource, IImportAuthenticator, ICalendarTarget, IParticipantRenderer
 │       ├── Core/Models/     ImportPayload, ImportPlanItem, ImportAction, ImportResult,
@@ -484,9 +484,9 @@ SyncMaster/
 │       └── Presentation/    ApplicationRunner, ArgumentParser
 │
 └── tests/
-    ├── SyncMaster.Core.Tests/                  # Tests for shared library
-    ├── SyncMaster.CalExport.Tests/             # Tests for CalExport
-    └── SyncMaster.CalImport.Tests/             # Tests for CalImport
+    ├── ZyncMaster.Core.Tests/                  # Tests for shared library
+    ├── ZyncMaster.CalExport.Tests/             # Tests for CalExport
+    └── ZyncMaster.CalImport.Tests/             # Tests for CalImport
 ```
 
 For a full architectural description of every CalExport class, see [WIKI.md](WIKI.md).
@@ -494,7 +494,7 @@ For a full architectural description of every CalExport class, see [WIKI.md](WIK
 ### Running the tests
 
 ```
-dotnet test tests/SyncMaster.CalExport.Tests/SyncMaster.CalExport.Tests.csproj
+dotnet test tests/ZyncMaster.CalExport.Tests/ZyncMaster.CalExport.Tests.csproj
 ```
 
 Or from the solution root (builds and runs all test projects):
@@ -505,7 +505,7 @@ dotnet test
 
 ### Test coverage
 
-The test suite contains **203 unit tests** across the three projects (`SyncMaster.Core.Tests`, `SyncMaster.CalExport.Tests`, `SyncMaster.CalImport.Tests`) covering all Core services, configuration, CLI parsing, export formatting, import planning and HTML body merge. Infrastructure wrappers around external systems (`OutlookCalendarService`, `PhysicalFileSystem`, `GraphAuthenticator`, `GraphCalendarTarget`) are excluded from unit tests by design — these require Outlook COM, the local filesystem, MSAL, or live Microsoft Graph, respectively.
+The test suite contains **203 unit tests** across the three projects (`ZyncMaster.Core.Tests`, `ZyncMaster.CalExport.Tests`, `ZyncMaster.CalImport.Tests`) covering all Core services, configuration, CLI parsing, export formatting, import planning and HTML body merge. Infrastructure wrappers around external systems (`OutlookCalendarService`, `PhysicalFileSystem`, `GraphAuthenticator`, `GraphCalendarTarget`) are excluded from unit tests by design — these require Outlook COM, the local filesystem, MSAL, or live Microsoft Graph, respectively.
 
 To generate an HTML coverage report:
 

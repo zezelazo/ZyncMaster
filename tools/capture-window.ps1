@@ -1,4 +1,4 @@
-# Captures ONLY the SyncMaster.App window region (not the whole desktop) to a PNG, for
+﻿# Captures ONLY the ZyncMaster.App window region (not the whole desktop) to a PNG, for
 # visual verification of the embedded UI. Finds the window via the running process.
 # Usage: powershell -NoProfile -File capture-window.ps1 <output.png>
 Add-Type @"
@@ -13,7 +13,7 @@ public class WinApi {
 }
 "@
 $out = $args[0]
-$proc = Get-Process -Name "SyncMaster.App" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+$proc = Get-Process -Name "ZyncMaster.App" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 if (-not $proc) { Write-Output "NO_WINDOW_HANDLE"; exit 1 }
 $h = $proc.MainWindowHandle
 Write-Output ("TITLE=" + $proc.MainWindowTitle)

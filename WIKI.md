@@ -1,6 +1,6 @@
-# SyncMaster / CalExport — Developer Wiki
+﻿# Zync Master / CalExport — Developer Wiki
 
-This document is the technical reference for developers maintaining or extending CalExport (the calendar-export module of the SyncMaster suite). It covers architecture, every class in the codebase, application flows, configuration, export formats, testing strategy, extension points, and known limitations.
+This document is the technical reference for developers maintaining or extending CalExport (the calendar-export module of the Zync Master suite). It covers architecture, every class in the codebase, application flows, configuration, export formats, testing strategy, extension points, and known limitations.
 
 ---
 
@@ -769,7 +769,7 @@ Example: `Calendar_2026_May_complete_20260523.json`
 ### Test Project Structure
 
 ```
-SyncMaster.CalExport.Tests/
+ZyncMaster.CalExport.Tests/
 └── Unit/
     ├── ArgumentParserTests.cs          # CLI flag parsing, error cases
     ├── AppointmentRecordTests.cs       # Model default values
@@ -797,7 +797,7 @@ dotnet test
 Run only the test project:
 
 ```
-dotnet test SyncMaster.CalExport.Tests/SyncMaster.CalExport.Tests.csproj
+dotnet test ZyncMaster.CalExport.Tests/ZyncMaster.CalExport.Tests.csproj
 ```
 
 Run with verbose output:
@@ -820,7 +820,7 @@ Generate a Cobertura report (for Azure DevOps or GitHub Actions coverage reports
 dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=./coverage/
 ```
 
-The `coverlet.msbuild` package is already included in `SyncMaster.CalExport.Tests.csproj`. The target coverage for business logic classes is 80%+ line coverage.
+The `coverlet.msbuild` package is already included in `ZyncMaster.CalExport.Tests.csproj`. The target coverage for business logic classes is 80%+ line coverage.
 
 ### Key Test Classes and What They Cover
 
@@ -939,7 +939,7 @@ No other code changes are needed.
 
 ### Target Frameworks
 
-`SyncMaster.Core` and `CalImport` target `net10.0`. `CalExport` targets `net10.0-windows` because it depends on the Outlook COM interop, which is Windows-only. `init`-only setters and the `[DoesNotReturn]` attribute are provided natively by the .NET 10 runtime, so no polyfills are needed.
+`ZyncMaster.Core` and `CalImport` target `net10.0`. `CalExport` targets `net10.0-windows` because it depends on the Outlook COM interop, which is Windows-only. `init`-only setters and the `[DoesNotReturn]` attribute are provided natively by the .NET 10 runtime, so no polyfills are needed.
 
 ### `Environment.Exit` in Program.cs
 

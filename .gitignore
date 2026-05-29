@@ -18,7 +18,7 @@ lcov.info
 appsettings.json
 # The Server's appsettings.json holds only non-secret config (authority, scopes,
 # redirect URI); secrets go in user-secrets / env vars. Keep it tracked.
-!src/SyncMaster.Server/appsettings.json
+!src/ZyncMaster.Server/appsettings.json
 settings.json
 
 # MSAL token cache (normally under %LOCALAPPDATA%, never committed)

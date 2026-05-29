@@ -1,4 +1,4 @@
-name: Deploy Server
+﻿name: Deploy Server
 
 # Manual only. No artifacts are uploaded or stored: the server is published into a
 # temporary folder and deployed from it within this single job (in-process).
@@ -24,7 +24,7 @@ jobs:
       - name: Publish server
         # Only the server graph (Server -> Graph -> Core), all net10.0, builds on Linux.
         # Framework-dependent publish; the App Service runtime stack provides .NET 10.
-        run: dotnet publish src/SyncMaster.Server/SyncMaster.Server.csproj -c Release -o "${{ runner.temp }}/publish"
+        run: dotnet publish src/ZyncMaster.Server/ZyncMaster.Server.csproj -c Release -o "${{ runner.temp }}/publish"
 
       - name: Azure login
         uses: azure/login@v2

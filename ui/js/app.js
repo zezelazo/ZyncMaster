@@ -1,4 +1,4 @@
-// app.js — SyncMaster UI. Vanilla ES module, no framework, no build step.
+﻿// app.js — Zync Master UI. Vanilla ES module, no framework, no build step.
 // Reimplements the design handoff (app.jsx) behaviour: launch splash, Home,
 // Calendar Sync accordion, Add Pair / Add Calendar / Pairing wizards, Settings,
 // About, bottom nav with sliding indicator, the sync state machine and motion.
@@ -137,7 +137,7 @@ const Bridge = (() => {
 })();
 
 // ---------------- Theme (Dark / Light / Auto) ----------------
-const THEME_KEY = 'syncmaster.theme';
+const THEME_KEY = 'zyncmaster.theme';
 const mql = typeof window !== 'undefined' && window.matchMedia
   ? window.matchMedia('(prefers-color-scheme: light)') : null;
 
@@ -578,7 +578,7 @@ function renderAddCalendar(root) {
 
   if (addCal.step === 0) {
     root.append(el('div', { class: 'wizard-title', text: 'Choose a provider' }));
-    root.append(el('div', { class: 'wizard-sub', text: 'SyncMaster will use a read-only or read/write connection to this account, as you choose later.' }));
+    root.append(el('div', { class: 'wizard-sub', text: 'Zync Master will use a read-only or read/write connection to this account, as you choose later.' }));
     const grid = el('div', { class: 'provider-grid' });
     PROVIDERS.forEach((p) => grid.append(el('button', { class: 'provider-tile glass', onclick: () => { addCal.providerId = p.id; addCal.step = 1; rerender(); } },
       el('div', { class: 'provider-tile__logo', dataset: { tone: p.tone }, text: p.id === 'icloud' ? 'i' : p.letter }),
@@ -595,15 +595,15 @@ function renderAddCalendar(root) {
     root.append(el('div', { class: 'glass glass--card pair-card' },
       orb,
       el('div', { class: 'pair-title', text: 'Approve in your browser' }),
-      el('div', { class: 'pair-sub' }, 'We opened a sign-in page for ', el('b', { style: 'color:var(--ink-1)', text: provider.name }), '. Approve there to grant SyncMaster access to your calendars.'),
-      el('button', { class: 'pair-link' }, iconEl('copy', 13, 1.6), el('span', { text: `syncmaster.app/auth/${provider.id}/8h3-4f2a` })),
+      el('div', { class: 'pair-sub' }, 'We opened a sign-in page for ', el('b', { style: 'color:var(--ink-1)', text: provider.name }), '. Approve there to grant Zync Master access to your calendars.'),
+      el('button', { class: 'pair-link' }, iconEl('copy', 13, 1.6), el('span', { text: `zyncmaster.app/auth/${provider.id}/8h3-4f2a` })),
       el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => { addCal.step = 0; rerender(); } }),
     ));
     clearTimeout(addCal.timer);
     addCal.timer = setTimeout(() => { if (state.view === 'add-calendar' && addCal.step === 1) { addCal.step = 2; rerender(); } }, 2400);
   } else if (addCal.step === 2 && provider) {
     root.append(el('div', { class: 'wizard-title', text: 'Choose calendars to import' }));
-    root.append(el('div', { class: 'wizard-sub' }, 'Pick which calendars from ', el('b', { style: 'color:var(--ink-1)', text: provider.name }), ' you want to make available inside SyncMaster.'));
+    root.append(el('div', { class: 'wizard-sub' }, 'Pick which calendars from ', el('b', { style: 'color:var(--ink-1)', text: provider.name }), ' you want to make available inside Zync Master.'));
     const wrap = el('div', { class: 'glass glass--card', style: 'padding:4px' });
     DISCOVERED.forEach((d) => {
       const cb = el('input', { type: 'checkbox' });
@@ -655,7 +655,7 @@ function renderConfig(root) {
   root.append(section('Schedule',
     row('Auto-sync', el('div', { class: 'cfg-row__hint', text: 'Mirror changes automatically' }), toggle(() => settings.autoSync, (v) => { settings.autoSync = v; })),
     intervalRow(() => settings.interval, (v) => { settings.interval = v; pushConfig(); rerender(); }),
-    row('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch SyncMaster when you sign in' }), toggle(() => settings.startup, (v) => { settings.startup = v; }))));
+    row('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }), toggle(() => settings.startup, (v) => { settings.startup = v; }))));
 
   // This device
   const nameInput = el('input', { class: 'field-input', value: settings.deviceName });
@@ -680,7 +680,7 @@ function renderConfig(root) {
 
   // About entry
   const aboutRow = el('div', { class: 'cfg-row', style: 'cursor:pointer', onclick: () => navigate('about') },
-    el('div', null, el('div', { class: 'cfg-row__label', text: 'About SyncMaster' }), el('div', { class: 'cfg-row__hint', text: 'Version, credits, links' })),
+    el('div', null, el('div', { class: 'cfg-row__label', text: 'About Zync Master' }), el('div', { class: 'cfg-row__hint', text: 'Version, credits, links' })),
     el('span', { class: 'num', style: 'font-size:11px;color:var(--ink-3);margin-right:4px', text: VERSION }),
     el('span', { style: 'transform:rotate(180deg);color:var(--ink-3);display:inline-flex', html: icon('chevronleft', { size: 14, stroke: 1.8 }) }));
   root.append(el('div', { class: 'glass glass--card config-section' }, el('div', { class: 'config-section__hd', text: 'About' }), aboutRow));
@@ -692,7 +692,7 @@ function renderAbout(root) {
   const link = (ic, label) => el('button', { class: 'about-link' }, iconEl(ic, 13, 1.6), label);
   root.append(el('div', { class: 'glass glass--card about-card' },
     el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
-    el('div', { class: 'about-name', text: 'SyncMaster' }),
+    el('div', { class: 'about-name', text: 'Zync Master' }),
     el('div', { class: 'about-version num', text: 'VERSION 1.0.0 · BUILD 248' }),
     el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
     el('div', { class: 'about-links' }, link('link', 'Website'), link('sparkle', "What's new"), link('note', 'Privacy policy'), link('folder', 'Open-source notices')),
@@ -701,8 +701,8 @@ function renderAbout(root) {
     el('div', { class: 'about-credits__hd', text: 'Made with care' }),
     el('div', { class: 'about-credits__txt', text: 'Designed and built by a small group of people who really, really hate copy-pasting events between calendars.' }),
     el('div', { class: 'about-credits__list' },
-      el('div', null, el('b', { text: 'Design' }), ' · SyncMaster team'),
-      el('div', null, el('b', { text: 'Engineering' }), ' · SyncMaster team'),
+      el('div', null, el('b', { text: 'Design' }), ' · Zync Master team'),
+      el('div', null, el('b', { text: 'Engineering' }), ' · Zync Master team'),
       el('div', null, el('b', { text: 'Icon' }), ' · custom · 24px line set')),
     el('div', { class: 'about-sys', text: 'Built on WebView2 · Chromium · © 2026' }),
   ));
@@ -738,7 +738,7 @@ function renderPairing(root) {
         el('span', { class: 'spinner', style: 'width:26px;height:26px;border-width:2px;border-color:var(--terra-edge);border-top-color:var(--terra)' })),
       el('div', { class: 'pair-title', text: 'Approve in your browser' }),
       el('div', { class: 'pair-sub' }, 'We opened a sign-in page. Approve ', el('b', { style: 'color:var(--ink-1)', text: pairing.name }), ' there to finish pairing.'),
-      el('button', { class: 'pair-link', onclick: copyPairLink }, iconEl('copy', 13, 1.6), el('span', { text: 'syncmaster.app/pair/8h3-4f2a' })),
+      el('button', { class: 'pair-link', onclick: copyPairLink }, iconEl('copy', 13, 1.6), el('span', { text: 'zyncmaster.app/pair/8h3-4f2a' })),
       el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => { pairing.step = 0; rerender(); } })));
     clearTimeout(pairing.timer);
     pairing.timer = setTimeout(() => {
@@ -756,7 +756,7 @@ function renderPairing(root) {
   }
 }
 async function copyPairLink() {
-  try { await navigator.clipboard.writeText('https://syncmaster.app/pair/8h3-4f2a'); } catch (_) {}
+  try { await navigator.clipboard.writeText('https://zyncmaster.app/pair/8h3-4f2a'); } catch (_) {}
 }
 
 // ---------------- Sync state machine ----------------

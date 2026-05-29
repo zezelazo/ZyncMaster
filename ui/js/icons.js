@@ -1,4 +1,4 @@
-// icons.js — SyncMaster line icon set. 24px grid, currentColor strokes.
+﻿// icons.js — Zync Master line icon set. 24px grid, currentColor strokes.
 // Ported from the design handoff (icons.jsx) to framework-free vanilla JS.
 // Each entry returns a static SVG markup string. All markup here is
 // author-controlled (no user/external input ever flows in), so assigning these

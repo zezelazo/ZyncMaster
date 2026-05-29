@@ -1,4 +1,4 @@
-# Generates the SyncMaster app icon PNG (rounded tile + two-arrow sync glyph in the
+﻿# Generates the ZyncMaster app icon PNG (rounded tile + two-arrow sync glyph in the
 # brand azure/terracotta). Output: a 256x256 PNG used for the window + tray icon.
 # Usage: powershell -NoProfile -File make-icon.ps1 <output.png>
 param([string]$Out)
