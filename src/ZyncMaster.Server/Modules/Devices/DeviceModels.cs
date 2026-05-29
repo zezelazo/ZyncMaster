@@ -8,6 +8,11 @@ public sealed record Device
     public string? TargetCalendarId { get; init; }
     public DateTimeOffset CreatedUtc { get; init; }
     public DateTimeOffset? LastSeenUtc { get; init; }
+
+    // Owning user. Defaults to the seeded "default" user so existing single-user code
+    // paths and tests keep working; the ApiKey auth handler reads it to attach the
+    // "userId" claim to the authenticated principal.
+    public string UserId { get; init; } = DefaultCurrentUserAccessor.DefaultUserId;
 }
 
 public sealed record PendingPairing

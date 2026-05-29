@@ -125,7 +125,11 @@ public sealed class EfDeviceStore : IDeviceStore
     private DeviceRow ToRow(Device d) => new()
     {
         Id = d.Id,
-        UserId = _currentUser.UserId,
+        // An explicit UserId on the domain device wins (used when a device is created for
+        // a specific user); otherwise fall back to the ambient current user.
+        UserId = string.IsNullOrEmpty(d.UserId) || d.UserId == DefaultCurrentUserAccessor.DefaultUserId
+            ? _currentUser.UserId
+            : d.UserId,
         Name = d.Name,
         ApiKeyHash = d.ApiKeyHash,
         TargetCalendarId = d.TargetCalendarId,
@@ -136,6 +140,7 @@ public sealed class EfDeviceStore : IDeviceStore
     private static Device ToDomain(DeviceRow r) => new()
     {
         Id = r.Id,
+        UserId = r.UserId,
         Name = r.Name,
         ApiKeyHash = r.ApiKeyHash,
         TargetCalendarId = r.TargetCalendarId,
