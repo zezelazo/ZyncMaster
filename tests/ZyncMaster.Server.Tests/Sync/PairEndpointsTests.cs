@@ -223,6 +223,48 @@ public class PairEndpointsTests : IClassFixture<ServerTestFactory>
     }
 
     [Fact]
+    public async Task Create_with_unknown_destination_account_returns_400()
+    {
+        var factory = Build();
+        var client = await AuthedClientAsync(factory);
+
+        // The seeded store only owns the "default" account; referencing a foreign /
+        // nonexistent accountRef on a Graph destination must be rejected with a clean 400.
+        var body = new
+        {
+            name = "Cross-user pair",
+            source = new { provider = "OutlookCom", calendarId = "src", calendarName = "Src" },
+            destination = new { provider = "MicrosoftGraph", accountRef = "someone-else@test", calendarId = "cal1", calendarName = "Primary" },
+            intervalMin = 15,
+        };
+
+        var resp = await client.PostAsJsonAsync("/api/pairs", body);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("destination.accountRef");
+    }
+
+    [Fact]
+    public async Task Create_with_unknown_source_account_returns_400()
+    {
+        var factory = Build();
+        var client = await AuthedClientAsync(factory);
+
+        var body = new
+        {
+            name = "Bad source pair",
+            source = new { provider = "MicrosoftGraph", accountRef = "ghost@test", calendarId = "src", calendarName = "Src" },
+            destination = new { provider = "MicrosoftGraph", accountRef = "default", calendarId = "cal1", calendarName = "Primary" },
+            intervalMin = 15,
+        };
+
+        var resp = await client.PostAsJsonAsync("/api/pairs", body);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("source.accountRef");
+    }
+
+    [Fact]
     public async Task Accounts_lists_connected_account_as_default()
     {
         var factory = Build();

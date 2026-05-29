@@ -84,11 +84,26 @@ public static class PairEndpoints
             }));
         }).RequireCookie();
 
-        app.MapPost("/api/pairs", async (CreatePairRequest req, ISyncPairStore store) =>
+        app.MapPost("/api/pairs", async (
+            CreatePairRequest req,
+            ISyncPairStore store,
+            IConnectedAccountStore accounts,
+            CancellationToken ct) =>
         {
             var validation = new CreatePairRequestValidator().Validate(req);
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
+
+            // Validate that any referenced connected account belongs to the current user.
+            // The account store is user-scoped, so GetAsync resolves to null for an account
+            // that does not exist or belongs to someone else. We only check Graph endpoints
+            // with an explicit AccountRef: OutlookCom endpoints have no server-side account,
+            // and a null/empty ref normalizes to the user's "default" account in the store.
+            // Returning a clean 400 here is friendlier than a later confusing token failure.
+            if (await ReferencedAccountIsMissingAsync(req.Source!, accounts, ct))
+                return Results.BadRequest(new { error = "unknown_source_account", message = "source.accountRef does not belong to the current user." });
+            if (await ReferencedAccountIsMissingAsync(req.Destination!, accounts, ct))
+                return Results.BadRequest(new { error = "unknown_destination_account", message = "destination.accountRef does not belong to the current user." });
 
             var pair = new SyncPair
             {
@@ -206,6 +221,20 @@ public static class PairEndpoints
     }
 
     private const int ReminderMinutes = 30;
+
+    // True when an endpoint references a Graph connected account (explicit, non-empty
+    // AccountRef) that the current user does not own. OutlookCom endpoints and endpoints
+    // without an explicit AccountRef (which normalize to the user's "default" account) are
+    // never treated as missing here.
+    private static async Task<bool> ReferencedAccountIsMissingAsync(
+        Endpoint endpoint, IConnectedAccountStore accounts, CancellationToken ct)
+    {
+        if (string.Equals(endpoint.Provider, ProviderRegistry.OutlookCom, StringComparison.Ordinal))
+            return false;
+        if (string.IsNullOrWhiteSpace(endpoint.AccountRef))
+            return false;
+        return await accounts.GetAsync(endpoint.AccountRef, ct) is null;
+    }
 
     private static (DateTimeOffset from, DateTimeOffset to) Window(ServerOptions opts)
     {

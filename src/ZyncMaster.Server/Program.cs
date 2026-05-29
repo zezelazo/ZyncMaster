@@ -10,10 +10,30 @@ builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection("Serv
 
 // EF Core persistence. A DbContextFactory (singleton) backs the stores so they can be
 // shared by the singleton composition root; a scoped DbContext is also registered for
-// the Data Protection key ring. The connection string falls back to a LocalDB-style dev
-// default; WS-D wires deployment + migration-on-startup.
-var connectionString = builder.Configuration.GetConnectionString("ZyncMasterDb")
-    ?? "Server=(localdb)\\MSSQLLocalDB;Database=ZyncMaster;Trusted_Connection=True;MultipleActiveResultSets=true";
+// the Data Protection key ring.
+//
+// Connection string resolution: production MUST supply "ConnectionStrings:ZyncMasterDb"
+// (in Azure App Service this comes from the connection-strings blade — type "SQLAzure" —
+// surfaced to the app as the env var SQLAZURECONNSTR_ZyncMasterDb, or equivalently an app
+// setting "ConnectionStrings__ZyncMasterDb"). The LocalDB-style fallback below is ONLY used
+// in the Development environment; in any other environment a missing connection string is a
+// fail-fast configuration error rather than a silent fall-through to a non-existent LocalDB.
+var connectionString = builder.Configuration.GetConnectionString("ZyncMasterDb");
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        connectionString =
+            "Server=(localdb)\\MSSQLLocalDB;Database=ZyncMaster;Trusted_Connection=True;MultipleActiveResultSets=true";
+    }
+    else
+    {
+        throw new InvalidOperationException(
+            "Missing required connection string 'ConnectionStrings:ZyncMasterDb'. " +
+            "In production set it via the Azure App Service connection-strings blade (type SQLAzure) " +
+            "or the app setting 'ConnectionStrings__ZyncMasterDb'.");
+    }
+}
 
 builder.Services.AddDbContextFactory<ZyncMasterDbContext>(o => o.UseSqlServer(connectionString));
 builder.Services.AddDbContext<ZyncMasterDbContext>(
@@ -97,6 +117,35 @@ builder.Services.AddAuthentication(AuthSchemes.ApiKey)
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+// Apply pending EF Core migrations on startup against the configured SQL Server database.
+// This is guarded by IsSqlServer() so it runs for the real app but is SKIPPED under the
+// WebApplicationFactory test harness, which swaps the context to the SQLite provider and
+// builds its schema with EnsureCreated() — calling Migrate() on a SQLite/EnsureCreated DB
+// would throw on the relational-mismatch. The provider check is robust regardless of how
+// the test host is configured. Fail-fast: if migration throws we log and rethrow rather
+// than serve traffic against a half-migrated database.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+    if (db.Database.IsSqlServer())
+    {
+        var logger = scope.ServiceProvider
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Startup.Migrate");
+        try
+        {
+            logger.LogInformation("Applying pending database migrations.");
+            db.Database.Migrate();
+            logger.LogInformation("Database migrations applied.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogCritical(ex, "Database migration failed on startup; refusing to start.");
+            throw;
+        }
+    }
+}
 
 app.UseAuthentication();
 app.UseAuthorization();
