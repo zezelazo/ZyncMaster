@@ -27,6 +27,12 @@ public static class PairEndpoints
             ISyncPairStore pairs,
             CancellationToken ct) =>
         {
+            // The account store is user-scoped, so an account that does not belong to the
+            // caller resolves to null. Return 404 (not 403) so we never leak the existence
+            // of another user's account, and never run the unlink cascade against it.
+            if (await accounts.GetAsync(accountRef, ct) is null)
+                return Results.NotFound();
+
             // Disable any pair referencing this account on either side so a stale pair never
             // tries to sync against a forgotten account. Dedupe ids appearing on both sides.
             var byDest = await pairs.ListByDestinationAccountAsync(accountRef, ct);
@@ -50,8 +56,17 @@ public static class PairEndpoints
         }).RequireCookie();
 
         app.MapGet("/api/accounts/{accountRef}/calendars", async (
-            string accountRef, ProviderRegistry registry) =>
+            string accountRef,
+            ProviderRegistry registry,
+            IConnectedAccountStore accounts,
+            CancellationToken ct) =>
         {
+            // Only enumerate calendars for an account the caller owns. A cross-user ref
+            // resolves to null in the user-scoped store -> 404 (don't leak existence, and
+            // don't hit Graph with another user's missing token, which would 500).
+            if (await accounts.GetAsync(accountRef, ct) is null)
+                return Results.NotFound();
+
             var endpoint = new Endpoint
             {
                 Provider = ProviderRegistry.MicrosoftGraph,
@@ -91,6 +106,14 @@ public static class PairEndpoints
         app.MapGet("/api/pairs", async (ISyncPairStore store) =>
             Results.Ok(await store.ListAsync())).RequireCookie();
 
+        app.MapGet("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
+        {
+            // The store filters by current user, so a pair owned by another user (or absent)
+            // resolves to null -> 404. Never 403: don't reveal that the id exists elsewhere.
+            var pair = await store.GetAsync(id, ct);
+            return pair is null ? Results.NotFound() : Results.Ok(pair);
+        }).RequireCookie();
+
         app.MapPatch("/api/pairs/{id}", async (string id, UpdatePairRequest req, ISyncPairStore store) =>
         {
             var validation = new UpdatePairRequestValidator().Validate(req);
@@ -111,9 +134,15 @@ public static class PairEndpoints
             return Results.Ok(updated);
         }).RequireCookie();
 
-        app.MapDelete("/api/pairs/{id}", async (string id, ISyncPairStore store) =>
+        app.MapDelete("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
         {
-            await store.RemoveAsync(id);
+            // Confirm ownership before deleting: a cross-user (or absent) id resolves to null
+            // in the user-scoped store -> 404, so RemoveAsync never silently no-ops on a pair
+            // the caller doesn't own and we don't leak its existence.
+            if (await store.GetAsync(id, ct) is null)
+                return Results.NotFound();
+
+            await store.RemoveAsync(id, ct);
             return Results.NoContent();
         }).RequireCookie();
 
