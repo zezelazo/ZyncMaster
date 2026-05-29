@@ -1,4 +1,6 @@
-﻿using System.Threading;
+﻿using System;
+using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using ZyncMaster.App.Configuration;
@@ -45,4 +47,42 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     }
 
     public Task SetPausedAsync(bool paused, CancellationToken ct = default) => Task.CompletedTask;
+
+    // Sync-pair lifecycle needs a configured + paired engine; surface a clear error so the
+    // web layer shows "configure first" instead of failing opaquely.
+    public Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<SyncPair>>(new List<SyncPair>());
+
+    public Task<SyncPair> UpdatePairAsync(string requestJson, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task DeletePairAsync(string id, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    // The basic .txt export does not need the server, but it does need a configured
+    // CalExport path; without a valid engine config we cannot run it, so report cancelled.
+    public Task<string?> GenerateTxtAsync(CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
+
+    public Task<bool> GetAutoStartAsync(CancellationToken ct = default) => Task.FromResult(false);
+
+    public Task SetAutoStartAsync(bool enabled, CancellationToken ct = default) => Task.CompletedTask;
+
+    private static InvalidOperationException NotConfigured()
+        => new("Set the server URL in Settings first.");
 }

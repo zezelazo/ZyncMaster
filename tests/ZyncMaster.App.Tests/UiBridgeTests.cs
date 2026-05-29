@@ -32,9 +32,40 @@ public class UiBridgeTests
         public bool? SetPausedValue;
         public Func<Task>? Throw;
 
+        // WS3 capture fields.
+        public int ListAccountsCalls;
+        public int ListPairsCalls;
+        public int GenerateTxtCalls;
+        public int GetAutoStartCalls;
+        public string? ListCalendarsArg;
+        public string? CreatePairArg;
+        public string? UpdatePairArg;
+        public string? DeletePairArg;
+        public string? RunPairNowArg;
+        public string? UnlinkAccountArg;
+        public bool? SetAutoStartValue;
+
         public AppStatus StatusToReturn = new() { Status = SyncStatus.Idle, Paired = true };
         public SyncResult SyncResultToReturn = new() { Push = new SyncPushResult { Created = 2 } };
         public PairingOutcome PairingToReturn = new() { Success = true, Code = "9F2A" };
+
+        public IReadOnlyList<AccountInfo> AccountsToReturn = new List<AccountInfo>
+        {
+            new() { AccountRef = "ref-1", DisplayName = "Personal", IsDefault = true },
+        };
+        public IReadOnlyList<CalendarInfo> CalendarsToReturn = new List<CalendarInfo>
+        {
+            new() { Id = "cal-1", DisplayName = "Calendar", IsDefault = true },
+        };
+        public SyncPair PairToReturn = new() { Id = "p1", Name = "Pair One", State = "active" };
+        public IReadOnlyList<SyncPair> PairsToReturn = new List<SyncPair>
+        {
+            new() { Id = "p1", Name = "Pair One", State = "active" },
+        };
+        public MirrorResult MirrorToReturn = new() { Created = 3, Updated = 1 };
+        public IReadOnlyList<string> AffectedPairIdsToReturn = new List<string> { "p1", "p2" };
+        public string? GenerateTxtPathToReturn = "C:/exports/calendar.txt";
+        public bool AutoStartToReturn = true;
 
         public async Task<AppStatus> GetStatusAsync(CancellationToken ct = default)
         {
@@ -67,6 +98,81 @@ public class UiBridgeTests
         {
             if (Throw != null) await Throw();
             SetPausedValue = paused;
+        }
+
+        public async Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            ListAccountsCalls++;
+            return AccountsToReturn;
+        }
+
+        public async Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            ListCalendarsArg = accountRef;
+            return CalendarsToReturn;
+        }
+
+        public async Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CreatePairArg = requestJson;
+            return PairToReturn;
+        }
+
+        public async Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            ListPairsCalls++;
+            return PairsToReturn;
+        }
+
+        public async Task<SyncPair> UpdatePairAsync(string requestJson, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            UpdatePairArg = requestJson;
+            return PairToReturn;
+        }
+
+        public async Task DeletePairAsync(string id, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            DeletePairArg = id;
+        }
+
+        public async Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            RunPairNowArg = id;
+            return MirrorToReturn;
+        }
+
+        public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            UnlinkAccountArg = accountRef;
+            return AffectedPairIdsToReturn;
+        }
+
+        public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GenerateTxtCalls++;
+            return GenerateTxtPathToReturn;
+        }
+
+        public async Task<bool> GetAutoStartAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GetAutoStartCalls++;
+            return AutoStartToReturn;
+        }
+
+        public async Task SetAutoStartAsync(bool enabled, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            SetAutoStartValue = enabled;
         }
     }
 
@@ -250,5 +356,211 @@ public class UiBridgeTests
         var msg = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]);
         msg.GetProperty("event").GetString().Should().Be("status");
         msg.GetProperty("payload").GetProperty("status").GetString().Should().Be("Syncing");
+    }
+
+    // ---------------- WS3: sync-pair lifecycle actions ----------------
+
+    [Fact]
+    public void ListAccounts_calls_engine_and_replies_ok_with_account_array()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("listAccounts", "a1"));
+
+        engine.ListAccountsCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("a1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetArrayLength().Should().Be(1);
+        payload[0].GetProperty("accountRef").GetString().Should().Be("ref-1");
+    }
+
+    [Fact]
+    public void ListCalendars_passes_accountRef_payload_to_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("listCalendars", "a2", "ref-7"));
+
+        engine.ListCalendarsArg.Should().Be("ref-7");
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload[0].GetProperty("id").GetString().Should().Be("cal-1");
+    }
+
+    [Fact]
+    public void CreatePair_passes_request_json_and_returns_created_pair()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        var json = "{\"name\":\"My pair\",\"intervalMin\":15}";
+        transport.PushInbound(Message("createPair", "a3", json));
+
+        engine.CreatePairArg.Should().Be(json);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("id").GetString().Should().Be("p1");
+    }
+
+    [Fact]
+    public void ListPairs_calls_engine_and_replies_with_pair_array()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("listPairs", "a4"));
+
+        engine.ListPairsCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload[0].GetProperty("name").GetString().Should().Be("Pair One");
+    }
+
+    [Fact]
+    public void UpdatePair_passes_request_json_to_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        var json = "{\"id\":\"p1\",\"state\":\"paused\"}";
+        transport.PushInbound(Message("updatePair", "a5", json));
+
+        engine.UpdatePairArg.Should().Be(json);
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void DeletePair_passes_id_payload_to_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("deletePair", "a6", "p1"));
+
+        engine.DeletePairArg.Should().Be("p1");
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void RunPairNow_passes_id_and_returns_mirror_result()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("runPairNow", "a7", "p1"));
+
+        engine.RunPairNowArg.Should().Be("p1");
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("created").GetInt32().Should().Be(3);
+    }
+
+    [Fact]
+    public void UnlinkAccount_passes_accountRef_and_returns_affected_pair_ids()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("unlinkAccount", "a8", "ref-1"));
+
+        engine.UnlinkAccountArg.Should().Be("ref-1");
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("affectedPairIds").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public void GenerateTxt_calls_engine_and_returns_saved_path()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("generateTxt", "a9"));
+
+        engine.GenerateTxtCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("cancelled").GetBoolean().Should().BeFalse();
+        payload.GetProperty("path").GetString().Should().Be("C:/exports/calendar.txt");
+    }
+
+    [Fact]
+    public void GenerateTxt_cancelled_reports_cancelled_true()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { GenerateTxtPathToReturn = null };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("generateTxt", "a10"));
+
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("cancelled").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void GetAutoStart_calls_engine_and_returns_enabled_flag()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { AutoStartToReturn = true };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("getAutoStart", "a11"));
+
+        engine.GetAutoStartCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("enabled").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void SetAutoStart_parses_payload_and_calls_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("setAutoStart", "a12", "true"));
+
+        engine.SetAutoStartValue.Should().BeTrue();
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void New_pair_action_that_throws_replies_not_ok()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            Throw = () => throw new InvalidOperationException("pair boom"),
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("listPairs", "a13"));
+
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeFalse();
+        reply.GetProperty("error").GetString().Should().Contain("pair boom");
     }
 }

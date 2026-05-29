@@ -1,6 +1,8 @@
-﻿using System.Threading;
+using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using ZyncMaster.App.State;
+using ZyncMaster.Engine;
 
 namespace ZyncMaster.App.Bridge;
 
@@ -14,4 +16,22 @@ public interface IEngineActions
     Task<ZyncMaster.Engine.PairingOutcome> PairAsync(CancellationToken ct = default);
     Task SaveConfigAsync(string configJson, CancellationToken ct = default);
     Task SetPausedAsync(bool paused, CancellationToken ct = default);
+
+    // Sync-pair lifecycle (WS3). Each maps to one server REST call through IPairsClient.
+    Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default);
+    Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default);
+    Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default);
+    Task<SyncPair> UpdatePairAsync(string requestJson, CancellationToken ct = default);
+    Task DeletePairAsync(string id, CancellationToken ct = default);
+    Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default);
+    Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default);
+
+    // Writes a Simple-mode .txt export to a user-chosen path. Returns the saved path,
+    // or null if the user cancelled the save dialog.
+    Task<string?> GenerateTxtAsync(CancellationToken ct = default);
+
+    // Login auto-start toggle, backed by IAutoStartManager.
+    Task<bool> GetAutoStartAsync(CancellationToken ct = default);
+    Task SetAutoStartAsync(bool enabled, CancellationToken ct = default);
 }

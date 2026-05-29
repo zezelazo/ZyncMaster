@@ -116,6 +116,62 @@ public sealed class UiBridge
                 await _engine.SetPausedAsync(paused, ct);
                 return null;
             }
+            // ---------------- WS3: sync-pair lifecycle ----------------
+            case "listAccounts":
+            {
+                var accounts = await _engine.ListAccountsAsync(ct);
+                return JsonSerializer.Serialize(accounts, JsonOptions);
+            }
+            case "listCalendars":
+            {
+                var calendars = await _engine.ListCalendarsAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(calendars, JsonOptions);
+            }
+            case "createPair":
+            {
+                var pair = await _engine.CreatePairAsync(message.Payload ?? "", ct);
+                return JsonSerializer.Serialize(pair, JsonOptions);
+            }
+            case "listPairs":
+            {
+                var pairs = await _engine.ListPairsAsync(ct);
+                return JsonSerializer.Serialize(pairs, JsonOptions);
+            }
+            case "updatePair":
+            {
+                var pair = await _engine.UpdatePairAsync(message.Payload ?? "", ct);
+                return JsonSerializer.Serialize(pair, JsonOptions);
+            }
+            case "deletePair":
+            {
+                await _engine.DeletePairAsync(UnwrapString(message.Payload), ct);
+                return null;
+            }
+            case "runPairNow":
+            {
+                var result = await _engine.RunPairNowAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(result, JsonOptions);
+            }
+            case "unlinkAccount":
+            {
+                var affected = await _engine.UnlinkAccountAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(new { affectedPairIds = affected }, JsonOptions);
+            }
+            case "generateTxt":
+            {
+                var path = await _engine.GenerateTxtAsync(ct);
+                return JsonSerializer.Serialize(new { cancelled = path == null, path }, JsonOptions);
+            }
+            case "getAutoStart":
+            {
+                var enabled = await _engine.GetAutoStartAsync(ct);
+                return JsonSerializer.Serialize(new { enabled }, JsonOptions);
+            }
+            case "setAutoStart":
+            {
+                await _engine.SetAutoStartAsync(ParseBool(message.Payload), ct);
+                return null;
+            }
             // Frameless window controls driven by the custom web title bar (fire-and-forget).
             case "windowMinimize":
                 _windowProvider?.Invoke()?.Minimize();
@@ -140,6 +196,18 @@ public sealed class UiBridge
             return false;
         var trimmed = payload.Trim().Trim('"');
         return bool.TryParse(trimmed, out var b) && b;
+    }
+
+    // A scalar string payload (id / accountRef). The web side stringifies the value, so a
+    // bare token arrives as-is; tolerate an accidentally JSON-quoted value too.
+    private static string UnwrapString(string? payload)
+    {
+        if (payload == null)
+            return "";
+        var trimmed = payload.Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"')
+            trimmed = trimmed[1..^1];
+        return trimmed;
     }
 
     private void Reply(BridgeReply reply)
