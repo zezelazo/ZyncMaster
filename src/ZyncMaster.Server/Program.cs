@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using ZyncMaster.Server;
 using ZyncMaster.Server.Data;
@@ -149,8 +150,24 @@ using (var scope = app.Services.CreateScope())
 
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseDefaultFiles();
-app.UseStaticFiles();
+
+// Web panel static files. The canonical Liquid Glass UI lives at the repo root in ui/ and is
+// the single source of truth shared with the desktop App (which bundles the same folder). We
+// serve it directly from there rather than copying into wwwroot so there is no drift: in a
+// normal run the content root is src/ZyncMaster.Server, so ../../ui resolves to the repo ui/.
+// The same path holds under the WebApplicationFactory test host, which uses the project dir as
+// its content root. If that folder is missing (e.g. a published layout that copied ui/ into
+// wwwroot/) we fall back to the default web root so the panel still serves.
+var uiRoot = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "ui"));
+var panelFileProvider = Directory.Exists(uiRoot)
+    ? new PhysicalFileProvider(uiRoot)
+    : app.Environment.WebRootFileProvider;
+
+var defaultFilesOptions = new DefaultFilesOptions { FileProvider = panelFileProvider };
+defaultFilesOptions.DefaultFileNames.Clear();
+defaultFilesOptions.DefaultFileNames.Add("index.html");
+app.UseDefaultFiles(defaultFilesOptions);
+app.UseStaticFiles(new StaticFileOptions { FileProvider = panelFileProvider });
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
