@@ -65,14 +65,17 @@ public class PanelUserJourneyTests
         afterReactivate.GetProperty("state").GetString().Should().Be("active");
         afterReactivate.GetProperty("intervalMin").GetInt32().Should().Be(30);
 
-        // 8. Run the pair. The recording reader yields two events; the writer mirrors them into
-        //    the destination account and the result is recorded on the pair.
+        // 8. Run the pair from the panel. The recording reader yields two events; the writer
+        //    mirrors them into the destination account and the result is recorded on the pair.
         h.ReaderWindow.AddRange(new[] { E2EHarness.Event("a"), E2EHarness.Event("b") });
         var run = await panel.PostAsync($"/api/pairs/{pairId}/run", null);
 
-        // /run is api-key gated (device surface). A cookie client must be rejected: the panel
-        // does NOT run pairs itself — it manages them; the device/scheduler runs them.
-        run.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        // /run accepts the cookie scheme too (the panel's per-pair "Sync now"): a signed-in
+        // cookie client succeeds rather than being kicked to the sign-in gate. The pair is
+        // loaded user-scoped, so this is safe.
+        run.StatusCode.Should().Be(HttpStatusCode.OK);
+        using (var runDoc = JsonDocument.Parse(await run.Content.ReadAsStringAsync()))
+            runDoc.RootElement.GetProperty("created").GetInt32().Should().Be(2);
 
         // 9. Delete the pair -> gone (204), and a subsequent GET is 404.
         var del = await panel.DeleteAsync($"/api/pairs/{pairId}");

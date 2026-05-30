@@ -10,6 +10,7 @@
 // data — or, in the native shell, the host-supplied status — changed.
 
 import { icon, logoSvg, hydrateIcons } from './icons.js';
+import { webRequestFor, statusFromPairs } from './web-transport.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -181,50 +182,23 @@ const Bridge = (() => {
       return text ? safeParse(text) : null;
     };
 
-    switch (action) {
-      case 'getStatus': {
-        // Compose an AppStatus-like object from /api/me (+ /api/pairs for an overall state)
-        // that the existing applyNativeStatus()/UI already understand.
-        const me = await req('GET', '/api/me');
-        let pairs = [];
-        try { pairs = await req('GET', '/api/pairs'); } catch (_) { pairs = []; }
-        const list = Array.isArray(pairs) ? pairs : [];
-        const active = list.filter((p) => p && p.state === 'active');
-        const status = list.length === 0 ? 'Idle'
-          : active.length === 0 ? 'Paused' : 'Idle';
-        return {
-          paired: true,                 // a signed-in panel session is the web "paired" state
-          signedIn: true,
-          email: me && me.email,
-          displayName: me && me.displayName,
-          status,
-          pairCount: list.length,
-        };
-      }
-      case 'listPairs':       return req('GET', '/api/pairs');
-      case 'createPair':      return req('POST', '/api/pairs', data);
-      case 'updatePair': {
-        // The bridge contract passes {id, ...patch}; REST patches /api/pairs/{id} with the rest.
-        const { id, ...patch } = data || {};
-        return req('PATCH', `/api/pairs/${encodeURIComponent(id)}`, patch);
-      }
-      case 'deletePair':      return req('DELETE', `/api/pairs/${encodeURIComponent(data)}`);
-      case 'runPairNow':      return req('POST', `/api/pairs/${encodeURIComponent(data)}/run`);
-      case 'listAccounts':    return req('GET', '/api/accounts');
-      case 'listCalendars':   return req('GET', `/api/accounts/${encodeURIComponent(data)}/calendars`);
-      case 'unlinkAccount':   return req('DELETE', `/api/accounts/${encodeURIComponent(data)}`);
-
-      // Device-only actions: no meaning in a browser panel. Inert (the UI hides their entry
-      // points in web mode, so these should never actually be called).
-      case 'getAutoStart':    return { enabled: false };
-      case 'setAutoStart':
-      case 'generateTxt':
-      case 'saveConfig':
-      case 'pair':
-      case 'syncNow':         return null;
-
-      default: throw new Error(`web transport: unmapped action "${action}"`);
+    // getStatus is composite: compose an AppStatus-like object from /api/me (+ /api/pairs for
+    // an overall state) that the existing applyNativeStatus()/UI already understand.
+    if (action === 'getStatus') {
+      const me = await req('GET', '/api/me');
+      let pairs = [];
+      try { pairs = await req('GET', '/api/pairs'); } catch (_) { pairs = []; }
+      return statusFromPairs(me, pairs);
     }
+
+    // Everything else maps through the pure action->REST table. A null mapping is a device-
+    // only action that is inert in the browser panel (getAutoStart reports disabled; the
+    // rest are no-ops) — the UI hides their entry points in web mode anyway.
+    const mapped = webRequestFor(action, data);
+    if (mapped === null) {
+      return action === 'getAutoStart' ? { enabled: false } : null;
+    }
+    return req(mapped.method, mapped.path, mapped.body);
   }
 
   function call(action, payload, timeoutMs) {
