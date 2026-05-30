@@ -1443,12 +1443,17 @@ function rerender() {
 // replaying the entrance animation (so cards don't flicker each frame).
 function rerenderInPlace() {
   if (state.view !== 'calendar' && state.view !== 'home') return;
+  // The sign-in gate owns the screen: a stale background repaint (e.g. a late loadPairs)
+  // must never paint the dashboard over the sign-in card and leave the nav hidden.
+  if (Bridge.webPanel && webAuth.resolved && !webAuth.signedIn) return;
   const root = $('#view');
   if (!root) return;
   const prevScroll = root.scrollTop;   // a tick/refresh repaint must not snap the user back to the top
   root.replaceChildren();
   if (state.view === 'calendar') renderCalendar(root); else renderHome(root);
   root.scrollTop = prevScroll;
+  const nav = $('#navbar');
+  if (nav) nav.hidden = false;          // a dashboard view is up → the bottom nav must be visible
   renderNav();
 }
 
