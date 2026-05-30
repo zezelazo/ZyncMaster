@@ -58,6 +58,38 @@ public class HttpContextCurrentUserAccessorTests
     }
 
     [Fact]
+    public void Empty_override_falls_through_to_the_claim()
+    {
+        // An override item present but empty must NOT win — resolution falls through to the claim.
+        var ctx = ContextWithUserClaim("claim-user");
+        ctx.Items[HttpContextCurrentUserAccessor.OverrideItemKey] = "";
+        var sut = new HttpContextCurrentUserAccessor(new FixedHttpContextAccessor { HttpContext = ctx });
+
+        sut.UserId.Should().Be("claim-user");
+    }
+
+    [Fact]
+    public void Non_string_override_is_ignored_and_claim_wins()
+    {
+        var ctx = ContextWithUserClaim("claim-user");
+        ctx.Items[HttpContextCurrentUserAccessor.OverrideItemKey] = 42; // not a string
+        var sut = new HttpContextCurrentUserAccessor(new FixedHttpContextAccessor { HttpContext = ctx });
+
+        sut.UserId.Should().Be("claim-user");
+    }
+
+    [Fact]
+    public void Empty_claim_falls_through_to_default()
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
+            new[] { new Claim(HttpContextCurrentUserAccessor.UserIdClaimType, "") }, "Test"));
+        var sut = new HttpContextCurrentUserAccessor(new FixedHttpContextAccessor { HttpContext = ctx });
+
+        sut.UserId.Should().Be(DefaultCurrentUserAccessor.DefaultUserId);
+    }
+
+    [Fact]
     public void Singleton_instance_resolves_different_users_per_ambient_context()
     {
         // Proves the accessor reads the ambient context PER CALL rather than capturing it,
