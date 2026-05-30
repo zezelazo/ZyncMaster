@@ -9,7 +9,7 @@
 // written with textContent, so there is no injection surface even if the mock
 // data — or, in the native shell, the host-supplied status — changed.
 
-import { icon, logoSvg, hydrateIcons } from './icons.js';
+import { icon, logoSvg, microsoftLogo, hydrateIcons } from './icons.js';
 import { webRequestFor, statusFromPairs } from './web-transport.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -1164,10 +1164,10 @@ function renderSignIn(root) {
     el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
     el('div', { class: 'pair-title', text: 'Sign in to Zync Master' }),
     el('div', { class: 'pair-sub', text: 'Connect your Microsoft account to manage your calendar sync pairs from the web panel.' }),
-    el('button', { class: 'btn btn--primary', style: 'align-self:stretch',
+    el('button', { class: 'btn btn--primary ms-signin', style: 'align-self:stretch',
       onclick: () => { window.location.href = '/connect?returnTo=/'; } },
-      el('div', { class: 'provider-tile__logo', dataset: { tone: 'azure' }, style: 'width:18px;height:18px;border-radius:5px;font-size:11px', text: 'M' }),
-      el('span', { text: 'Sign in with Microsoft' })));
+      el('span', { class: 'ms-signin__logo', html: microsoftLogo({ size: 18 }) }),
+      el('span', { class: 'ms-signin__label', text: 'Sign in with Microsoft' })));
   root.append(card);
 }
 
@@ -1226,8 +1226,10 @@ function renderPairing(root) {
       el('div', { class: 'pair-title', text: 'Name this device' }),
       el('div', { class: 'pair-sub', text: 'So you can recognise it from other devices in your account.' }),
       nameInput,
-      el('button', { class: 'btn btn--primary', style: 'align-self:stretch', onclick: () => { if (Bridge.available) Bridge.call('pair', null, 210000).catch(() => {}); pairing.step = 1; rerender(); } },
-        el('span', { text: 'Continue' }), iconEl('arrowright', 14, 1.8))));
+      el('div', { style: 'display:flex;gap:10px;align-self:stretch' },
+        el('button', { class: 'btn btn--ghost', style: 'flex:none', text: 'Cancel', onclick: () => { pairing.step = 0; navigate('home'); } }),
+        el('button', { class: 'btn btn--primary', style: 'flex:1', onclick: () => { if (Bridge.available) Bridge.call('pair', null, 210000).catch(() => {}); pairing.step = 1; rerender(); } },
+          el('span', { text: 'Continue' }), iconEl('arrowright', 14, 1.8)))));
     clearTimeout(pairing.timer);
   } else if (pairing.step === 1) {
     root.append(el('div', { class: 'glass glass--card pair-card', style: 'margin-top:14px' },

@@ -108,6 +108,21 @@ export function logoSvg({ size = 18, mono = false } = {}) {
   );
 }
 
+// microsoftLogo({ size }) — the official Microsoft 4-square brand mark. Unlike the line
+// icons above, this is a fixed-color brand logo (not currentColor): top-left red, top-right
+// green, bottom-left blue, bottom-right yellow, with a ~2px gap between the squares on a
+// 23x23 grid. Returned as a full <svg> string for use beside "Sign in with Microsoft".
+export function microsoftLogo({ size = 18 } = {}) {
+  return (
+    `<svg viewBox="0 0 23 23" width="${size}" height="${size}" aria-hidden="true">` +
+    '<rect x="1" y="1" width="10" height="10" fill="#F25022"/>' +
+    '<rect x="12" y="1" width="10" height="10" fill="#7FBA00"/>' +
+    '<rect x="1" y="12" width="10" height="10" fill="#00A4EF"/>' +
+    '<rect x="12" y="12" width="10" height="10" fill="#FFB900"/>' +
+    '</svg>'
+  );
+}
+
 // icon(name, opts) — returns the SVG markup string for a named line icon.
 // Names are case-insensitive. Unknown names return an empty string.
 export function icon(name, { size = 18, stroke = 1.6, cls = '' } = {}) {
