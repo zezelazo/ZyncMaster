@@ -84,6 +84,9 @@ public class ConnectEndpointsTests
         location.Should().Contain("response_type=code");
         location.Should().Contain("scope");
         location.Should().Contain("state=");
+        // Multi-account: forces Entra to show the account chooser every time instead of
+        // silently reusing the first signed-in session.
+        location.Should().Contain("prompt=select_account");
 
         resp.Headers.Contains("Set-Cookie").Should().BeTrue();
         resp.Headers.GetValues("Set-Cookie")

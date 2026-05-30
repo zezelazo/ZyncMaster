@@ -47,6 +47,10 @@ public static class ConnectEndpoints
                 $"&redirect_uri={Uri.EscapeDataString(options.RedirectUri)}" +
                 "&response_mode=query" +
                 $"&scope={Uri.EscapeDataString(options.Scopes)}" +
+                // Force the account picker on every sign-in. Without this Entra silently reuses
+                // the first signed-in session, so users with several Microsoft accounts can never
+                // choose which one to connect.
+                "&prompt=select_account" +
                 $"&state={Uri.EscapeDataString(state)}";
 
             return Results.Redirect(authorizeUrl);
