@@ -1,0 +1,15 @@
+{
+  "name": "zyncmaster-e2e-playwright",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Best-effort browser UI e2e for the ZyncMaster Server web panel. Manual / out-of-band: NOT part of the .NET test run or CI.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
