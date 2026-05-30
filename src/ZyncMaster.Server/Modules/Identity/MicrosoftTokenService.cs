@@ -60,8 +60,11 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new AuthenticationFailedException(
-                $"Microsoft token endpoint returned {(int)response.StatusCode}: {body}");
+            // SECURITY (M1): never embed the raw token-endpoint response body in the thrown
+            // message — it can carry token material and leaks into logs/telemetry. Surface
+            // only the status code plus, at most, the OAuth error/error_description fields
+            // (which by spec are non-secret diagnostics), never any *_token value.
+            throw new AuthenticationFailedException(BuildFailureMessage(response.StatusCode, body));
         }
 
         using var doc = JsonDocument.Parse(body);
@@ -90,6 +93,39 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
             Email = identity.Email,
             DisplayName = identity.DisplayName,
         };
+    }
+
+    // Builds a non-secret failure message from the token-endpoint response. Tries to parse
+    // the standard OAuth "error" / "error_description" fields out of a JSON body and appends
+    // only those; if the body is not parseable JSON or carries no such fields, the message is
+    // just the status code. The raw body is NEVER included (it may contain *_token values).
+    private static string BuildFailureMessage(System.Net.HttpStatusCode status, string body)
+    {
+        var prefix = $"Microsoft token endpoint returned {(int)status}";
+        if (string.IsNullOrWhiteSpace(body))
+            return prefix + ".";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return prefix + ".";
+
+            var error = GetString(root, "error");
+            var description = GetString(root, "error_description");
+            if (string.IsNullOrEmpty(error) && string.IsNullOrEmpty(description))
+                return prefix + ".";
+
+            var detail = string.IsNullOrEmpty(description)
+                ? error
+                : (string.IsNullOrEmpty(error) ? description : $"{error}: {description}");
+            return $"{prefix} ({detail}).";
+        }
+        catch (JsonException)
+        {
+            return prefix + ".";
+        }
     }
 
     private static string? GetString(JsonElement root, string name) =>

@@ -132,17 +132,64 @@ public class MicrosoftTokenServiceTests
     }
 
     [Fact]
-    public async Task NonSuccess_throws_AuthenticationFailedException_with_body()
+    public async Task NonSuccess_throws_with_status_and_oauth_error_but_not_raw_body()
     {
         var handler = new CapturingHandler(new HttpResponseMessage(HttpStatusCode.BadRequest)
         {
-            Content = new StringContent("{\"error\":\"invalid_grant\"}"),
+            Content = new StringContent(
+                "{\"error\":\"invalid_grant\",\"error_description\":\"AADSTS70008\"}"),
         });
         var service = BuildService(handler);
 
         var act = async () => await service.ExchangeCodeAsync("bad-code");
 
         var ex = await act.Should().ThrowAsync<AuthenticationFailedException>();
+        // Status code is surfaced for diagnostics.
+        ex.Which.Message.Should().Contain("400");
+        // The non-secret OAuth error fields may be surfaced.
         ex.Which.Message.Should().Contain("invalid_grant");
+        ex.Which.Message.Should().Contain("AADSTS70008");
+    }
+
+    [Fact]
+    public async Task NonSuccess_message_never_contains_token_material()
+    {
+        // A hostile / misconfigured token endpoint that echoes token-like material in a
+        // non-success body MUST NOT have that material leak into the exception message.
+        var handler = new CapturingHandler(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(
+                "{\"error\":\"invalid_grant\",\"access_token\":\"SECRET_AT\"," +
+                "\"refresh_token\":\"SECRET_RT\",\"id_token\":\"SECRET_IT\"}"),
+        });
+        var service = BuildService(handler);
+
+        var act = async () => await service.ExchangeCodeAsync("bad-code");
+
+        var ex = await act.Should().ThrowAsync<AuthenticationFailedException>();
+        var message = ex.Which.Message;
+        message.Should().Contain("400");
+        message.Should().NotContain("SECRET_AT");
+        message.Should().NotContain("SECRET_RT");
+        message.Should().NotContain("SECRET_IT");
+        message.Should().NotContain("access_token");
+        message.Should().NotContain("refresh_token");
+        message.Should().NotContain("id_token");
+    }
+
+    [Fact]
+    public async Task NonSuccess_with_nonjson_body_throws_status_only()
+    {
+        var handler = new CapturingHandler(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent("upstream proxy error: token=LEAK"),
+        });
+        var service = BuildService(handler);
+
+        var act = async () => await service.ExchangeCodeAsync("bad-code");
+
+        var ex = await act.Should().ThrowAsync<AuthenticationFailedException>();
+        ex.Which.Message.Should().Contain("500");
+        ex.Which.Message.Should().NotContain("LEAK");
     }
 }
