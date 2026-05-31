@@ -11,6 +11,13 @@ public sealed class UserRow
     public string? Email { get; set; }
     public string? DisplayName { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }
+
+    // Canonical account-level email across all linked identity logins. Distinct from the
+    // legacy per-(Provider,Subject) Email above. Required.
+    public string PrimaryEmail { get; set; } = "";
+
+    // Subscription plan slug; null means "everything unlocked" (no plan gating).
+    public string? Plan { get; set; }
 }
 
 public sealed class ConnectedAccountRow

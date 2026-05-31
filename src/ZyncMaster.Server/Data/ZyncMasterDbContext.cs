@@ -19,6 +19,7 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<PendingPairingRow> PendingPairings => Set<PendingPairingRow>();
     public DbSet<SyncPairRow> SyncPairs => Set<SyncPairRow>();
     public DbSet<SyncStateRow> SyncStates => Set<SyncStateRow>();
+    public DbSet<IdentityLoginRow> IdentityLogins => Set<IdentityLoginRow>();
 
     // Data Protection key ring lives in the DB so keys survive restarts and are shared
     // across instances (see AddDataProtection().PersistKeysToDbContext in Program.cs).
@@ -35,6 +36,8 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.Subject).HasMaxLength(256).IsRequired();
             e.Property(x => x.Email).HasMaxLength(256);
             e.Property(x => x.DisplayName).HasMaxLength(256);
+            e.Property(x => x.PrimaryEmail).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Plan).HasMaxLength(64);
             e.HasIndex(x => new { x.Provider, x.Subject }).IsUnique();
 
             // Seed the fixed single-user so the suite keeps single-user behavior pre-WS-B.
@@ -46,6 +49,8 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
                 Email = null,
                 DisplayName = "Default",
                 CreatedUtc = DateTimeOffset.UnixEpoch,
+                PrimaryEmail = "",
+                Plan = null,
             });
         });
 
@@ -107,6 +112,23 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
             e.Property(x => x.DeviceId).HasMaxLength(64).IsRequired();
             e.HasIndex(x => new { x.UserId, x.DeviceId }).IsUnique();
+        });
+
+        b.Entity<IdentityLoginRow>(e =>
+        {
+            e.ToTable("IdentityLogins");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Provider).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ProviderSubject).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Email).HasMaxLength(256).IsRequired();
+            e.HasIndex(x => new { x.Provider, x.ProviderSubject }).IsUnique();
+            e.HasIndex(x => new { x.Email, x.EmailVerified });
+            e.HasOne<UserRow>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
