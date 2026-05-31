@@ -6,6 +6,15 @@ public sealed class ServerOptions
     public string Authority { get; set; } = "https://login.microsoftonline.com/common/oauth2/v2.0";
     public string RedirectUri { get; set; } = "";
     public string Scopes { get; set; } = "offline_access Calendars.ReadWrite User.Read";
+
+    // Identity (sign-in) OAuth scopes. Distinct from calendar Scopes above: this flow only
+    // proves who the user is (openid email profile), it NEVER requests calendar access nor
+    // stores a calendar refresh token. Connecting a calendar is a separate, later flow.
+    public string IdentityScopes { get; set; } = "openid email profile";
+
+    // Redirect URI for the identity OAuth callback. Points at
+    // /identity/connect/callback/microsoft. Empty by default; set per-environment.
+    public string IdentityRedirectUri { get; set; } = "";
     public int SyncWindowDays { get; set; } = 14;
     public string ExtendedPropertyGuid { get; set; } = "6f0e7f2c-3b1a-4e8d-9c2f-7a5b1d9e4c30";
 

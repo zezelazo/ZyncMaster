@@ -249,6 +249,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapDeviceEndpoints();
 app.MapConnectEndpoints();
+app.MapIdentityConnectEndpoints();
 app.MapSyncEndpoints();
 app.MapPanelEndpoints();
 app.MapPairEndpoints();
