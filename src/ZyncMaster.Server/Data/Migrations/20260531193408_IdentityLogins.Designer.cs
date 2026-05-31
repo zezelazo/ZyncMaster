@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ZyncMaster.Server.Data;
 
@@ -11,9 +12,11 @@ using ZyncMaster.Server.Data;
 namespace ZyncMaster.Server.Data.Migrations
 {
     [DbContext(typeof(ZyncMasterDbContext))]
-    partial class ZyncMasterDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260531193408_IdentityLogins")]
+    partial class IdentityLogins
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -121,35 +124,6 @@ namespace ZyncMaster.Server.Data.Migrations
                     b.ToTable("Devices", (string)null);
                 });
 
-            modelBuilder.Entity("ZyncMaster.Server.Data.IdentityAccessTokenRow", b =>
-                {
-                    b.Property<string>("Jti")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset>("IssuedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.HasKey("Jti");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("IdentityAccessTokens", (string)null);
-                });
-
             modelBuilder.Entity("ZyncMaster.Server.Data.IdentityLoginRow", b =>
                 {
                     b.Property<string>("Id")
@@ -192,84 +166,6 @@ namespace ZyncMaster.Server.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("IdentityLogins", (string)null);
-                });
-
-            modelBuilder.Entity("ZyncMaster.Server.Data.IdentityRefreshTokenRow", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset>("IssuedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique();
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("IdentityRefreshTokens", (string)null);
-                });
-
-            modelBuilder.Entity("ZyncMaster.Server.Data.MagicLinkRow", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<DateTimeOffset?>("ConsumedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("Email")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("Nonce")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)");
-
-                    b.Property<int>("Port")
-                        .HasColumnType("int");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Email");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique();
-
-                    b.ToTable("MagicLinks", (string)null);
                 });
 
             modelBuilder.Entity("ZyncMaster.Server.Data.PendingPairingRow", b =>
@@ -448,25 +344,7 @@ namespace ZyncMaster.Server.Data.Migrations
                         });
                 });
 
-            modelBuilder.Entity("ZyncMaster.Server.Data.IdentityAccessTokenRow", b =>
-                {
-                    b.HasOne("ZyncMaster.Server.Data.UserRow", null)
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("ZyncMaster.Server.Data.IdentityLoginRow", b =>
-                {
-                    b.HasOne("ZyncMaster.Server.Data.UserRow", null)
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("ZyncMaster.Server.Data.IdentityRefreshTokenRow", b =>
                 {
                     b.HasOne("ZyncMaster.Server.Data.UserRow", null)
                         .WithMany()

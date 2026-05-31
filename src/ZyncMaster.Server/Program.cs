@@ -1,9 +1,12 @@
-﻿using Microsoft.AspNetCore.DataProtection;
+﻿using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using ZyncMaster.Server;
 using ZyncMaster.Server.Data;
+using ZyncMaster.Server.Infrastructure.Email;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -58,6 +61,40 @@ builder.Services.AddSingleton<IDeviceStore, EfDeviceStore>();
 builder.Services.AddSingleton<ISyncStateStore, EfSyncStateStore>();
 builder.Services.AddSingleton<ISecretProvider, ConfigurationSecretProvider>();
 builder.Services.AddSingleton<IConnectedAccountStore, EfConnectedAccountStore>();
+
+// System clock seam shared by the identity primitives (overridden in tests for determinism).
+builder.Services.AddSingleton(TimeProvider.System);
+
+// Identity session tokens (internal Server<->App bearer) + one-time loopback handles.
+// Both are singletons: the token service is stateless over the singleton DbContextFactory,
+// and the handle store holds its in-memory map for the lifetime of the (single) instance.
+builder.Services.AddSingleton<IIdentityTokenService, DataProtectionIdentityTokenService>();
+builder.Services.AddSingleton<IIdentityHandleStore, InMemoryIdentityHandleStore>();
+
+// Outbound email seam for the magic-link flow. The dev/test default logs and sends nothing;
+// the real SendGrid transport (plan deferred §4) is a one-line swap here in production.
+builder.Services.AddSingleton<IEmailSender, LoggingEmailSender>();
+
+// Per-IP rate limiter for the magic-link POST (plan A-6). A fixed window keyed on the remote IP
+// rejects raw endpoint abuse with 429. This is anti-abuse only — it does not branch on whether
+// the email exists, so it leaks no user-existence information. The per-EMAIL limit (silent, in
+// the endpoint) is what stays constant-time for anti-enumeration.
+builder.Services.AddRateLimiter(rl =>
+{
+    rl.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    rl.AddPolicy(IdentityMagicLinkEndpoints.PerIpRateLimitPolicy, context =>
+    {
+        var opts = context.RequestServices.GetRequiredService<IOptions<ServerOptions>>().Value;
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = opts.MagicLinkMaxPerIp,
+            Window = TimeSpan.FromMinutes(opts.MagicLinkRateLimitWindowMinutes),
+            QueueLimit = 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+        });
+    });
+});
 builder.Services.AddScoped<DeviceService>();
 builder.Services.AddScoped<SyncService>();
 
@@ -176,6 +213,10 @@ if (!app.Environment.IsDevelopment())
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Rate limiter middleware. Endpoints opt in via RequireRateLimiting; only the magic-link POST
+// does today. Placed after auth so the limiter sees the resolved connection.
+app.UseRateLimiter();
+
 // Static files. Two surfaces are served:
 //
 //   /      -> the marketing LANDING / launcher (repo-root web/). It owns the site root.
@@ -240,6 +281,8 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapDeviceEndpoints();
 app.MapConnectEndpoints();
+app.MapIdentityConnectEndpoints();
+app.MapIdentityMagicLinkEndpoints();
 app.MapSyncEndpoints();
 app.MapPanelEndpoints();
 app.MapPairEndpoints();

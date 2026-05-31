@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ZyncMaster.Server.Data;
 
@@ -11,9 +12,11 @@ using ZyncMaster.Server.Data;
 namespace ZyncMaster.Server.Data.Migrations
 {
     [DbContext(typeof(ZyncMasterDbContext))]
-    partial class ZyncMasterDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260531194947_IdentityTokens")]
+    partial class IdentityTokens
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -227,49 +230,6 @@ namespace ZyncMaster.Server.Data.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("IdentityRefreshTokens", (string)null);
-                });
-
-            modelBuilder.Entity("ZyncMaster.Server.Data.MagicLinkRow", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<DateTimeOffset?>("ConsumedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("Email")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("Nonce")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)");
-
-                    b.Property<int>("Port")
-                        .HasColumnType("int");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Email");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique();
-
-                    b.ToTable("MagicLinks", (string)null);
                 });
 
             modelBuilder.Entity("ZyncMaster.Server.Data.PendingPairingRow", b =>

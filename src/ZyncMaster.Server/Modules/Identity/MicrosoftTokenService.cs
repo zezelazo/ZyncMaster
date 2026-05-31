@@ -34,6 +34,25 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
         return PostAsync(form, fallbackRefreshToken: null, ct);
     }
 
+    public Task<TokenResult> ExchangeIdentityCodeAsync(string code, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(code);
+        // Identity exchange: request only the identity scopes against the identity redirect
+        // URI. We never persist the returned refresh token — pass fallbackRefreshToken: null
+        // so the result simply carries whatever the endpoint returned (we only read the
+        // id_token identity claims downstream).
+        var form = new Dictionary<string, string>
+        {
+            ["client_id"] = _options.MicrosoftClientId,
+            ["client_secret"] = _secret.GetMicrosoftClientSecret(),
+            ["grant_type"] = "authorization_code",
+            ["code"] = code,
+            ["redirect_uri"] = _options.IdentityRedirectUri,
+            ["scope"] = _options.IdentityScopes,
+        };
+        return PostAsync(form, fallbackRefreshToken: null, ct);
+    }
+
     public Task<TokenResult> RefreshAsync(string refreshToken, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(refreshToken);

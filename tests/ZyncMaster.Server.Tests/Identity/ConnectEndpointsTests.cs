@@ -33,6 +33,9 @@ public class ConnectEndpointsTests
                 DisplayName = Name,
             });
 
+        public Task<TokenResult> ExchangeIdentityCodeAsync(string code, CancellationToken ct = default) =>
+            ExchangeCodeAsync(code, ct);
+
         public Task<TokenResult> RefreshAsync(string refreshToken, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }

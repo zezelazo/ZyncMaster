@@ -56,6 +56,9 @@ public class CrossUserIsolationTests
                 DisplayName = DisplayName,
             });
 
+        public Task<TokenResult> ExchangeIdentityCodeAsync(string code, CancellationToken ct = default) =>
+            ExchangeCodeAsync(code, ct);
+
         public Task<TokenResult> RefreshAsync(string refreshToken, CancellationToken ct = default) =>
             Task.FromResult(new TokenResult
             {
