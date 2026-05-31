@@ -126,6 +126,7 @@ builder.Services.AddSingleton<Func<string?, MicrosoftGraphProvider>>(sp => accou
 });
 builder.Services.AddSingleton<ProviderRegistry>();
 builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
+builder.Services.AddSingleton<ISyncRunLock, EfSyncRunLock>();
 
 // ApiKey stays the default scheme so device endpoints (/api/*) keep working as before;
 // the Cookie scheme is added alongside it for the human panel. Cookies are HttpOnly,

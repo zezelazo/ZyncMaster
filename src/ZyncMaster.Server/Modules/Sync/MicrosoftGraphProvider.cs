@@ -58,7 +58,8 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
             Updated = outcome.Updated,
             Deleted = outcome.Deleted,
             Skipped = outcome.Skipped,
-            Failures = outcome.Failures.ToList(),
+            Failures = outcome.Failures.Select(f => f.ToString()).ToList(),
+            Partial = outcome.Partial,
         };
     }
 
@@ -88,7 +89,19 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
         while (!string.IsNullOrEmpty(url))
         {
             var json = await GetJsonAsync(url, ct).ConfigureAwait(false);
-            var arr = json["value"] as JArray ?? new JArray();
+
+            // Every page of a Graph collection — first and every nextLink page — carries a
+            // "value" array, even the last page (`value: []`, no nextLink). A 2xx page with
+            // NO "value" key is malformed/truncated, NOT end-of-pages: silently treating it
+            // as "no more data" would return a short source set, and the downstream mirror
+            // would then sweep (delete) the events that belong to the pages we never read.
+            // Abort the read with a transient error so /run and /api/sync stop BEFORE the
+            // destructive mirror. `value: []` is the legitimate empty/last page and is fine.
+            if (json["value"] is not JArray arr)
+                throw new GraphRequestException(
+                    $"Graph calendarView page returned a 2xx response with no 'value' " +
+                    $"collection; treating as a truncated read rather than end-of-pages. URL={url}",
+                    isTransient: true);
 
             foreach (var ev in arr)
             {
@@ -185,6 +198,9 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
         }
     }
 
+    private static bool IsTransientStatus(int status)
+        => status == 429 || status == 500 || status == 502 || status == 503 || status == 504 || status == 408;
+
     private async Task<JObject> GetJsonAsync(string url, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -197,8 +213,30 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
 
         if (!response.IsSuccessStatusCode)
             throw new GraphRequestException(
-                $"Graph calendarView read failed: {(int)response.StatusCode} {response.ReasonPhrase}. URL={url}");
+                $"Graph calendarView read failed: {(int)response.StatusCode} {response.ReasonPhrase}. URL={url}",
+                // 429/5xx/408/timeout are retryable; anything else is a hard failure. We mark
+                // the retryable band transient so the read aborts the run cleanly (Partial)
+                // rather than letting an incomplete read flow into the sweep.
+                isTransient: IsTransientStatus((int)response.StatusCode));
 
-        return string.IsNullOrEmpty(body) ? new JObject() : JObject.Parse(body);
+        // A 2xx with an empty or non-JSON body is a malformed/truncated read, not a valid
+        // empty page (a real empty page is `{ "value": [] }`). Treat it as transient so the
+        // paginated read aborts BEFORE the mirror instead of returning a short source set.
+        if (string.IsNullOrEmpty(body))
+            throw new GraphRequestException(
+                $"Graph calendarView returned a 2xx response with an empty body; " +
+                $"treating as a truncated read. URL={url}",
+                isTransient: true);
+
+        try
+        {
+            return JObject.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            throw new GraphRequestException(
+                $"Graph calendarView returned a 2xx response that did not parse as JSON; " +
+                $"treating as a truncated read. URL={url}", ex, isTransient: true);
+        }
     }
 }

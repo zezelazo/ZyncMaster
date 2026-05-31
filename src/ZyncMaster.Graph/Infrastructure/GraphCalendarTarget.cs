@@ -59,7 +59,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
             "me/calendars?$select=id,name,isDefaultCalendar,owner", null, ct).ConfigureAwait(false);
 
         var list  = new List<CalendarTargetInfo>();
-        var arr   = json["value"] as JArray ?? new JArray();
+        var arr   = RequireCollection(json, "me/calendars");
         foreach (var item in arr)
         {
             list.Add(new CalendarTargetInfo
@@ -120,8 +120,11 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                 $"&$top=1";
 
             var json = await SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
-            var arr  = json["value"] as JArray;
-            if (arr == null || arr.Count == 0) continue;
+            // A 2xx with no "value" key is malformed, not "event not found". Treating it as
+            // not-found would make us create a duplicate of an event that already exists.
+            // RequireCollection throws a transient so the run aborts cleanly instead.
+            var arr  = RequireCollection(json, url);
+            if (arr.Count == 0) continue;
 
             var ev   = arr[0]!;
             var id   = ev["id"]?.Value<string>() ?? "";
@@ -215,7 +218,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         while (!string.IsNullOrEmpty(url))
         {
             var json = await SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
-            var arr  = json["value"] as JArray ?? new JArray();
+            var arr  = RequireCollection(json, url);
 
             foreach (var ev in arr)
             {
@@ -351,7 +354,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                 response?.Dispose();
                 if (attempt >= maxAttempts)
                     throw new GraphRequestException(
-                        $"Graph transport error after {attempt} attempts: {ex.Message}. URL={url}", ex);
+                        $"Graph transport error after {attempt} attempts: {ex.Message}. URL={url}", ex, isTransient: true);
                 await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct).ConfigureAwait(false);
                 attempt++;
                 continue;
@@ -363,7 +366,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                 response?.Dispose();
                 if (attempt >= maxAttempts)
                     throw new GraphRequestException(
-                        $"Graph request timed out after {attempt} attempts. URL={url}", ex);
+                        $"Graph request timed out after {attempt} attempts. URL={url}", ex, isTransient: true);
                 await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct).ConfigureAwait(false);
                 attempt++;
                 continue;
@@ -402,7 +405,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                     if (attempt >= maxAttempts)
                         throw new GraphRequestException(
                             $"Graph transient error after {attempt} attempts: {status} {response.ReasonPhrase}. " +
-                            $"URL={url}, Body={Truncate(body, 200)}");
+                            $"URL={url}, Body={Truncate(body, 200)}", isTransient: true);
 
                     var delay = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(2 * attempt);
                     await Task.Delay(delay, ct).ConfigureAwait(false);
@@ -415,12 +418,51 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                         $"Graph request failed: {status} {response.ReasonPhrase}. " +
                         $"URL={url}, Body={Truncate(body, 500)}");
 
+                // An empty 2xx body is legitimate for DELETE/PATCH (204 No Content) and is
+                // not a collection response, so callers that expect a collection guard the
+                // "value" key themselves. Return an empty object for the no-content case.
                 if (string.IsNullOrEmpty(body))
                     return new JObject();
 
-                return JObject.Parse(body);
+                // A 2xx that does not parse as JSON is a malformed/truncated response, not a
+                // real payload. Treat it as a transient read error so the caller aborts the
+                // run (and the destructive sweep never sees an incomplete picture) instead of
+                // surfacing a raw JsonReaderException that would classify as Fatal.
+                try
+                {
+                    return JObject.Parse(body);
+                }
+                catch (JsonException ex)
+                {
+                    throw new GraphRequestException(
+                        $"Graph returned a 2xx response that did not parse as JSON. " +
+                        $"URL={url}, Body={Truncate(body, 200)}", ex, isTransient: true);
+                }
             }
         }
+    }
+
+    // Guards against silent truncation of a paginated Graph read. Every page of a Graph
+    // collection response — the first AND every page reached through @odata.nextLink —
+    // carries a "value" array, even the last page (where it is `value: []` with no
+    // nextLink). So:
+    //   * "value" present (incl. empty array) => a well-formed page; the empty array is the
+    //     normal end of pagination and must NOT be treated as an error.
+    //   * "value" absent entirely => a malformed 2xx page. Interpreting that as "no more
+    //     data / end of pages" would hand the caller a short collection, and for the sweep
+    //     enumeration that means deleting events from pages we never received. Abort the read
+    //     with a transient error so the run stops BEFORE the destructive mirror runs.
+    // (An empty or non-JSON body is already converted to a transient error in SendJsonAsync,
+    //  so it never reaches here.)
+    private static JArray RequireCollection(JObject json, string url)
+    {
+        if (json["value"] is JArray arr)
+            return arr;
+
+        throw new GraphRequestException(
+            $"Graph paged read returned a 2xx response with no 'value' collection; " +
+            $"treating as a truncated read rather than end-of-pages. URL={url}",
+            isTransient: true);
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s.Substring(0, max) + "…";

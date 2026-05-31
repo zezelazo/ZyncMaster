@@ -89,6 +89,19 @@ public sealed class SyncPairRow
     public string? LastResultJson { get; set; }
 }
 
+// Server-side run lock for a sync pair (plan v2 §B-1). Exactly one row per pair, keyed by
+// PairId. Acquisition is an atomic `UPDATE ... WHERE PairId=@id AND LockedUntil < @now`
+// guarded by rowsAffected==1 (or an INSERT when no row exists yet), so two concurrent
+// executors (App tick + manual run, or overlapping ticks) can never both run the mirror for
+// the same pair. The lock is time-bounded (TTL) so a crashed holder cannot wedge the pair
+// forever, and renewable for long mirrors. Owner is advisory (diagnostics only).
+public sealed class SyncRunLockRow
+{
+    public string PairId { get; set; } = "";
+    public DateTimeOffset LockedUntil { get; set; }
+    public string? Owner { get; set; }
+}
+
 public sealed class SyncStateRow
 {
     // Surrogate key (UserId|DeviceId). The uniqueness guarantee is the composite

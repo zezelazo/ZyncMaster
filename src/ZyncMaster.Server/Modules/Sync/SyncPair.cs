@@ -34,6 +34,12 @@ public sealed record MirrorResult
     public int Deleted { get; init; }
     public int Skipped { get; init; }
     public List<string> Failures { get; init; } = new();
+
+    // True when the run did not fully reconcile the window because a transient failure
+    // (429 / timeout / network) forced the destructive orphan sweep to be skipped this run
+    // (plan v2 §B-2). The applied upserts are durable; orphan cleanup is deferred to a
+    // later run. Surfaced so the caller/panel can show "partial — will retry".
+    public bool Partial { get; init; }
 }
 
 // Summary of a connected account exposed to the panel.
