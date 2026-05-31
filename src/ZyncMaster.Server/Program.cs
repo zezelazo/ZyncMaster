@@ -176,23 +176,65 @@ if (!app.Environment.IsDevelopment())
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Web panel static files. The canonical Liquid Glass UI lives at the repo root in ui/ and is
-// the single source of truth shared with the desktop App (which bundles the same folder). We
-// serve it directly from there rather than copying into wwwroot so there is no drift: in a
-// normal run the content root is src/ZyncMaster.Server, so ../../ui resolves to the repo ui/.
-// The same path holds under the WebApplicationFactory test host, which uses the project dir as
-// its content root. If that folder is missing (e.g. a published layout that copied ui/ into
-// wwwroot/) we fall back to the default web root so the panel still serves.
+// Static files. Two surfaces are served:
+//
+//   /      -> the marketing LANDING / launcher (repo-root web/). It owns the site root.
+//   /app   -> the canonical Liquid Glass dashboard UI (repo-root ui/). The same ui/ folder
+//             is the single source of truth shared with the desktop App, which bundles its
+//             OWN copy and loads it through a virtual host (it does NOT go through this
+//             server), so serving the dashboard under /app here does not affect the App.
+//
+// In a normal run the content root is src/ZyncMaster.Server, so ../../web and ../../ui
+// resolve to the repo folders; the same holds under the WebApplicationFactory test host
+// (project dir content root). In a published layout web/ is bundled into wwwroot/ and ui/
+// into wwwroot/app/, so we fall back to those when the repo folders are absent.
+var webRoot = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "web"));
 var uiRoot = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "ui"));
-var panelFileProvider = Directory.Exists(uiRoot)
-    ? new PhysicalFileProvider(uiRoot)
-    : app.Environment.WebRootFileProvider;
 
-var defaultFilesOptions = new DefaultFilesOptions { FileProvider = panelFileProvider };
-defaultFilesOptions.DefaultFileNames.Clear();
-defaultFilesOptions.DefaultFileNames.Add("index.html");
-app.UseDefaultFiles(defaultFilesOptions);
-app.UseStaticFiles(new StaticFileOptions { FileProvider = panelFileProvider });
+var publishedAppDir = Path.Combine(app.Environment.WebRootPath ?? "", "app");
+var landingFileProvider = Directory.Exists(webRoot)
+    ? new PhysicalFileProvider(webRoot)
+    : app.Environment.WebRootFileProvider;
+var dashboardFileProvider = Directory.Exists(uiRoot)
+    ? new PhysicalFileProvider(uiRoot)
+    : (Directory.Exists(publishedAppDir)
+        ? new PhysicalFileProvider(publishedAppDir)
+        : app.Environment.WebRootFileProvider);
+
+// Dashboard at /app. Redirect ONLY the bare "/app" (no trailing slash) to "/app/" so the
+// dashboard's relative asset links (css/…, js/…) resolve under /app/ rather than the site
+// root. This is a path-exact middleware check rather than a routed endpoint so it does not
+// also capture "/app/" (which routing would normalise to the same route) and loop.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path == "/app")
+    {
+        context.Response.Redirect("/app/" + context.Request.QueryString);
+        return;
+    }
+    await next();
+});
+
+var dashboardDefaults = new DefaultFilesOptions
+{
+    FileProvider = dashboardFileProvider,
+    RequestPath = "/app",
+};
+dashboardDefaults.DefaultFileNames.Clear();
+dashboardDefaults.DefaultFileNames.Add("index.html");
+app.UseDefaultFiles(dashboardDefaults);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = dashboardFileProvider,
+    RequestPath = "/app",
+});
+
+// Landing at the site root.
+var landingDefaults = new DefaultFilesOptions { FileProvider = landingFileProvider };
+landingDefaults.DefaultFileNames.Clear();
+landingDefaults.DefaultFileNames.Add("index.html");
+app.UseDefaultFiles(landingDefaults);
+app.UseStaticFiles(new StaticFileOptions { FileProvider = landingFileProvider });
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 

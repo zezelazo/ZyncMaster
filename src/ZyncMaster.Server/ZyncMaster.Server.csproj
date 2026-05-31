@@ -24,12 +24,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Bundle the canonical Liquid Glass UI (repo-root ui/) into wwwroot so the published
-         server serves the web panel. Program.cs serves from ../../ui in a local checkout and
-         falls back to the web root (this bundled copy) in the published layout where ui/ is
-         not alongside the app. -->
-    <Content Include="..\..\ui\**\*"
+    <!-- Bundle the marketing landing (repo-root web/) into wwwroot so the published server
+         serves it at the site root. Program.cs serves from ../../web in a local checkout and
+         falls back to this bundled copy in the published layout. -->
+    <Content Include="..\..\web\**\*"
              Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <!-- Bundle the canonical Liquid Glass dashboard UI (repo-root ui/) into wwwroot/app so the
+         published server serves it under /app. Program.cs serves from ../../ui in a local
+         checkout and falls back to wwwroot/app in the published layout where ui/ is not
+         alongside the app. -->
+    <Content Include="..\..\ui\**\*"
+             Link="wwwroot\app\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

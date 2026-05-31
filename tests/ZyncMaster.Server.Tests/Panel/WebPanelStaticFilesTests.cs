@@ -6,8 +6,9 @@ using Xunit;
 
 namespace ZyncMaster.Server.Tests.Panel;
 
-// The Server bundles the canonical Liquid Glass UI (repo-root ui/) as the web panel. These
-// tests prove the real index.html is served at "/", that its CSS/JS assets resolve, and that
+// The Server serves two static surfaces: the marketing LANDING (repo-root web/) at "/" and the
+// canonical Liquid Glass dashboard UI (repo-root ui/) under "/app". These tests prove the
+// landing is served at "/", the dashboard and its CSS/JS assets resolve under "/app", and that
 // the static-file middleware does not shadow the JSON API or the OAuth/health routes.
 public class WebPanelStaticFilesTests : IClassFixture<ServerTestFactory>
 {
@@ -16,11 +17,27 @@ public class WebPanelStaticFilesTests : IClassFixture<ServerTestFactory>
     public WebPanelStaticFilesTests(ServerTestFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task Root_serves_the_real_liquid_glass_index()
+    public async Task Root_serves_the_marketing_landing()
     {
         var client = _factory.CreateClient();
 
         var resp = await client.GetAsync("/");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        resp.Content.Headers.ContentType!.MediaType.Should().Be("text/html");
+        var body = await resp.Content.ReadAsStringAsync();
+        body.Should().Contain("Zync Master");
+        // Markers unique to the launcher (not the dashboard).
+        body.Should().Contain("css/launcher.css");
+        body.Should().Contain("Sign in with Microsoft");
+    }
+
+    [Fact]
+    public async Task App_serves_the_real_liquid_glass_index()
+    {
+        var client = _factory.CreateClient();
+
+        var resp = await client.GetAsync("/app/");
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         resp.Content.Headers.ContentType!.MediaType.Should().Be("text/html");
@@ -32,11 +49,26 @@ public class WebPanelStaticFilesTests : IClassFixture<ServerTestFactory>
     }
 
     [Fact]
+    public async Task App_bare_path_redirects_to_trailing_slash()
+    {
+        var client = _factory.CreateClient(
+            new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+            {
+                AllowAutoRedirect = false,
+            });
+
+        var resp = await client.GetAsync("/app");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        resp.Headers.Location!.ToString().Should().Be("/app/");
+    }
+
+    [Fact]
     public async Task App_js_asset_is_served_as_javascript()
     {
         var client = _factory.CreateClient();
 
-        var resp = await client.GetAsync("/js/app.js");
+        var resp = await client.GetAsync("/app/js/app.js");
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         resp.Content.Headers.ContentType!.MediaType
@@ -50,7 +82,7 @@ public class WebPanelStaticFilesTests : IClassFixture<ServerTestFactory>
     {
         var client = _factory.CreateClient();
 
-        var resp = await client.GetAsync("/css/tokens.css");
+        var resp = await client.GetAsync("/app/css/tokens.css");
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         resp.Content.Headers.ContentType!.MediaType.Should().Be("text/css");
