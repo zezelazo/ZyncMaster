@@ -14,7 +14,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('ZyncMaster web panel', () => {
   test('unauthenticated: sign-in gate renders and the nav is hidden', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app/');
 
     // The launch splash dismisses and the sign-in card appears once getStatus resolves 401.
     await expect(page.getByText('Sign in to Zync Master')).toBeVisible();
@@ -26,7 +26,7 @@ test.describe('ZyncMaster web panel', () => {
   });
 
   test('unauthenticated: the served index is the real Liquid Glass UI', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app/');
     await expect(page).toHaveTitle(/Zync Master/);
     // app.js + the design tokens stylesheet are wired in the real index.
     expect(await page.locator('script[src="js/app.js"]').count()).toBe(1);
@@ -45,7 +45,7 @@ test.describe('ZyncMaster web panel', () => {
     await page.route('**/api/panel/status', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ connected: true, deviceCount: 0 }) }));
 
-    await page.goto('/');
+    await page.goto('/app/');
 
     // The sign-in gate must NOT be shown for an authenticated session...
     await expect(page.getByText('Sign in to Zync Master')).toHaveCount(0);

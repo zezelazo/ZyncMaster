@@ -27,9 +27,10 @@ public class WebPanelStaticFilesTests : IClassFixture<ServerTestFactory>
         resp.Content.Headers.ContentType!.MediaType.Should().Be("text/html");
         var body = await resp.Content.ReadAsStringAsync();
         body.Should().Contain("Zync Master");
-        // Markers unique to the launcher (not the dashboard).
+        // Markers unique to the launcher (not the dashboard). The launcher has no sign-in:
+        // identity/sign-in lives in the desktop app, the web is a download/marketing surface.
         body.Should().Contain("css/launcher.css");
-        body.Should().Contain("Sign in with Microsoft");
+        body.Should().Contain("Download for Windows");
     }
 
     [Fact]
