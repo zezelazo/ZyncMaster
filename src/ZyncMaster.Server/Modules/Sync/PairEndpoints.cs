@@ -1,3 +1,6 @@
+using ZyncMaster.Core;
+using ZyncMaster.Graph;
+
 namespace ZyncMaster.Server;
 
 public static class PairEndpoints
@@ -227,7 +230,24 @@ public static class PairEndpoints
                 return RunLockBusy();
 
             var (from, to) = Window(opts.Value);
-            var events = await reader.ReadWindowAsync(pair.Source.CalendarId, from, to, ct).ConfigureAwait(false);
+
+            // §A-3 — a SOURCE read that fails transiently (throttling, 5xx, timeout, transport
+            // drop, or a truncated/malformed paged read) must NOT flow into the destructive
+            // mirror: a short source set would make the sweep delete events that still exist at
+            // the source. Abort before the mirror and report Partial (the same "retry me later"
+            // contract as a partial upsert) instead of a generic 500. Non-transient read errors
+            // (auth/consent, fatal contract) still propagate to the global handler.
+            IReadOnlyList<AppointmentRecord> events;
+            try
+            {
+                events = await reader.ReadWindowAsync(pair.Source.CalendarId, from, to, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsTransientReadFailure(ex))
+            {
+                var partial = PartialReadResult(ex);
+                await RecordRunAsync(store, pair, partial, ct).ConfigureAwait(false);
+                return Results.Ok(partial);
+            }
 
             var writer = registry.ResolveWriter(pair.Destination);
             var result = await writer
@@ -273,6 +293,31 @@ public static class PairEndpoints
         var from = new DateTimeOffset(today, TimeSpan.Zero);
         return (from, from.AddDays(opts.SyncWindowDays));
     }
+
+    // §A-3 read-failure decision (public + static so it is unit-testable without standing up
+    // the whole HTTP pipeline). True => the source read failed transiently and the caller must
+    // NOT run the mirror: report Partial and retry later. False => not transient (or a real
+    // cancellation), so the exception propagates. A cancellation requested by the caller is
+    // never "transient" — it must surface as a cancellation, not a retryable partial.
+    public static bool IsTransientReadFailure(Exception ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+        if (ex is OperationCanceledException)
+            return false;
+        return SyncErrorClassifier.Classify(ex) == SyncErrorKind.Transient;
+    }
+
+    // A transient source read failure aborts before the mirror, so nothing was created,
+    // updated or deleted this run. We surface the SAME Partial=true contract as a partial
+    // upsert (Created/Updated/Deleted all zero, Partial=true, the read error in Failures) so
+    // the client's "partial -> retry later" handling covers read failures too, and the run is
+    // recorded as a partial rather than a 500.
+    public static MirrorResult PartialReadResult(Exception ex)
+        => new MirrorResult
+        {
+            Partial  = true,
+            Failures = new List<string> { $"Source read failed (transient): {ex.Message}" },
+        };
 
     private static Task RecordRunAsync(ISyncPairStore store, SyncPair pair, MirrorResult result, CancellationToken ct)
     {

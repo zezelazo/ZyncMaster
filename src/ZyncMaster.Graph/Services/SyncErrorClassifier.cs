@@ -41,6 +41,12 @@ public static class SyncErrorClassifier
             case FormatException:
                 return SyncErrorKind.Fatal;
 
+            // Unknown exception type: Fatal BY DESIGN. Fatal does not itself block the sweep
+            // (only Transient does), so an unknown error must NOT be a hidden way to keep the
+            // calendar safe — every TRULY retryable failure has to arrive typed (a
+            // GraphRequestException with IsTransient = true, or one of the raw transient cases
+            // above). If a new retryable failure mode is added, mark it transient at the throw
+            // site; do not lean on this default.
             default:
                 return SyncErrorKind.Fatal;
         }
@@ -48,10 +54,20 @@ public static class SyncErrorClassifier
 
     private static SyncErrorKind ClassifyGraphRequest(GraphRequestException gre)
     {
+        // Typed signal first. Every retryable throw in GraphCalendarTarget /
+        // MicrosoftGraphProvider (throttling, 5xx, request timeout, transport drop, and the
+        // malformed/truncated-read errors from the pagination hardening) sets IsTransient.
+        // Keying off the flag — not the message wording — means renaming a message string can
+        // never silently re-open the data-loss path (a transient misread as non-transient
+        // would let the destructive sweep run on an incomplete source set).
+        if (gre.IsTransient)
+            return SyncErrorKind.Transient;
+
         var msg = gre.Message ?? "";
 
-        // GraphCalendarTarget annotates its messages: "transient error", "timed out",
-        // "transport error". Those are always retryable.
+        // Legacy message-marker fallback, kept only for safety in case some future throw
+        // forgets to set the typed flag. New transient throws MUST set IsTransient = true;
+        // do not rely on this wording match.
         if (Contains(msg, "transient")
             || Contains(msg, "timed out")
             || Contains(msg, "transport error"))

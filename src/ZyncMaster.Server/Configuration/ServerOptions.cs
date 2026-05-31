@@ -32,7 +32,11 @@ public sealed class ServerOptions
 
     // Per-pair run-lock TTL (plan v2 §B-1). A run acquires the lock for this long; the lock
     // is released in finally, but the TTL bounds how long a crashed holder can wedge the
-    // pair before another executor may re-acquire. Sized to comfortably exceed a long mirror.
+    // pair before another executor may re-acquire. There is no mid-run renewal (see
+    // ISyncRunLock), so this TTL MUST exceed the worst-case duration of a single mirror —
+    // otherwise the lock could lapse mid-run and a second executor could start a concurrent
+    // destructive sweep. The default 8 min comfortably exceeds the cost of one mirror over the
+    // default 14-day / $top=50 window; widen it if the window or page size grows materially.
     public int SyncRunLockTtlMinutes { get; set; } = 8;
     public string ExtendedPropertyGuid { get; set; } = "6f0e7f2c-3b1a-4e8d-9c2f-7a5b1d9e4c30";
 

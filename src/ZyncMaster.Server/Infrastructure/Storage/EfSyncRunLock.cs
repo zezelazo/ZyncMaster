@@ -92,16 +92,6 @@ public sealed class EfSyncRunLock : ISyncRunLock
 
         public string PairId { get; }
 
-        public async Task RenewAsync(TimeSpan ttl, CancellationToken ct = default)
-        {
-            if (_released) return;
-            var until = DateTimeOffset.UtcNow.Add(ttl);
-            await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-            await db.Database.ExecuteSqlInterpolatedAsync(
-                $"UPDATE SyncRunLocks SET LockedUntil = {until} WHERE PairId = {PairId}",
-                ct).ConfigureAwait(false);
-        }
-
         public async ValueTask DisposeAsync()
         {
             if (_released) return;

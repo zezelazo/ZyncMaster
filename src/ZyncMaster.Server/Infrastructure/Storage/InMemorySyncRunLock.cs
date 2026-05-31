@@ -28,12 +28,6 @@ public sealed class InMemorySyncRunLock : ISyncRunLock
         }
     }
 
-    private void Renew(string pairId, TimeSpan ttl)
-    {
-        lock (_gate)
-            _locks[pairId] = DateTimeOffset.UtcNow.Add(ttl);
-    }
-
     private void Release(string pairId)
     {
         lock (_gate)
@@ -52,12 +46,6 @@ public sealed class InMemorySyncRunLock : ISyncRunLock
         }
 
         public string PairId { get; }
-
-        public Task RenewAsync(TimeSpan ttl, CancellationToken ct = default)
-        {
-            if (!_released) _owner.Renew(PairId, ttl);
-            return Task.CompletedTask;
-        }
 
         public ValueTask DisposeAsync()
         {

@@ -163,6 +163,100 @@ public class MicrosoftGraphProviderTests
             .Should().ThrowAsync<GraphRequestException>();
     }
 
+    // Fix 1 (BLOCKER) — data-loss guard. A continuation page that comes back 2xx but with NO
+    // "value" key is malformed/truncated, NOT end-of-pages. If ReadWindowAsync silently treated
+    // it as "no more data" it would return a short source set, and the downstream sweep would
+    // delete the events from the pages we never read. The read MUST abort with a transient.
+    [Fact]
+    public async Task ReadWindow_throws_transient_on_truncated_page_without_value()
+    {
+        var page1 = """
+        { "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+          "value": [ { "id": "a", "subject": "A",
+            "start": { "dateTime": "2026-05-29T09:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-05-29T10:00:00.0000000", "timeZone": "UTC" } } ] }
+        """;
+        // Second page: 2xx with no "value" collection at all.
+        const string malformed = """{ "someOtherKey": "x" }""";
+
+        var calls = 0;
+        var handler = new FuncHandler((_, _) =>
+        {
+            var body = calls++ == 0 ? page1 : malformed;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        var provider = Build(new HttpClient(handler), new FakeCalendarTarget());
+
+        var ex = (await provider.Invoking(p =>
+                p.ReadWindowAsync("cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(2)))
+            .Should().ThrowAsync<GraphRequestException>()).Which;
+        ex.IsTransient.Should().BeTrue("a truncated read must be transient so the run is retried, not swept");
+    }
+
+    // Fix 1 — an empty 2xx body mid-pagination is also a truncated read, distinct from the
+    // legitimate `{ "value": [] }` last page below.
+    [Fact]
+    public async Task ReadWindow_throws_transient_on_empty_body_page()
+    {
+        var page1 = """
+        { "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+          "value": [ { "id": "a", "subject": "A",
+            "start": { "dateTime": "2026-05-29T09:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-05-29T10:00:00.0000000", "timeZone": "UTC" } } ] }
+        """;
+        var calls = 0;
+        var handler = new FuncHandler((_, _) =>
+        {
+            var body = calls++ == 0 ? page1 : "";
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        var provider = Build(new HttpClient(handler), new FakeCalendarTarget());
+
+        var ex = (await provider.Invoking(p =>
+                p.ReadWindowAsync("cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(2)))
+            .Should().ThrowAsync<GraphRequestException>()).Which;
+        ex.IsTransient.Should().BeTrue();
+    }
+
+    // Fix 1 — the legitimate end of pagination: a last page with `value: []` and NO nextLink is
+    // a well-formed empty page and must terminate the read normally WITHOUT throwing.
+    [Fact]
+    public async Task ReadWindow_terminates_normally_on_empty_last_page()
+    {
+        var page1 = """
+        { "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+          "value": [ { "id": "a", "subject": "A",
+            "start": { "dateTime": "2026-05-29T09:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-05-29T10:00:00.0000000", "timeZone": "UTC" } } ] }
+        """;
+        // Last page: well-formed but empty, no nextLink → the normal terminator, not an error.
+        const string lastPage = """{ "value": [] }""";
+
+        var calls = 0;
+        var handler = new FuncHandler((_, _) =>
+        {
+            var body = calls++ == 0 ? page1 : lastPage;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        var provider = Build(new HttpClient(handler), new FakeCalendarTarget());
+
+        var records = await provider.ReadWindowAsync("cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(2));
+
+        records.Should().ContainSingle().Which.Subject.Should().Be("A");
+    }
+
+    // Fix 1 — a single-page read whose only page is `value: []` (no nextLink) is the empty
+    // calendar: valid, returns nothing, must not throw.
+    [Fact]
+    public async Task ReadWindow_single_empty_page_returns_no_records()
+    {
+        var provider = Build(StubHandler.ClientReturning("""{ "value": [] }"""), new FakeCalendarTarget());
+
+        var records = await provider.ReadWindowAsync("cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1));
+
+        records.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task ListCalendars_projects_target_info_to_options()
     {

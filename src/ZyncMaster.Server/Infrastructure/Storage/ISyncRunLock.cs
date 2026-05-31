@@ -5,6 +5,14 @@ namespace ZyncMaster.Server;
 // lock is acquired INSIDE /api/pairs/{id}/push and /run (not from a client hint) so two
 // executors — an App tick and a manual run, or two overlapping ticks — can never run the
 // same destructive mirror concurrently.
+//
+// TTL contract: the lock auto-expires after ServerOptions.SyncRunLockTtlMinutes so a crashed
+// executor cannot wedge a pair forever. There is NO mid-run renewal — the lock is held for a
+// single acquire/dispose around the whole read+mirror — so the TTL MUST exceed the worst-case
+// duration of one mirror. If a mirror ever outlives the TTL, the lock expires while still
+// running and a second executor could acquire and run a concurrent destructive sweep against
+// the same calendar. The default 8 min against a 14-day / $top=50 window is comfortably above
+// the observed mirror cost; if the window or page size grows materially, re-check this margin.
 public interface ISyncRunLock
 {
     // Tries to acquire the lock for pairId until now+ttl. Returns a handle to release in a
@@ -15,12 +23,10 @@ public interface ISyncRunLock
     Task<ISyncRunLockHandle?> TryAcquireAsync(string pairId, TimeSpan ttl, string? owner = null, CancellationToken ct = default);
 }
 
-// Release-on-dispose handle for an acquired run lock. Renewable for a long-running mirror.
+// Release-on-dispose handle for an acquired run lock. Held for the whole read+mirror and
+// released on dispose; there is intentionally no mid-run renewal (see the TTL contract on
+// ISyncRunLock — the TTL is sized to exceed a single mirror's worst-case duration).
 public interface ISyncRunLockHandle : IAsyncDisposable
 {
     string PairId { get; }
-
-    // Extends the lock to now+ttl while still held, so a mirror that outlives the original
-    // TTL does not lose the lock to a competing executor mid-run. No-op after release.
-    Task RenewAsync(TimeSpan ttl, CancellationToken ct = default);
 }

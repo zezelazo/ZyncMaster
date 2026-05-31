@@ -98,19 +98,4 @@ public sealed class SyncRunLockTests
         foreach (var h in handles.Where(h => h is not null))
             await h!.DisposeAsync();
     }
-
-    [Fact]
-    public async Task Renew_extends_the_hold()
-    {
-        using var harness = new EfStoreTestHarness();
-        var sut = new EfSyncRunLock(harness.Factory);
-
-        // Hold with a tiny TTL, then renew to a long one before it lapses.
-        await using var handle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(1));
-        handle.Should().NotBeNull();
-        await handle!.RenewAsync(TimeSpan.FromMinutes(30));
-
-        var contender = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8));
-        contender.Should().BeNull("a renewed lock is still held");
-    }
 }
