@@ -131,6 +131,7 @@ builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 // still round-trips the cookie).
 builder.Services.AddAuthentication(AuthSchemes.ApiKey)
     .AddApiKeyAuth()
+    .AddIdentityBearerAuth()
     .AddCookie(AuthSchemes.Cookie, options =>
     {
         options.Cookie.Name = "sm_session";

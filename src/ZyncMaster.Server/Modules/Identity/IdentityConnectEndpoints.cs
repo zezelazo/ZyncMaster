@@ -213,24 +213,20 @@ public static class IdentityConnectEndpoints
             });
         });
 
-        // Identity profile for the holder of a valid identity access token. The formal
-        // IdentityBearer authentication scheme is a later task; here the Bearer is validated
-        // inline via IIdentityTokenService so this endpoint can ship independently.
+        // Identity profile for the holder of a valid identity access token. Authentication is
+        // enforced by the IdentityBearer scheme (RequireIdentityBearer); the caller is resolved
+        // from the userId claim that scheme stamped, read via ICurrentUserAccessor. External
+        // behavior is unchanged: 200 with the profile for a valid token, 401 otherwise.
         app.MapGet("/api/identity/me", async (
-            HttpContext context,
-            IIdentityTokenService identityTokens,
+            ICurrentUserAccessor currentUser,
             IUserStore users,
             CancellationToken ct) =>
         {
-            var bearer = ExtractBearer(context);
-            if (string.IsNullOrEmpty(bearer))
+            var userId = currentUser.UserId;
+            if (string.IsNullOrEmpty(userId))
                 return Results.Unauthorized();
 
-            var principal = identityTokens.ValidateAccessToken(bearer);
-            if (principal is null)
-                return Results.Unauthorized();
-
-            var user = await users.GetAsync(principal.UserId, ct);
+            var user = await users.GetAsync(userId, ct);
             if (user is null)
                 return Results.Unauthorized();
 
@@ -241,7 +237,7 @@ public static class IdentityConnectEndpoints
                 displayName = user.DisplayName,
                 plan = user.Plan,
             });
-        });
+        }).RequireIdentityBearer();
     }
 
     private static IdentityOAuthState? TryReadState(IDataProtectionProvider dp, string? stateText)
@@ -266,16 +262,6 @@ public static class IdentityConnectEndpoints
         {
             return null;
         }
-    }
-
-    private static string? ExtractBearer(HttpContext context)
-    {
-        var header = context.Request.Headers.Authorization.ToString();
-        const string prefix = "Bearer ";
-        if (string.IsNullOrEmpty(header) || !header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return null;
-        var token = header[prefix.Length..].Trim();
-        return string.IsNullOrEmpty(token) ? null : token;
     }
 
     private static string ToBase64Url(byte[] bytes) =>
