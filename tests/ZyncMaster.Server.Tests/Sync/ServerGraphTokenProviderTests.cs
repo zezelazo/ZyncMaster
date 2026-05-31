@@ -24,6 +24,10 @@ public class ServerGraphTokenProviderTests
         public Task<TokenResult> ExchangeIdentityCodeAsync(string code, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<TokenResult> ExchangeCalendarCodeAsync(
+            string code, string scopes, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<TokenResult> RefreshAsync(string refreshToken, CancellationToken ct = default)
         {
             RefreshCallCount++;

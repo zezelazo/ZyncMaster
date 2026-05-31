@@ -286,6 +286,7 @@ app.MapDeviceEndpoints();
 app.MapConnectEndpoints();
 app.MapIdentityConnectEndpoints();
 app.MapIdentityMagicLinkEndpoints();
+app.MapCalendarConnectEndpoints();
 app.MapSyncEndpoints();
 app.MapPanelEndpoints();
 app.MapPairEndpoints();
