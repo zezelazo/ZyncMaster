@@ -15,6 +15,7 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
 
     public DbSet<UserRow> Users => Set<UserRow>();
     public DbSet<ConnectedAccountRow> ConnectedAccounts => Set<ConnectedAccountRow>();
+    public DbSet<CalendarAccountRow> CalendarAccounts => Set<CalendarAccountRow>();
     public DbSet<DeviceRow> Devices => Set<DeviceRow>();
     public DbSet<PendingPairingRow> PendingPairings => Set<PendingPairingRow>();
     public DbSet<SyncPairRow> SyncPairs => Set<SyncPairRow>();
@@ -68,6 +69,27 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.DisplayName).HasMaxLength(256);
             e.Property(x => x.EncryptedRefreshToken).IsRequired();
             e.HasIndex(x => new { x.UserId, x.AccountRef }).IsUnique();
+        });
+
+        b.Entity<CalendarAccountRow>(e =>
+        {
+            e.ToTable("CalendarAccounts");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Kind).HasMaxLength(32).IsRequired();
+            e.Property(x => x.Provider).HasMaxLength(64).IsRequired();
+            e.Property(x => x.AccountEmail).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Authority).HasMaxLength(512);
+            e.Property(x => x.Scope).HasMaxLength(32).IsRequired();
+            e.Property(x => x.DeviceId).HasMaxLength(128);
+            e.Property(x => x.DisplayName).HasMaxLength(256);
+            e.Property(x => x.Status).HasMaxLength(32).IsRequired();
+            e.HasIndex(x => x.UserId);
+            e.HasOne<UserRow>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<DeviceRow>(e =>

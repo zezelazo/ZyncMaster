@@ -15,6 +15,19 @@ public sealed class ServerOptions
     // Redirect URI for the identity OAuth callback. Points at
     // /identity/connect/callback/microsoft. Empty by default; set per-environment.
     public string IdentityRedirectUri { get; set; } = "";
+
+    // Calendar-connect OAuth scopes (Track A-2). Distinct from the legacy single-user `Scopes`
+    // and from `IdentityScopes`: connecting a calendar account to the per-user pool requests
+    // exactly the calendar grant the user picked — read-only or read/write — plus offline_access
+    // so a refresh token is returned. `User.Read` is included so the id_token carries the
+    // account email we record on the CalendarAccount.
+    public string CalendarReadScopes { get; set; } = "offline_access Calendars.Read User.Read";
+    public string CalendarReadWriteScopes { get; set; } = "offline_access Calendars.ReadWrite User.Read";
+
+    // Redirect URI for the calendar-connect OAuth callback. Points at
+    // /calendar/connect/callback/graph. Empty by default; set per-environment.
+    public string CalendarRedirectUri { get; set; } = "";
+
     public int SyncWindowDays { get; set; } = 14;
     public string ExtendedPropertyGuid { get; set; } = "6f0e7f2c-3b1a-4e8d-9c2f-7a5b1d9e4c30";
 

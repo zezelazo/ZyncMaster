@@ -53,6 +53,27 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
         return PostAsync(form, fallbackRefreshToken: null, ct);
     }
 
+    public Task<TokenResult> ExchangeCalendarCodeAsync(
+        string code, string scopes, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(code);
+        ArgumentException.ThrowIfNullOrEmpty(scopes);
+        // Calendar-connect exchange (Track A-2): the caller passes the EXACT scopes the user
+        // consented to (read or read/write). offline_access in those scopes is what makes the
+        // endpoint return a refresh token — which we DO persist on the CalendarAccount. The
+        // calendar redirect URI is distinct from both the legacy and identity redirect URIs.
+        var form = new Dictionary<string, string>
+        {
+            ["client_id"] = _options.MicrosoftClientId,
+            ["client_secret"] = _secret.GetMicrosoftClientSecret(),
+            ["grant_type"] = "authorization_code",
+            ["code"] = code,
+            ["redirect_uri"] = _options.CalendarRedirectUri,
+            ["scope"] = scopes,
+        };
+        return PostAsync(form, fallbackRefreshToken: null, ct);
+    }
+
     public Task<TokenResult> RefreshAsync(string refreshToken, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(refreshToken);

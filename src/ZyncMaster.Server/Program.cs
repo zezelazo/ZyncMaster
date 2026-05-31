@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using ZyncMaster.Server;
 using ZyncMaster.Server.Data;
 using ZyncMaster.Server.Infrastructure.Email;
+using ZyncMaster.Server.Modules.Calendar;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -61,6 +62,7 @@ builder.Services.AddSingleton<IDeviceStore, EfDeviceStore>();
 builder.Services.AddSingleton<ISyncStateStore, EfSyncStateStore>();
 builder.Services.AddSingleton<ISecretProvider, ConfigurationSecretProvider>();
 builder.Services.AddSingleton<IConnectedAccountStore, EfConnectedAccountStore>();
+builder.Services.AddSingleton<ICalendarAccountStore, EfCalendarAccountStore>();
 
 // System clock seam shared by the identity primitives (overridden in tests for determinism).
 builder.Services.AddSingleton(TimeProvider.System);
@@ -131,6 +133,7 @@ builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 // still round-trips the cookie).
 builder.Services.AddAuthentication(AuthSchemes.ApiKey)
     .AddApiKeyAuth()
+    .AddIdentityBearerAuth()
     .AddCookie(AuthSchemes.Cookie, options =>
     {
         options.Cookie.Name = "sm_session";
@@ -283,6 +286,7 @@ app.MapDeviceEndpoints();
 app.MapConnectEndpoints();
 app.MapIdentityConnectEndpoints();
 app.MapIdentityMagicLinkEndpoints();
+app.MapCalendarConnectEndpoints();
 app.MapSyncEndpoints();
 app.MapPanelEndpoints();
 app.MapPairEndpoints();

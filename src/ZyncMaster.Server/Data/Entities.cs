@@ -32,6 +32,27 @@ public sealed class ConnectedAccountRow
     public bool IsDefault { get; set; }
 }
 
+// Per-user calendar account pool row. The encrypted refresh token is stored inline (1:1
+// with the account) rather than in a separate AccountTokenRow: there is exactly one live
+// token per account, so rotation is a single atomic row update and disconnect a single
+// delete — no second table to keep in sync. OutlookCom accounts keep this null (their key
+// is DeviceId).
+public sealed class CalendarAccountRow
+{
+    public string Id { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string Kind { get; set; } = "";
+    public string Provider { get; set; } = "";
+    public string AccountEmail { get; set; } = "";
+    public string? Authority { get; set; }
+    public string Scope { get; set; } = "";
+    public string? DeviceId { get; set; }
+    public string? DisplayName { get; set; }
+    public string? EncryptedRefreshToken { get; set; }
+    public string Status { get; set; } = "active";
+    public DateTimeOffset ConnectedAt { get; set; }
+}
+
 public sealed class DeviceRow
 {
     public string Id { get; set; } = "";
