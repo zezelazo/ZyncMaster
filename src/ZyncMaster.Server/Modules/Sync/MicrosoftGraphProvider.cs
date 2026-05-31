@@ -58,7 +58,8 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
             Updated = outcome.Updated,
             Deleted = outcome.Deleted,
             Skipped = outcome.Skipped,
-            Failures = outcome.Failures.ToList(),
+            Failures = outcome.Failures.Select(f => f.ToString()).ToList(),
+            Partial = outcome.Partial,
         };
     }
 

@@ -165,6 +165,7 @@ public static class PairEndpoints
             string id,
             PushRequest req,
             ISyncPairStore store,
+            ISyncRunLock runLock,
             ProviderRegistry registry,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
@@ -174,6 +175,15 @@ public static class PairEndpoints
             var pair = await store.GetAsync(id, ct);
             if (pair is null)
                 return Results.NotFound();
+
+            // §B-1 — acquire the per-pair run lock INSIDE the endpoint before the destructive
+            // mirror. If another executor (manual run, overlapping tick) holds it, skip with
+            // 409 instead of running a second concurrent sweep against the same calendar.
+            await using var handle = await runLock
+                .TryAcquireAsync(id, LockTtl(opts.Value), owner: "push", ct)
+                .ConfigureAwait(false);
+            if (handle is null)
+                return RunLockBusy();
 
             var writer = registry.ResolveWriter(pair.Destination);
             var (from, to) = Window(opts.Value);
@@ -188,6 +198,7 @@ public static class PairEndpoints
         app.MapPost("/api/pairs/{id}/run", async (
             string id,
             ISyncPairStore store,
+            ISyncRunLock runLock,
             ProviderRegistry registry,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
@@ -207,6 +218,14 @@ public static class PairEndpoints
                 });
             }
 
+            // §B-1 — acquire the per-pair run lock before the read+mirror so a manual run and
+            // a background tick (or two ticks) never run the same destructive mirror at once.
+            await using var handle = await runLock
+                .TryAcquireAsync(id, LockTtl(opts.Value), owner: "run", ct)
+                .ConfigureAwait(false);
+            if (handle is null)
+                return RunLockBusy();
+
             var (from, to) = Window(opts.Value);
             var events = await reader.ReadWindowAsync(pair.Source.CalendarId, from, to, ct).ConfigureAwait(false);
 
@@ -221,6 +240,18 @@ public static class PairEndpoints
     }
 
     private const int ReminderMinutes = 30;
+
+    private static TimeSpan LockTtl(ServerOptions opts)
+        => TimeSpan.FromMinutes(opts.SyncRunLockTtlMinutes <= 0 ? 8 : opts.SyncRunLockTtlMinutes);
+
+    // 409: another executor is already running this pair. Distinct error code so the client
+    // can tell "busy, try later" apart from the no_server_reader 409.
+    private static IResult RunLockBusy()
+        => Results.Conflict(new
+        {
+            error = "run_in_progress",
+            message = "Another sync run for this pair is already in progress; try again shortly.",
+        });
 
     // True when an endpoint references a Graph connected account (explicit, non-empty
     // AccountRef) that the current user does not own. OutlookCom endpoints and endpoints

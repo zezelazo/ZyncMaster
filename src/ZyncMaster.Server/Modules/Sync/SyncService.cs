@@ -86,7 +86,8 @@ public sealed class SyncService
                 Updated = outcome.Updated,
                 Deleted = outcome.Deleted,
                 Skipped = outcome.Skipped,
-                Failures = outcome.Failures.ToList(),
+                Failures = outcome.Failures.Select(f => f.ToString()).ToList(),
+                Partial = outcome.Partial,
             },
         };
     }

@@ -12,6 +12,10 @@ public sealed record SyncResponse
     public int Deleted { get; init; }
     public int Skipped { get; init; }
     public System.Collections.Generic.List<string> Failures { get; init; } = new();
+
+    // True when a transient failure forced the destructive orphan sweep to be skipped this
+    // run (plan v2 §B-2). The device should retry; no data was deleted.
+    public bool Partial { get; init; }
 }
 
 // Discriminated outcome for SyncService. NoAccount=true means the endpoint must

@@ -19,6 +19,7 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<DeviceRow> Devices => Set<DeviceRow>();
     public DbSet<PendingPairingRow> PendingPairings => Set<PendingPairingRow>();
     public DbSet<SyncPairRow> SyncPairs => Set<SyncPairRow>();
+    public DbSet<SyncRunLockRow> SyncRunLocks => Set<SyncRunLockRow>();
     public DbSet<SyncStateRow> SyncStates => Set<SyncStateRow>();
     public DbSet<IdentityLoginRow> IdentityLogins => Set<IdentityLoginRow>();
     public DbSet<IdentityAccessTokenRow> IdentityAccessTokens => Set<IdentityAccessTokenRow>();
@@ -127,6 +128,19 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.DestinationJson).IsRequired();
             e.Property(x => x.State).HasMaxLength(32).IsRequired();
             e.HasIndex(x => x.UserId);
+        });
+
+        b.Entity<SyncRunLockRow>(e =>
+        {
+            e.ToTable("SyncRunLocks");
+            // One lock row per pair; PairId is the natural primary key so the atomic
+            // acquire UPDATE/INSERT contends on a single row.
+            e.HasKey(x => x.PairId);
+            e.Property(x => x.PairId).HasMaxLength(64);
+            e.Property(x => x.Owner).HasMaxLength(128);
+            // No FK to SyncPairs: the lock is keyed by the pair identifier the endpoints
+            // use and must be acquirable even while the pair row is being read on another
+            // connection; a stale lock row is harmless (it just expires).
         });
 
         b.Entity<SyncStateRow>(e =>
