@@ -152,6 +152,97 @@ public class IdentityUserStoreTests
     }
 
     [Fact]
+    public async Task UpsertByLogin_throws_when_verified_email_shared_by_multiple_users()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        // Two verified logins with the same email on DISTINCT users, inserted by hand so the
+        // store's own linking can't collapse them first.
+        await using (var seed = h.NewContext())
+        {
+            var u1 = NewUser("conflict@test");
+            var u2 = NewUser("conflict@test");
+            seed.Users.AddRange(u1, u2);
+            seed.IdentityLogins.Add(NewLoginRow(u1.Id, "microsoft", "oid-1", "conflict@test", true));
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "google", "g-1", "conflict@test", true));
+            await seed.SaveChangesAsync();
+        }
+
+        var act = () => store.UpsertByLoginAsync("facebook", "fb-1", "conflict@test", true, "Conflict");
+
+        await act.Should().ThrowAsync<System.InvalidOperationException>()
+            .WithMessage("*multiple users share verified email*");
+    }
+
+    [Fact]
+    public async Task TryLinkByEmail_throws_when_verified_email_shared_by_multiple_users()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        await using (var seed = h.NewContext())
+        {
+            var u1 = NewUser("conflict@test");
+            var u2 = NewUser("conflict@test");
+            seed.Users.AddRange(u1, u2);
+            seed.IdentityLogins.Add(NewLoginRow(u1.Id, "microsoft", "oid-1", "conflict@test", true));
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "google", "g-1", "conflict@test", true));
+            await seed.SaveChangesAsync();
+        }
+
+        var act = () => store.TryLinkByEmailAsync("facebook", "fb-1", "conflict@test", true, "Conflict");
+
+        await act.Should().ThrowAsync<System.InvalidOperationException>()
+            .WithMessage("*multiple users share verified email*");
+    }
+
+    [Fact]
+    public async Task UpsertByLogin_normalizes_provider_and_email_and_does_not_duplicate()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        // Mixed case + surrounding whitespace, then a normalized repeat for the same subject.
+        var first = await store.UpsertByLoginAsync("Microsoft", "oid-1", " Alice@Test.com ", true, "Alice");
+        var second = await store.UpsertByLoginAsync("microsoft", "oid-1", "alice@test.com", true, "Alice2");
+
+        second.Id.Should().Be(first.Id);
+
+        await using var db = h.NewContext();
+        var logins = await db.IdentityLogins
+            .Where(l => l.ProviderSubject == "oid-1").ToListAsync();
+        logins.Should().HaveCount(1);
+        logins[0].Provider.Should().Be("microsoft");
+        logins[0].Email.Should().Be("alice@test.com");
+        second.PrimaryEmail.Should().Be("alice@test.com");
+    }
+
+    private static ZyncMaster.Server.Data.UserRow NewUser(string email) => new()
+    {
+        Id = System.Guid.NewGuid().ToString("N"),
+        Provider = "test",
+        Subject = System.Guid.NewGuid().ToString("N"),
+        Email = email,
+        DisplayName = "Seed",
+        CreatedUtc = System.DateTimeOffset.UtcNow,
+        PrimaryEmail = email,
+        Plan = null,
+    };
+
+    private static ZyncMaster.Server.Data.IdentityLoginRow NewLoginRow(
+        string userId, string provider, string providerSubject, string email, bool emailVerified) => new()
+    {
+        Id = System.Guid.NewGuid().ToString("N"),
+        UserId = userId,
+        Provider = provider,
+        ProviderSubject = providerSubject,
+        Email = email,
+        EmailVerified = emailVerified,
+        LinkedAt = System.DateTimeOffset.UtcNow,
+    };
+
+    [Fact]
     public async Task Legacy_UpsertAsync_still_works()
     {
         using var h = new EfStoreTestHarness();
