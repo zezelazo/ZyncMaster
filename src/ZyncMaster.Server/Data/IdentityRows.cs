@@ -67,3 +67,39 @@ public sealed class IdentityRefreshTokenRow
     // Set when revoked (logout-all). Null while live.
     public DateTimeOffset? RevokedAt { get; set; }
 }
+
+// One outstanding magic-link login challenge. Clicking the link proves possession of the email,
+// so the resulting local login is treated as emailVerified:true (unlike the Microsoft flow). The
+// token value is never stored in the clear — only its base64url SHA-256 hash — so a database leak
+// cannot reconstruct a live link. Port/Nonce are carried so the callback can complete the same
+// loopback redirect the App's /connect-style flow expects (the App generated them in the POST).
+//
+// Ephemeral by design (plan deferred §4 / C-7): rows are short-lived (TTL minutes) and may be
+// purged once ExpiresAt has passed OR ConsumedAt is set; nothing else depends on them surviving.
+public sealed class MagicLinkRow
+{
+    // Surrogate id (random GUID). Primary key. NOT the token value.
+    public string Id { get; set; } = "";
+
+    // Base64url-encoded SHA-256 of the opaque 32-byte token. Unique: the token IS the lookup key
+    // at callback time, hashed before the query.
+    public string TokenHash { get; set; } = "";
+
+    // Normalized recipient email (Trim().ToLowerInvariant()). Indexed for the per-email rate-limit
+    // window count.
+    public string Email { get; set; } = "";
+
+    // Loopback port the App is listening on, echoed back in the callback redirect.
+    public int Port { get; set; }
+
+    // App-generated nonce, echoed back so the App can tie the callback to its request.
+    public string Nonce { get; set; } = "";
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset ExpiresAt { get; set; }
+
+    // Set inside the single-use transaction at callback time. Null while the link is unused; a
+    // non-null value means the link was already consumed and a second click must fail.
+    public DateTimeOffset? ConsumedAt { get; set; }
+}

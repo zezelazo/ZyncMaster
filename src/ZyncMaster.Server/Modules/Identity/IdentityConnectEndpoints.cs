@@ -138,28 +138,13 @@ public static class IdentityConnectEndpoints
             var user = await users.UpsertByLoginAsync(
                 "microsoft", subject, email, emailVerified: false, displayName, context.RequestAborted);
 
-            // Mint the internal identity session: a short-lived access token plus a long-lived
-            // refresh token. NOTE: the calendar refresh token (result.RefreshToken) is NOT
-            // persisted here — this flow proves identity, it does not connect a calendar.
-            var access = identityTokens.IssueAccessToken(user);
-            var refresh = await identityTokens.IssueRefreshTokenAsync(user.Id, context.RequestAborted);
-
-            // Wrap BOTH tokens behind a single one-time handle. The handle store takes a
-            // string, so serialize the pair; the App deserializes it on redeem.
-            var bundle = JsonSerializer.Serialize(new HandleBundle
-            {
-                AccessToken = access.Token,
-                RefreshToken = refresh,
-            });
-            var handle = handles.IssueHandle(bundle);
-
-            // Redirect to the App's loopback listener. The port comes from the SIGNED state
-            // (not the raw query) so it cannot be redirected elsewhere; the nonce lets the App
-            // tie this callback to the request it initiated.
-            var redirect =
-                $"http://127.0.0.1:{stateModel.Port}/identity/callback" +
-                $"?handle={Uri.EscapeDataString(handle)}" +
-                $"&nonce={Uri.EscapeDataString(stateModel.Nonce)}";
+            // Mint the internal identity session and wrap it behind a one-time loopback handle.
+            // NOTE: the calendar refresh token (result.RefreshToken) is NOT persisted here — this
+            // flow proves identity, it does not connect a calendar. The port comes from the SIGNED
+            // state (not the raw query) so it cannot be redirected elsewhere; the nonce lets the
+            // App tie this callback to the request it initiated. Shared with the magic-link flow.
+            var redirect = await IdentityLoopback.IssueLoopbackRedirectAsync(
+                user, stateModel.Port, stateModel.Nonce, identityTokens, handles, context.RequestAborted);
 
             return Results.Redirect(redirect);
         });
@@ -280,16 +265,6 @@ public static class IdentityConnectEndpoints
 
         [System.Text.Json.Serialization.JsonPropertyName("csrf")]
         public string Csrf { get; set; } = "";
-    }
-
-    // The JSON wrapped behind the one-time handle and returned on redeem.
-    private sealed class HandleBundle
-    {
-        [System.Text.Json.Serialization.JsonPropertyName("accessToken")]
-        public string AccessToken { get; set; } = "";
-
-        [System.Text.Json.Serialization.JsonPropertyName("refreshToken")]
-        public string RefreshToken { get; set; } = "";
     }
 
     private sealed class RedeemRequest

@@ -26,4 +26,28 @@ public sealed class ServerOptions
     // Identity refresh token lifetime. Long-lived, opaque, stored hashed; exchanged for a
     // fresh access token at App start / on near-expiry.
     public int IdentityRefreshTokenTtlDays { get; set; } = 90;
+
+    // Magic-link (passwordless local login) token lifetime. Short by design: the link in the
+    // email is a one-time bearer of login, so it expires fast (plan deferred §4 = 15m).
+    public int MagicLinkTtlMinutes { get; set; } = 15;
+
+    // Public base URL used to build the magic-link the user clicks (e.g. https://app.example.com).
+    // The link points at {PublicBaseUrl}/identity/magic-link/callback?token=... . Empty by default;
+    // set per-environment. When empty, the link is built from the incoming request's scheme+host
+    // so the dev/test flow still works without configuration.
+    public string PublicBaseUrl { get; set; } = "";
+
+    // Per-email rate-limit window for magic-link requests (plan A-6). Within
+    // MagicLinkRateLimitWindowMinutes, at most MagicLinkMaxPerEmail links are actually sent for a
+    // given email; further requests still return a constant 202 but send nothing (silent —
+    // preserves constant timing and anti-enumeration). Distinct from the per-IP ASP.NET rate
+    // limiter, which guards against raw endpoint abuse and may return 429.
+    public int MagicLinkMaxPerEmail { get; set; } = 3;
+    public int MagicLinkRateLimitWindowMinutes { get; set; } = 15;
+
+    // Per-IP ASP.NET rate limiter for the magic-link POST (plan A-6). A fixed window allowing
+    // MagicLinkMaxPerIp requests per MagicLinkRateLimitWindowMinutes from one client address;
+    // excess is rejected with 429. This is anti-abuse, not anti-enumeration (it does not depend
+    // on whether the email exists), so it does not leak user existence.
+    public int MagicLinkMaxPerIp { get; set; } = 20;
 }

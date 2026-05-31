@@ -22,6 +22,7 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<IdentityLoginRow> IdentityLogins => Set<IdentityLoginRow>();
     public DbSet<IdentityAccessTokenRow> IdentityAccessTokens => Set<IdentityAccessTokenRow>();
     public DbSet<IdentityRefreshTokenRow> IdentityRefreshTokens => Set<IdentityRefreshTokenRow>();
+    public DbSet<MagicLinkRow> MagicLinks => Set<MagicLinkRow>();
 
     // Data Protection key ring lives in the DB so keys survive restarts and are shared
     // across instances (see AddDataProtection().PersistKeysToDbContext in Program.cs).
@@ -160,6 +161,21 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
                 .WithMany()
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<MagicLinkRow>(e =>
+        {
+            e.ToTable("MagicLinks");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
+            e.Property(x => x.Email).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Nonce).HasMaxLength(256).IsRequired();
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            // Per-email rate-limit window count + cleanup scans both filter on Email.
+            e.HasIndex(x => x.Email);
+            // No FK to Users: a magic-link is requested by EMAIL and may resolve to a brand-new
+            // user only at callback time, so it deliberately does not reference a UserRow.
         });
     }
 }
