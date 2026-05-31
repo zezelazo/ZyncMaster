@@ -27,8 +27,10 @@ namespace ZyncMaster.Server;
 //         per-email limit stays invisible and constant-time, never revealing that a given email
 //         has been targeted. (This is the documented choice between the two options the task
 //         allowed.)
-//   * Single-use: the callback consumes the row inside a transaction (ConsumedAt set + committed)
-//     so two concurrent clicks cannot both log in.
+//   * Single-use: the callback consumes the row with one atomic conditional UPDATE (set
+//     ConsumedAt where the hash matches AND it is still unconsumed AND unexpired). Only the
+//     request whose UPDATE affects exactly one row proceeds, so two concurrent clicks of the
+//     same token cannot both log in.
 //   * Hashed token: only the base64url SHA-256 of the 32-byte token is stored; the clear token
 //     exists only inside the emailed link.
 //
@@ -158,20 +160,35 @@ public static class IdentityMagicLinkEndpoints
 
             await using var db = await dbFactory.CreateDbContextAsync(context.RequestAborted);
 
-            // Single-use atomicity: read the row tracked, verify unconsumed + unexpired, stamp
-            // ConsumedAt, save, commit — all inside one transaction so two concurrent clicks cannot
-            // both succeed (the second sees ConsumedAt != null after the first commits).
-            await using var tx = await db.Database.BeginTransactionAsync(context.RequestAborted);
+            // Single-use atomicity: claim the row with a single conditional UPDATE that filters on
+            // (matching hash AND not yet consumed) and stamps ConsumedAt. The row count tells us if
+            // THIS request won the claim. Under READ COMMITTED two concurrent clicks of the same
+            // token cannot both win: ExecuteUpdateAsync is one atomic SQL statement (same semantics
+            // in SQLite and SQL Server), so exactly one gets consumed==1 and the other gets 0. The
+            // previous read→check→set→commit pattern was racy because EF's UPDATE filtered only by
+            // PK, with the unconsumed check done in app memory.
+            //
+            // The expiry check is intentionally NOT part of this WHERE: a DateTimeOffset comparison
+            // (ExpiresAt > now) is not translatable on every provider (SQLite throws), and it is not
+            // the race-sensitive predicate. We claim by hash+unconsumed atomically, then reject an
+            // expired row after rereading it. Burning an expired token's single use is harmless and
+            // actually desirable (it cannot be reused).
+            var consumed = await db.MagicLinks
+                .Where(r => r.TokenHash == hash && r.ConsumedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.ConsumedAt, now), context.RequestAborted);
 
-            var row = await db.MagicLinks
-                .FirstOrDefaultAsync(r => r.TokenHash == hash, context.RequestAborted);
-
-            if (row is null || row.ConsumedAt is not null || row.ExpiresAt <= now)
+            if (consumed != 1)
                 return ErrorHtml("This sign-in link is invalid or has expired.");
 
-            row.ConsumedAt = now;
-            await db.SaveChangesAsync(context.RequestAborted);
-            await tx.CommitAsync(context.RequestAborted);
+            // We won the claim — reread the row (untracked) to recover Email/Port/Nonce and to
+            // enforce expiry in memory (provider-agnostic, same reason the POST evaluates its
+            // window in memory).
+            var row = await db.MagicLinks
+                .AsNoTracking()
+                .FirstAsync(r => r.TokenHash == hash, context.RequestAborted);
+
+            if (row.ExpiresAt <= now)
+                return ErrorHtml("This sign-in link is invalid or has expired.");
 
             // LINKING POLICY (key difference vs Microsoft in Task 2b): clicking the link PROVES the
             // user controls this inbox, so the local login is emailVerified:TRUE. Microsoft sign-in

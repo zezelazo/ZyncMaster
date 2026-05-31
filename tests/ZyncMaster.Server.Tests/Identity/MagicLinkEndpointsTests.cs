@@ -191,6 +191,28 @@ public class MagicLinkEndpointsTests
     }
 
     [Fact]
+    public async Task Callback_two_concurrent_clicks_of_same_token_only_one_succeeds()
+    {
+        var sender = new CapturingEmailSender();
+        using var factory = CreateFactory(sender);
+        // Shared client is fine: HttpClient is thread-safe for concurrent requests.
+        var client = NoRedirectClient(factory);
+
+        await client.PostAsJsonAsync("/identity/magic-link", Body("race@example.com", nonce: "n-race"));
+        var token = sender.LastToken!;
+        var url = $"/identity/magic-link/callback?token={Uri.EscapeDataString(token)}";
+
+        // Fire BOTH callbacks for the SAME token in parallel. The atomic conditional UPDATE must
+        // let exactly one win: one 302 (loopback redirect), one 400 (single-use already claimed).
+        var responses = await Task.WhenAll(client.GetAsync(url), client.GetAsync(url));
+
+        var redirects = responses.Count(r => r.StatusCode == HttpStatusCode.Redirect);
+        var failures = responses.Count(r => r.StatusCode == HttpStatusCode.BadRequest);
+        redirects.Should().Be(1);
+        failures.Should().Be(1);
+    }
+
+    [Fact]
     public async Task Callback_with_expired_token_fails()
     {
         var clock = new FakeClock(DateTimeOffset.UtcNow);

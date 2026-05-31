@@ -17,10 +17,10 @@ public sealed class LoggingEmailSender : IEmailSender
 
     public Task SendAsync(string toEmail, string subject, string htmlBody, CancellationToken ct = default)
     {
-        // Body is logged at Debug only — it carries the clear magic-link token, so it must not
-        // appear at Information level where it could land in shipped logs.
+        // NEVER log htmlBody: it contains the clear magic-link token, and logging it (even at
+        // Debug) leaks a usable sign-in credential into shipped log sinks. Only the recipient and
+        // subject are logged — neither carries the token.
         _logger.LogInformation("Email suppressed (LoggingEmailSender): to={To} subject={Subject}", toEmail, subject);
-        _logger.LogDebug("Email body for {To}: {Body}", toEmail, htmlBody);
         return Task.CompletedTask;
     }
 }
