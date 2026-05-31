@@ -34,4 +34,14 @@ public interface IEngineActions
     // Login auto-start toggle, backed by IAutoStartManager.
     Task<bool> GetAutoStartAsync(CancellationToken ct = default);
     Task SetAutoStartAsync(bool enabled, CancellationToken ct = default);
+
+    // Identity (sign-in) lifecycle, backed by IdentityLoginService (Phase 1 / Task 2e).
+    //   GetIdentityStateAsync — current signed-in state (refreshes the token when needed).
+    //   LoginAsync(provider, email)
+    //     "microsoft"  → broker login (email ignored).
+    //     "magic-link" → email a sign-in link to the given address (email required).
+    //   SignOutAsync — clear the cached identity tokens.
+    Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default);
+    Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default);
+    Task SignOutAsync(CancellationToken ct = default);
 }

@@ -83,6 +83,17 @@ public sealed class UnconfiguredEngineActions : IEngineActions
 
     public Task SetAutoStartAsync(bool enabled, CancellationToken ct = default) => Task.CompletedTask;
 
+    // Identity stubs (§C-6): the bridge must keep answering these even before the engine is
+    // configured, so the UI degrades visibly (signed-out + a "configure first" error) instead of
+    // throwing "Unknown action". Signing in needs the server URL, hence the clear failure.
+    public Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default)
+        => Task.FromResult(IdentityState.SignedOut);
+
+    public Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default)
+        => Task.FromResult(LoginOutcome.Fail("Set the server URL in Settings before signing in."));
+
+    public Task SignOutAsync(CancellationToken ct = default) => Task.CompletedTask;
+
     private static InvalidOperationException NotConfigured()
         => new("Set the server URL in Settings first.");
 }

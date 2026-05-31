@@ -174,6 +174,35 @@ public class UiBridgeTests
             if (Throw != null) await Throw();
             SetAutoStartValue = enabled;
         }
+
+        // Identity capture fields.
+        public int GetIdentityStateCalls;
+        public int SignOutCalls;
+        public string? LoginProviderArg;
+        public string? LoginEmailArg;
+        public IdentityState IdentityStateToReturn = IdentityState.SignedOut;
+        public LoginOutcome LoginOutcomeToReturn = new(true, null, null);
+
+        public async Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GetIdentityStateCalls++;
+            return IdentityStateToReturn;
+        }
+
+        public async Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            LoginProviderArg = provider;
+            LoginEmailArg = email;
+            return LoginOutcomeToReturn;
+        }
+
+        public async Task SignOutAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            SignOutCalls++;
+        }
     }
 
     private sealed class FakeWindowControl : IWindowControl
@@ -544,6 +573,73 @@ public class UiBridgeTests
         transport.PushInbound(Message("setAutoStart", "a12", "true"));
 
         engine.SetAutoStartValue.Should().BeTrue();
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    // ---------------- Identity (sign-in) lifecycle actions ----------------
+
+    [Fact]
+    public void GetIdentityState_calls_engine_and_returns_state()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            IdentityStateToReturn = new IdentityState(true, "u1", "u1@test", "User One", null, "pro"),
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("getIdentityState", "i1"));
+
+        engine.GetIdentityStateCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("isSignedIn").GetBoolean().Should().BeTrue();
+        payload.GetProperty("email").GetString().Should().Be("u1@test");
+        payload.GetProperty("plan").GetString().Should().Be("pro");
+    }
+
+    [Fact]
+    public void Login_microsoft_passes_provider_and_no_email()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("login", "i2", "{\"provider\":\"microsoft\"}"));
+
+        engine.LoginProviderArg.Should().Be("microsoft");
+        engine.LoginEmailArg.Should().BeNull();
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("success").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void Login_magic_link_passes_provider_and_email()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("login", "i3", "{\"provider\":\"magic-link\",\"email\":\"me@test\"}"));
+
+        engine.LoginProviderArg.Should().Be("magic-link");
+        engine.LoginEmailArg.Should().Be("me@test");
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void SignOut_calls_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("signOut", "i4"));
+
+        engine.SignOutCalls.Should().Be(1);
         LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
     }
 
