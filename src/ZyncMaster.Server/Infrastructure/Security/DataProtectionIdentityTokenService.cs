@@ -130,26 +130,14 @@ public sealed class DataProtectionIdentityTokenService : IIdentityTokenService
     {
         ArgumentNullException.ThrowIfNull(userId);
 
-        var now = _clock.GetUtcNow();
-        var raw = RandomNumberGenerator.GetBytes(32);
-        var tokenValue = ToBase64Url(raw);
-
         await using var db = await _factory.CreateDbContextAsync(ct);
-        db.IdentityRefreshTokens.Add(new IdentityRefreshTokenRow
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            UserId = userId,
-            TokenHash = HashToken(tokenValue),
-            IssuedAt = now,
-            ExpiresAt = now.AddDays(_options.IdentityRefreshTokenTtlDays),
-            RevokedAt = null,
-        });
+        var tokenValue = AddRefreshToken(db, userId);
         await db.SaveChangesAsync(ct);
 
         return tokenValue;
     }
 
-    public async Task<UserRow?> RedeemRefreshTokenAsync(string refreshToken, CancellationToken ct = default)
+    public async Task<RefreshOutcome?> RedeemRefreshTokenAsync(string refreshToken, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(refreshToken))
         {
@@ -159,7 +147,13 @@ public sealed class DataProtectionIdentityTokenService : IIdentityTokenService
         var hash = HashToken(refreshToken);
 
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var row = await db.IdentityRefreshTokens.AsNoTracking()
+
+        // Revoke-old + issue-new must be atomic: if either half fails, the presented token must
+        // stay live (so the caller can retry) rather than leaving the user with no refresh token.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        // Tracked (not AsNoTracking): we mutate RevokedAt below within the same context.
+        var row = await db.IdentityRefreshTokens
             .FirstOrDefaultAsync(r => r.TokenHash == hash, ct);
 
         if (row is null || row.RevokedAt is not null || row.ExpiresAt <= _clock.GetUtcNow())
@@ -167,7 +161,41 @@ public sealed class DataProtectionIdentityTokenService : IIdentityTokenService
             return null;
         }
 
-        return await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == row.UserId, ct);
+        var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == row.UserId, ct);
+        if (user is null)
+        {
+            return null;
+        }
+
+        // Rotate: revoke the redeemed token and mint a new one for the same user.
+        row.RevokedAt = _clock.GetUtcNow();
+        var newToken = AddRefreshToken(db, row.UserId);
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+
+        return new RefreshOutcome(user, newToken);
+    }
+
+    // Adds a fresh refresh-token row to the context (caller saves) and returns the clear token
+    // value. Shared by IssueRefreshTokenAsync and the rotation half of RedeemRefreshTokenAsync.
+    private string AddRefreshToken(ZyncMasterDbContext db, string userId)
+    {
+        var now = _clock.GetUtcNow();
+        var raw = RandomNumberGenerator.GetBytes(32);
+        var tokenValue = ToBase64Url(raw);
+
+        db.IdentityRefreshTokens.Add(new IdentityRefreshTokenRow
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            UserId = userId,
+            TokenHash = HashToken(tokenValue),
+            IssuedAt = now,
+            ExpiresAt = now.AddDays(_options.IdentityRefreshTokenTtlDays),
+            RevokedAt = null,
+        });
+
+        return tokenValue;
     }
 
     public async Task RevokeAccessAsync(string jti, CancellationToken ct = default)

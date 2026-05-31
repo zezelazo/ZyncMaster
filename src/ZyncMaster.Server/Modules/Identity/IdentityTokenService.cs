@@ -6,6 +6,11 @@ namespace ZyncMaster.Server;
 // metadata (jti / expiry) the caller needs to track or revoke it later.
 public sealed record IdentityToken(string Token, string Jti, DateTimeOffset ExpiresAt);
 
+// The result of successfully redeeming a refresh token: the owning user plus a freshly
+// minted refresh token. Refresh tokens rotate on every redeem — the presented token is
+// revoked and this new one takes its place, so a stolen-then-replayed token is rejected.
+public sealed record RefreshOutcome(UserRow User, string NewRefreshToken);
+
 // The validated identity behind an access token. Returned by ValidateAccessToken when the
 // blob is intact, unexpired, and the jti has not been revoked.
 public sealed record IdentityPrincipal(
@@ -39,9 +44,11 @@ public interface IIdentityTokenService
     // Returns the clear token value (shown once to the caller, never stored).
     Task<string> IssueRefreshTokenAsync(string userId, CancellationToken ct = default);
 
-    // Validates the presented refresh token (hash match + unexpired + not revoked) and
-    // returns its owning user so the caller can issue a fresh access token; null otherwise.
-    Task<UserRow?> RedeemRefreshTokenAsync(string refreshToken, CancellationToken ct = default);
+    // Validates the presented refresh token (hash match + unexpired + not revoked), then
+    // ROTATES it: the redeemed token is revoked and a new one is issued atomically. Returns
+    // the owning user plus the new refresh token so the caller can mint a fresh access token;
+    // null on any invalid / expired / revoked / replayed token.
+    Task<RefreshOutcome?> RedeemRefreshTokenAsync(string refreshToken, CancellationToken ct = default);
 
     // Revokes a single access token by jti (e.g. a targeted session kill).
     Task RevokeAccessAsync(string jti, CancellationToken ct = default);

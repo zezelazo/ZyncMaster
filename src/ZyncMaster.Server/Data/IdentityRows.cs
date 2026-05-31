@@ -26,7 +26,10 @@ public sealed class IdentityLoginRow
 
 // One issued identity access token, registered by its jti so it can be revoked before its
 // natural expiry. The token blob itself is NOT stored (it lives only with the App); this row
-// is the revocation ledger consulted on every ValidateAccessToken. Expired rows may be purged.
+// is the revocation ledger consulted on every ValidateAccessToken.
+//
+// Purge policy (when implemented): rows may ONLY be deleted when ExpiresAt <= now. NEVER purge
+// by any other column — a revoked-but-unexpired row must survive so revocation is enforced.
 public sealed class IdentityAccessTokenRow
 {
     // The unique token id (jti) carried inside the protected blob. Primary key.

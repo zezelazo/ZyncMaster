@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ZyncMaster.Server;
 using ZyncMaster.Server.Data;
@@ -134,7 +135,33 @@ public class IdentityTokenServiceTests
         var redeemed = await svc.RedeemRefreshTokenAsync(refresh);
 
         redeemed.Should().NotBeNull();
-        redeemed!.Id.Should().Be(user.Id);
+        redeemed!.User.Id.Should().Be(user.Id);
+        redeemed.NewRefreshToken.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task RedeemRefreshToken_rotates_token_old_is_dead_new_works_once()
+    {
+        using var h = new EfStoreTestHarness();
+        var svc = Build(h, new MutableClock(DateTimeOffset.UnixEpoch));
+        var user = await SeedUserAsync(h, NewUser());
+
+        var refresh = await svc.IssueRefreshTokenAsync(user.Id);
+
+        // First redeem succeeds and hands back a brand-new refresh token.
+        var first = await svc.RedeemRefreshTokenAsync(refresh);
+        first.Should().NotBeNull();
+        first!.NewRefreshToken.Should().NotBe(refresh);
+
+        // The OLD token is now revoked — replaying it must fail (rotation defeats replay).
+        (await svc.RedeemRefreshTokenAsync(refresh)).Should().BeNull();
+
+        // The NEW token works exactly once, then it too is rotated away.
+        var second = await svc.RedeemRefreshTokenAsync(first.NewRefreshToken);
+        second.Should().NotBeNull();
+        second!.User.Id.Should().Be(user.Id);
+
+        (await svc.RedeemRefreshTokenAsync(first.NewRefreshToken)).Should().BeNull();
     }
 
     [Fact]
@@ -158,8 +185,10 @@ public class IdentityTokenServiceTests
         var svc = Build(h, clock, refreshTtlDays: 1);
         var user = await SeedUserAsync(h, NewUser());
 
+        // Don't redeem before advancing — a successful redeem would rotate the token and the
+        // later null would be "revoked", not "expired". Advance the clock past TTL, then assert
+        // the still-live (never-redeemed) token is rejected purely on expiry.
         var refresh = await svc.IssueRefreshTokenAsync(user.Id);
-        (await svc.RedeemRefreshTokenAsync(refresh)).Should().NotBeNull();
 
         clock.Advance(TimeSpan.FromDays(2));
 
@@ -180,6 +209,43 @@ public class IdentityTokenServiceTests
 
         svc.ValidateAccessToken(access.Token).Should().BeNull();
         (await svc.RedeemRefreshTokenAsync(refresh)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ValidateAccessToken_returns_null_when_jti_row_deleted()
+    {
+        using var h = new EfStoreTestHarness();
+        var svc = Build(h, new MutableClock(DateTimeOffset.UnixEpoch));
+        var issued = svc.IssueAccessToken(await SeedUserAsync(h, NewUser()));
+
+        // The blob itself is intact and unexpired, but its ledger row is gone. With no row to
+        // confirm the jti is live, validation must fail closed (never trust the blob alone).
+        await using (var db = h.NewContext())
+        {
+            var row = await db.IdentityAccessTokens.FirstAsync(r => r.Jti == issued.Jti);
+            db.IdentityAccessTokens.Remove(row);
+            await db.SaveChangesAsync();
+        }
+
+        svc.ValidateAccessToken(issued.Token).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RevokeAllForUser_does_not_affect_other_users_tokens()
+    {
+        using var h = new EfStoreTestHarness();
+        var svc = Build(h, new MutableClock(DateTimeOffset.UnixEpoch));
+        var userA = await SeedUserAsync(h, NewUser("uA"));
+        var userB = await SeedUserAsync(h, NewUser("uB"));
+
+        var accessB = svc.IssueAccessToken(userB);
+        var refreshB = await svc.IssueRefreshTokenAsync(userB.Id);
+
+        // Revoking everything for A must leave B's session completely untouched.
+        await svc.RevokeAllForUserAsync(userA.Id);
+
+        svc.ValidateAccessToken(accessB.Token).Should().NotBeNull();
+        (await svc.RedeemRefreshTokenAsync(refreshB)).Should().NotBeNull();
     }
 
     // Persists the user so the refresh-token FK and the redeem lookup resolve.
