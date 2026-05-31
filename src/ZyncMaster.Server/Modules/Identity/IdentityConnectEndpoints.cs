@@ -175,6 +175,44 @@ public static class IdentityConnectEndpoints
             return Results.Content(bundle, "application/json");
         });
 
+        // Exchanges a valid refresh token for a freshly minted access token AND a rotated
+        // refresh token (plan v2 §A-1). Anonymous: the refresh token IS the proof — possession
+        // of an unexpired, unrevoked, un-replayed refresh token authorizes the renewal. The
+        // presented token is revoked as part of the redeem (rotation), so a stolen-then-replayed
+        // token is rejected on its second use. Unknown / expired / revoked / tampered → 401.
+        app.MapPost("/identity/refresh", async (
+            HttpContext context,
+            IIdentityTokenService identityTokens,
+            CancellationToken ct) =>
+        {
+            RefreshRequest? body;
+            try
+            {
+                body = await context.Request.ReadFromJsonAsync<RefreshRequest>(ct);
+            }
+            catch (JsonException)
+            {
+                return Results.BadRequest("Invalid request body.");
+            }
+
+            if (body is null || string.IsNullOrEmpty(body.RefreshToken))
+                return Results.BadRequest("Missing refreshToken.");
+
+            // Redeem rotates: the old token is revoked and a fresh one is issued atomically.
+            var outcome = await identityTokens.RedeemRefreshTokenAsync(body.RefreshToken, ct);
+            if (outcome is null)
+                return Results.Unauthorized();
+
+            // Mint a new access token for the resolved user; hand back the rotated refresh token.
+            var access = identityTokens.IssueAccessToken(outcome.User);
+
+            return Results.Ok(new
+            {
+                accessToken = access.Token,
+                newRefreshToken = outcome.NewRefreshToken,
+            });
+        });
+
         // Identity profile for the holder of a valid identity access token. The formal
         // IdentityBearer authentication scheme is a later task; here the Bearer is validated
         // inline via IIdentityTokenService so this endpoint can ship independently.
@@ -271,5 +309,11 @@ public static class IdentityConnectEndpoints
     {
         [System.Text.Json.Serialization.JsonPropertyName("handle")]
         public string? Handle { get; set; }
+    }
+
+    private sealed class RefreshRequest
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("refreshToken")]
+        public string? RefreshToken { get; set; }
     }
 }

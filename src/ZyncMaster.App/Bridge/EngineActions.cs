@@ -38,6 +38,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly EngineSettings _engineSettings;
     private readonly Func<string, Task<string?>> _saveDialog;
     private readonly string _autoStartExePath;
+    private readonly IdentityLoginService _identity;
 
     private SyncStatus _status = SyncStatus.Idle;
     private bool _paused;
@@ -59,6 +60,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         EngineSettings engineSettings,
         Func<string, Task<string?>> saveDialog,
         string autoStartExePath,
+        IdentityLoginService identity,
         HttpClient? ownedHttp = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
@@ -73,6 +75,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _engineSettings = engineSettings ?? throw new ArgumentNullException(nameof(engineSettings));
         _saveDialog = saveDialog ?? throw new ArgumentNullException(nameof(saveDialog));
         _autoStartExePath = autoStartExePath ?? throw new ArgumentNullException(nameof(autoStartExePath));
+        _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _ownedHttp = ownedHttp;
     }
 
@@ -233,6 +236,39 @@ public sealed class EngineActions : IEngineActions, IDisposable
             _autoStart.Disable();
         return Task.CompletedTask;
     }
+
+    // ---------------- Identity (sign-in) lifecycle ----------------
+
+    public Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default)
+        => _identity.GetIdentityStateAsync(ct);
+
+    public async Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default)
+    {
+        switch ((provider ?? "").Trim().ToLowerInvariant())
+        {
+            case "microsoft":
+                return await _identity.LoginWithMicrosoftAsync(ct);
+
+            case "magic-link":
+            {
+                if (string.IsNullOrWhiteSpace(email))
+                    return LoginOutcome.Fail("Enter an email address to receive a sign-in link.");
+
+                var requested = await _identity.RequestMagicLinkAsync(email, ct);
+                // The link is emailed; the sign-in completes later on the loopback callback. Report
+                // success-with-no-state so the UI can show "check your email"; the next
+                // GetIdentityStateAsync poll surfaces the signed-in user once the link is clicked.
+                return requested.Requested
+                    ? new LoginOutcome(true, null, null)
+                    : LoginOutcome.Fail(requested.Error ?? "Could not send the sign-in link.");
+            }
+
+            default:
+                return LoginOutcome.Fail($"Unknown sign-in provider '{provider}'.");
+        }
+    }
+
+    public Task SignOutAsync(CancellationToken ct = default) => _identity.SignOutAsync(ct);
 
     private async Task<string> RequireKeyAsync(CancellationToken ct)
     {

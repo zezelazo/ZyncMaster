@@ -172,6 +172,23 @@ public sealed class UiBridge
                 await _engine.SetAutoStartAsync(ParseBool(message.Payload), ct);
                 return null;
             }
+            // ---------------- Identity (sign-in) lifecycle ----------------
+            case "getIdentityState":
+            {
+                var state = await _engine.GetIdentityStateAsync(ct);
+                return JsonSerializer.Serialize(state, JsonOptions);
+            }
+            case "login":
+            {
+                var (provider, email) = ParseLoginPayload(message.Payload);
+                var outcome = await _engine.LoginAsync(provider, email, ct);
+                return JsonSerializer.Serialize(outcome, JsonOptions);
+            }
+            case "signOut":
+            {
+                await _engine.SignOutAsync(ct);
+                return null;
+            }
             // Frameless window controls driven by the custom web title bar (fire-and-forget).
             case "windowMinimize":
                 _windowProvider?.Invoke()?.Minimize();
@@ -188,6 +205,35 @@ public sealed class UiBridge
             default:
                 throw new InvalidOperationException($"Unknown action '{message.Action}'.");
         }
+    }
+
+    // Parses a {"provider":"microsoft|magic-link","email":"..."} login payload. A bare string
+    // (just the provider) is tolerated too. Missing/blank provider yields "" so the engine
+    // surfaces a clear "unknown provider" error rather than the bridge throwing.
+    private static (string provider, string? email) ParseLoginPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return ("", null);
+
+        var trimmed = payload.Trim();
+        if (trimmed[0] == '{')
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                var root = doc.RootElement;
+                var provider = root.TryGetProperty("provider", out var p) ? p.GetString() ?? "" : "";
+                var email = root.TryGetProperty("email", out var e) ? e.GetString() : null;
+                return (provider, email);
+            }
+            catch (JsonException)
+            {
+                return ("", null);
+            }
+        }
+
+        // Not an object: treat the whole payload as the provider name.
+        return (UnwrapString(trimmed), null);
     }
 
     private static bool ParseBool(string? payload)

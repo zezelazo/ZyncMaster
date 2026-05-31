@@ -82,9 +82,23 @@ public sealed class EngineHost : IDisposable
         var txtExporter = new BasicTxtExporter(calExportRunner);
         var autoStart = new WindowsAutoStartManager(new WindowsRegistry());
 
+        // Identity (sign-in) wiring (Task 2e). The DPAPI-encrypted token cache lives next to the
+        // device key under %LOCALAPPDATA%\ZyncMaster\App\; the login service brokers sign-in over
+        // a system browser + an ephemeral HttpListener loopback (mirroring PairingService) and
+        // talks to the Server's identity endpoints through HttpIdentityServerClient.
+        var identityCache = Platform.FileIdentityTokenCache.CreateDefault();
+        var identityServer = new Platform.HttpIdentityServerClient(http, engineSettings.ServerBaseUrl);
+        var identityLogin = new IdentityLoginService(
+            identityServer,
+            identityCache,
+            () => new Platform.HttpListenerIdentityLoopback(),
+            new Platform.DefaultSystemBrowser(),
+            engineSettings.ServerBaseUrl);
+
         var actions = new EngineActions(
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
             pairsClient, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
+            identityLogin,
             ownedHttp: null);
 
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
