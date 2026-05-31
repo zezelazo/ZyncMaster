@@ -20,6 +20,8 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SyncPairRow> SyncPairs => Set<SyncPairRow>();
     public DbSet<SyncStateRow> SyncStates => Set<SyncStateRow>();
     public DbSet<IdentityLoginRow> IdentityLogins => Set<IdentityLoginRow>();
+    public DbSet<IdentityAccessTokenRow> IdentityAccessTokens => Set<IdentityAccessTokenRow>();
+    public DbSet<IdentityRefreshTokenRow> IdentityRefreshTokens => Set<IdentityRefreshTokenRow>();
 
     // Data Protection key ring lives in the DB so keys survive restarts and are shared
     // across instances (see AddDataProtection().PersistKeysToDbContext in Program.cs).
@@ -125,6 +127,35 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.Email).HasMaxLength(256).IsRequired();
             e.HasIndex(x => new { x.Provider, x.ProviderSubject }).IsUnique();
             e.HasIndex(x => new { x.Email, x.EmailVerified });
+            e.HasOne<UserRow>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<IdentityAccessTokenRow>(e =>
+        {
+            e.ToTable("IdentityAccessTokens");
+            e.HasKey(x => x.Jti);
+            e.Property(x => x.Jti).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.HasIndex(x => x.UserId);
+            e.HasIndex(x => x.ExpiresAt);
+            e.HasOne<UserRow>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<IdentityRefreshTokenRow>(e =>
+        {
+            e.ToTable("IdentityRefreshTokens");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
+            e.HasIndex(x => x.UserId);
+            e.HasIndex(x => x.TokenHash).IsUnique();
             e.HasOne<UserRow>()
                 .WithMany()
                 .HasForeignKey(x => x.UserId)

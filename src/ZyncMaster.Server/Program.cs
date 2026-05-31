@@ -58,6 +58,15 @@ builder.Services.AddSingleton<IDeviceStore, EfDeviceStore>();
 builder.Services.AddSingleton<ISyncStateStore, EfSyncStateStore>();
 builder.Services.AddSingleton<ISecretProvider, ConfigurationSecretProvider>();
 builder.Services.AddSingleton<IConnectedAccountStore, EfConnectedAccountStore>();
+
+// System clock seam shared by the identity primitives (overridden in tests for determinism).
+builder.Services.AddSingleton(TimeProvider.System);
+
+// Identity session tokens (internal Server<->App bearer) + one-time loopback handles.
+// Both are singletons: the token service is stateless over the singleton DbContextFactory,
+// and the handle store holds its in-memory map for the lifetime of the (single) instance.
+builder.Services.AddSingleton<IIdentityTokenService, DataProtectionIdentityTokenService>();
+builder.Services.AddSingleton<IIdentityHandleStore, InMemoryIdentityHandleStore>();
 builder.Services.AddScoped<DeviceService>();
 builder.Services.AddScoped<SyncService>();
 
