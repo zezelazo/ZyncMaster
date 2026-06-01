@@ -114,11 +114,11 @@ public static class PairEndpoints
             // so a run can never sweep the calendar it is reading from. Sameness is compared on the
             // canonical accountId: two refs of the SAME representation for one account collapse
             // (a legacy UPN resolves to its derived id, a pool ref to itself), plus the calendar id.
-            // CAVEAT: a pool account uses a fresh Guid, not the UPN-derived id, so the same mailbox
-            // connected BOTH as a legacy AND a pool account does NOT collapse — that cross-
-            // representation self-mirror is not caught here. TODO(Track A-2): dedupe legacy<->pool by
-            // mailbox. For two OutlookCom (COM) endpoints there is no server account, so we compare
-            // deviceId-equivalent (AccountRef) + calendar id.
+            // §A-2 — the cross-representation self-mirror IS now covered: a pool account uses a fresh
+            // Guid (so the same mailbox connected BOTH as legacy AND as a pool account does not
+            // collapse on accountId), so IsSameSourceAndDestinationAsync ALSO compares the resolved
+            // MAILBOX email (case-insensitive) + calendar id as an extra net. For two OutlookCom
+            // (COM) endpoints there is no server account, so we compare AccountRef + calendar id.
             if (await IsSameSourceAndDestinationAsync(req.Source!, req.Destination!, adapter, ct))
                 return Results.BadRequest(new { error = "same_source_destination", message = "source and destination must be different calendars." });
 
@@ -304,10 +304,18 @@ public static class PairEndpoints
     // for two OutlookCom (COM) endpoints there is no server account, so we compare on the device
     // reference (AccountRef) instead. The calendar id is then compared within the same account.
     //
+    // §A-2 — cross-representation self-mirror is NOW covered (by MAILBOX). The same Microsoft
+    // mailbox can be connected BOTH as a legacy UPN account AND as a pool account; the pool account
+    // uses a fresh Guid, so the two refs do NOT collapse on accountId. To stop a destructive
+    // self-mirror in that case, when the accountId comparison does NOT already flag sameness we
+    // ALSO resolve each Graph endpoint to its canonical mailbox email (via the adapter) and compare
+    // those case-insensitively, in addition to the calendar id. The accountId comparison is kept as
+    // the primary, fast collapse; the email comparison is the extra net for the cross-rep case.
+    //
     // TODO (Track B): once the pair model carries a pinnedDeviceId for COM endpoints, compare on
     // deviceId + calendar here. The COM-pin/lease itself is Track B; this method only enforces
     // origin != destination today.
-    private static async Task<bool> IsSameSourceAndDestinationAsync(
+    internal static async Task<bool> IsSameSourceAndDestinationAsync(
         Endpoint source, Endpoint destination, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
     {
         // Different providers can never address the same calendar (a device-side OutlookCom
@@ -315,25 +323,41 @@ public static class PairEndpoints
         if (!string.Equals(source.Provider, destination.Provider, StringComparison.Ordinal))
             return false;
 
-        // Same provider: the calendar id must differ within the same account. Compare the
-        // account on its canonical accountId for Graph (legacy UPN and pool accountId for the
-        // same account collapse to one id); for OutlookCom there is no server account, so the
-        // device reference (AccountRef) identifies the device-side calendar instead.
-        string sourceKey, destKey;
+        // For two OutlookCom (COM) endpoints there is no server account, so the device reference
+        // (AccountRef) identifies the device-side calendar; compare it plus the calendar id.
         if (string.Equals(source.Provider, ProviderRegistry.OutlookCom, StringComparison.Ordinal))
         {
-            sourceKey = source.AccountRef ?? "";
-            destKey = destination.AccountRef ?? "";
-        }
-        else
-        {
-            sourceKey = await adapter.ResolveAccountIdAsync(source.AccountRef, ct).ConfigureAwait(false);
-            destKey = await adapter.ResolveAccountIdAsync(destination.AccountRef, ct).ConfigureAwait(false);
+            return string.Equals(source.AccountRef ?? "", destination.AccountRef ?? "", StringComparison.Ordinal)
+                && string.Equals(source.CalendarId, destination.CalendarId, StringComparison.Ordinal);
         }
 
-        return string.Equals(sourceKey, destKey, StringComparison.Ordinal) &&
-               string.Equals(source.CalendarId, destination.CalendarId, StringComparison.Ordinal);
+        // Graph: the calendar id must differ within the same account. Sameness on the canonical
+        // accountId catches two refs of the SAME representation (legacy UPN <-> its derived id, or
+        // a pool id to itself).
+        var sourceId = await adapter.ResolveAccountIdAsync(source.AccountRef, ct).ConfigureAwait(false);
+        var destId = await adapter.ResolveAccountIdAsync(destination.AccountRef, ct).ConfigureAwait(false);
+        var sameCalendar = string.Equals(source.CalendarId, destination.CalendarId, StringComparison.Ordinal);
+
+        if (string.Equals(sourceId, destId, StringComparison.Ordinal))
+            return sameCalendar;
+
+        // §A-2 — distinct accountIds but the SAME mailbox (legacy UPN account vs pool account for
+        // one mailbox). Resolve each id to its canonical mailbox email and compare; combined with
+        // the same calendar id this is the cross-representation self-mirror that accountId misses.
+        if (!sameCalendar)
+            return false;
+
+        var sourceEmail = NormalizeMailbox((await adapter.ResolveAsync(sourceId, ct).ConfigureAwait(false))?.AccountEmail);
+        var destEmail = NormalizeMailbox((await adapter.ResolveAsync(destId, ct).ConfigureAwait(false))?.AccountEmail);
+
+        // A blank/unknown mailbox is NOT a match — only two resolved, equal mailboxes self-mirror.
+        return sourceEmail.Length > 0 && string.Equals(sourceEmail, destEmail, StringComparison.Ordinal);
     }
+
+    // Canonical mailbox key: trimmed + lower-invariant, empty when null/blank. Used so two
+    // representations of one mailbox compare equal regardless of casing/whitespace.
+    private static string NormalizeMailbox(string? email) =>
+        string.IsNullOrWhiteSpace(email) ? "" : email.Trim().ToLowerInvariant();
 
     private static (DateTimeOffset from, DateTimeOffset to) Window(ServerOptions opts)
     {
