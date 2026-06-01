@@ -119,6 +119,19 @@ public sealed class SyncRunLockRow
     public string? Owner { get; set; }
 }
 
+// Per-user feature toggles (Track C — plan/entitlements seam). One row per user, keyed by UserId.
+// Each column is a user-flippable lever; absence of a row means "all defaults" (everything on).
+// Today the only toggle is CloudFallbackSync ("Sync in the cloud"); new toggles are added as
+// additive columns with an on-by-default so a missing/old row keeps the unlocked behaviour.
+public sealed class UserToggleRow
+{
+    public string UserId { get; set; } = "";
+
+    // The user's setting for the server-side cron fallback. Default true (on). When false the cron
+    // runner skips this user's pairs (see CronSyncRunner / IEntitlementsService).
+    public bool CloudFallbackSync { get; set; } = true;
+}
+
 public sealed class SyncStateRow
 {
     // Surrogate key (UserId|DeviceId). The uniqueness guarantee is the composite

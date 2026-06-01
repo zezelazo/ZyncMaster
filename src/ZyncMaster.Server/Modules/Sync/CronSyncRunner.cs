@@ -30,15 +30,18 @@ namespace ZyncMaster.Server;
 // never collide with an App tick or a manual run), and a failure on one pair (lock busy, transient
 // read, thrown writer) is recorded against that pair and does NOT abort the rest.
 //
-// Gating: TODO(Track C) — when the `cloudFallbackSync` entitlement exists, filter the due set to
-// users who hold it. Today everything is unlocked, so every due+uncovered pair runs. The single
-// clear place to add that gate is IsUserGatedOut below.
+// Gating: Track C — the `cloudFallbackSync` entitlement gates the due set. A pair is skipped when
+// its owner's effective entitlements have CloudFallbackSync == false. Today every user's default is
+// true (everything unlocked) and only flips off when the user explicitly turns the "Sync in the
+// cloud" toggle off, so the observable behaviour is unchanged unless the user opts out. The single
+// clear place that consults the entitlement is IsUserGatedOutAsync below.
 public sealed class CronSyncRunner
 {
     private readonly IDbContextFactory<ZyncMasterDbContext> _factory;
     private readonly ISyncRunLock _runLock;
     private readonly SyncModuleRegistry _modules;
     private readonly IHttpCurrentUserOverride _userOverride;
+    private readonly IEntitlementsService _entitlements;
     private readonly ServerOptions _options;
     private readonly ILogger<CronSyncRunner> _logger;
 
@@ -47,6 +50,7 @@ public sealed class CronSyncRunner
         ISyncRunLock runLock,
         SyncModuleRegistry modules,
         IHttpCurrentUserOverride userOverride,
+        IEntitlementsService entitlements,
         IOptions<ServerOptions> options,
         ILogger<CronSyncRunner> logger)
     {
@@ -54,6 +58,7 @@ public sealed class CronSyncRunner
         _runLock = runLock ?? throw new ArgumentNullException(nameof(runLock));
         _modules = modules ?? throw new ArgumentNullException(nameof(modules));
         _userOverride = userOverride ?? throw new ArgumentNullException(nameof(userOverride));
+        _entitlements = entitlements ?? throw new ArgumentNullException(nameof(entitlements));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -95,6 +100,10 @@ public sealed class CronSyncRunner
         var module = _modules.GetCalendar();
         var summary = new RunDueSummary();
 
+        // Per-batch cache of the cloudFallbackSync gate so users with several due pairs are resolved
+        // once, not once per pair.
+        var gatedOut = new Dictionary<string, bool>(StringComparer.Ordinal);
+
         foreach (var row in dueRows)
         {
             if (ct.IsCancellationRequested)
@@ -112,7 +121,7 @@ public sealed class CronSyncRunner
                 continue;
             }
 
-            if (IsUserGatedOut(row.UserId))
+            if (await IsUserGatedOutAsync(row.UserId, gatedOut, ct).ConfigureAwait(false))
             {
                 summary.Skipped++;
                 continue;
@@ -214,9 +223,21 @@ public sealed class CronSyncRunner
             || string.Equals(dest.Provider, ProviderRegistry.OutlookCom, StringComparison.Ordinal);
     }
 
-    // TODO(Track C) — gate on the `cloudFallbackSync` entitlement here. Today everything is
-    // unlocked, so no user is gated out and the cron runs for all.
-    private static bool IsUserGatedOut(string userId) => false;
+    // Track C gate: a user is gated out of the cron fallback when their effective entitlements have
+    // CloudFallbackSync == false (the user turned the "Sync in the cloud" toggle off). Today the
+    // default is true for everyone, so this returns false unless the user opted out. Cached per
+    // batch so users with multiple due pairs are resolved once.
+    private async Task<bool> IsUserGatedOutAsync(
+        string userId, Dictionary<string, bool> cache, CancellationToken ct)
+    {
+        if (cache.TryGetValue(userId, out var gated))
+            return gated;
+
+        var entitlements = await _entitlements.GetForUserAsync(userId, ct).ConfigureAwait(false);
+        gated = !entitlements.CloudFallbackSync;
+        cache[userId] = gated;
+        return gated;
+    }
 
     private (DateTimeOffset from, DateTimeOffset to) Window(DateTimeOffset now)
     {
