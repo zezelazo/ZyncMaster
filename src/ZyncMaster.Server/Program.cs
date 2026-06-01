@@ -13,6 +13,26 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection("Server"));
 
+// ForwardedHeaders for running behind the Azure App Service reverse proxy. App Service terminates
+// TLS at its front-end and forwards over plain http with X-Forwarded-For / X-Forwarded-Proto set;
+// without this the app sees the proxy as the client (RemoteIpAddress = the front-end, scheme =
+// http), which would (a) collapse the per-IP magic-link rate limiter onto a single proxy address
+// and (b) make UseHttpsRedirection loop. We honour XFF + XFF-Proto and CLEAR KnownIPNetworks /
+// KnownProxies. Clearing the known-proxy allow-list normally means "trust the header from any
+// hop" (spoofable on an open network), but on Azure App Service it is safe: the App Service
+// front-end is the ONLY ingress and it OVERWRITES (not appends) the X-Forwarded-* headers with
+// the real client values before they reach the app, so a client-supplied XFF cannot survive. The
+// app is never directly reachable on the public internet. This is the configuration Microsoft
+// documents for App Service / containers behind an unknown-IP proxy.
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders =
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    o.KnownIPNetworks.Clear();
+    o.KnownProxies.Clear();
+});
+
 // EF Core persistence. A DbContextFactory (singleton) backs the stores so they can be
 // shared by the singleton composition root; a scoped DbContext is also registered for
 // the Data Protection key ring.
@@ -39,6 +59,15 @@ if (string.IsNullOrWhiteSpace(connectionString))
             "or the app setting 'ConnectionStrings__ZyncMasterDb'.");
     }
 }
+
+// Fail-fast on the OAuth / magic-link critical config — same discipline as the connection-string
+// guard above. Gated on !IsDevelopment() so the WebApplicationFactory test host and local dev
+// (both Development, with empty config) keep starting; in production a blank MicrosoftClientId /
+// redirect URI / PublicBaseUrl aborts host build with a clear, aggregated message rather than
+// serving a broken sign-in flow. Mailjet is NOT validated here (optional, falls back to logging).
+ZyncMaster.Server.Configuration.StartupConfigValidator.ValidateOAuthConfig(
+    builder.Configuration.GetSection("Server").Get<ServerOptions>() ?? new ServerOptions(),
+    builder.Environment.IsDevelopment());
 
 builder.Services.AddDbContextFactory<ZyncMasterDbContext>(o => o.UseSqlServer(connectionString));
 builder.Services.AddDbContext<ZyncMasterDbContext>(
@@ -81,9 +110,21 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IIdentityTokenService, DataProtectionIdentityTokenService>();
 builder.Services.AddSingleton<IIdentityHandleStore, InMemoryIdentityHandleStore>();
 
-// Outbound email seam for the magic-link flow. The dev/test default logs and sends nothing;
-// the real SendGrid transport (plan deferred §4) is a one-line swap here in production.
-builder.Services.AddSingleton<IEmailSender, LoggingEmailSender>();
+// Outbound email seam for the magic-link flow. Conditional registration: when BOTH Mailjet
+// credentials are configured (Server__MailjetApiKey + Server__MailjetApiSecret), the real
+// Mailjet REST v3.1 transport is wired up via a typed HttpClient; otherwise the dev/test default
+// (LoggingEmailSender, logs and sends nothing) stays in place so a no-config run never breaks
+// the magic-link flow. Mailjet is OPTIONAL — it is intentionally NOT part of the startup fail-fast.
+var mailjetOptions = builder.Configuration.GetSection("Server").Get<ServerOptions>() ?? new ServerOptions();
+if (!string.IsNullOrWhiteSpace(mailjetOptions.MailjetApiKey)
+    && !string.IsNullOrWhiteSpace(mailjetOptions.MailjetApiSecret))
+{
+    builder.Services.AddHttpClient<IEmailSender, MailjetEmailSender>();
+}
+else
+{
+    builder.Services.AddSingleton<IEmailSender, LoggingEmailSender>();
+}
 
 // Per-IP rate limiter for the magic-link POST (plan A-6). A fixed window keyed on the remote IP
 // rejects raw endpoint abuse with 429. This is anti-abuse only — it does not branch on whether
@@ -218,6 +259,13 @@ using (var scope = app.Services.CreateScope())
         }
     }
 }
+
+// Honour the Azure App Service reverse-proxy forwarded headers FIRST, before any middleware
+// that reads the client IP or scheme — the per-IP magic-link rate limiter and UseHttpsRedirection
+// both depend on RemoteIpAddress / Request.Scheme reflecting the real client, not the proxy. See
+// the ForwardedHeadersOptions registration above for why clearing the known-proxy list is safe on
+// App Service (the front-end overwrites X-Forwarded-* and is the only ingress).
+app.UseForwardedHeaders();
 
 // Security headers (L3). Applied to every response, including static panel/UI assets.
 //   X-Frame-Options: DENY        — the panel is never meant to be framed (clickjacking).

@@ -89,4 +89,20 @@ public sealed class ServerOptions
     // misconfigured deployment never exposes an unauthenticated server-side run trigger. Set it
     // per-environment via "Server:CronTriggerSecret" (user-secrets in dev, env var in prod).
     public string CronTriggerSecret { get; set; } = "";
+
+    // Mailjet transactional email (Send API v3.1). When BOTH MailjetApiKey and MailjetApiSecret
+    // are set, Program.cs registers MailjetEmailSender as the IEmailSender; when either is empty
+    // the dev/test default (LoggingEmailSender) stays in place, so a no-config run never breaks
+    // the magic-link flow. Mailjet is therefore OPTIONAL — it is intentionally excluded from the
+    // production fail-fast. The key/secret are credentials and MUST come from user-secrets in dev
+    // and environment variables / app settings in prod (Server__MailjetApiKey, Server__MailjetApiSecret),
+    // NEVER committed. Defaults are "".
+    public string MailjetApiKey { get; set; } = "";
+    public string MailjetApiSecret { get; set; } = "";
+
+    // The verified sender identity Mailjet sends from. The From email MUST be a sender/domain you
+    // have validated in the Mailjet account, or Mailjet rejects the send. Set per-environment via
+    // Server__MailjetFromEmail / Server__MailjetFromName.
+    public string MailjetFromEmail { get; set; } = "";
+    public string MailjetFromName { get; set; } = "Zync Master";
 }
