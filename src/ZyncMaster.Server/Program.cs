@@ -196,6 +196,11 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 builder.Services.AddSingleton<ISyncRunLock, EfSyncRunLock>();
 
+// Track C — plan/entitlements seam. Today's impl returns everything unlocked (∩ the user's
+// toggles). SWAP: replace DefaultEntitlementsService with PlanBasedEntitlementsService here (one
+// line) when plan gating (Free/PRO) goes live; nothing downstream changes.
+builder.Services.AddSingleton<IEntitlementsService, DefaultEntitlementsService>();
+
 // §D-1 — the external cron-trigger runner. Singleton over the DbContext factory (cross-user
 // queries) + the run-lock + the module registry; it executes every due, uncovered pair when the
 // external scheduler hits /api/sync/run-due.
@@ -373,6 +378,7 @@ app.MapSyncRunDueEndpoints();
 app.MapPanelEndpoints();
 app.MapPairEndpoints();
 app.MapPairApprovalEndpoints();
+app.MapEntitlementEndpoints();
 
 app.Run();
 

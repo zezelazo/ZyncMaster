@@ -21,6 +21,7 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SyncPairRow> SyncPairs => Set<SyncPairRow>();
     public DbSet<SyncRunLockRow> SyncRunLocks => Set<SyncRunLockRow>();
     public DbSet<SyncStateRow> SyncStates => Set<SyncStateRow>();
+    public DbSet<UserToggleRow> UserToggles => Set<UserToggleRow>();
     public DbSet<IdentityLoginRow> IdentityLogins => Set<IdentityLoginRow>();
     public DbSet<IdentityAccessTokenRow> IdentityAccessTokens => Set<IdentityAccessTokenRow>();
     public DbSet<IdentityRefreshTokenRow> IdentityRefreshTokens => Set<IdentityRefreshTokenRow>();
@@ -159,6 +160,19 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
             e.Property(x => x.DeviceId).HasMaxLength(64).IsRequired();
             e.HasIndex(x => new { x.UserId, x.DeviceId }).IsUnique();
+        });
+
+        b.Entity<UserToggleRow>(e =>
+        {
+            e.ToTable("UserToggles");
+            // One row per user; UserId is the natural primary key.
+            e.HasKey(x => x.UserId);
+            e.Property(x => x.UserId).HasMaxLength(64);
+            e.Property(x => x.CloudFallbackSync).HasDefaultValue(true);
+            e.HasOne<UserRow>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<IdentityLoginRow>(e =>
