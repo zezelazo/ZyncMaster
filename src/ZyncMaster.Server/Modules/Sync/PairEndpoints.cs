@@ -216,7 +216,7 @@ public static class PairEndpoints
             string id,
             ISyncPairStore store,
             ISyncRunLock runLock,
-            ProviderRegistry registry,
+            SyncModuleRegistry modules,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
         {
@@ -224,8 +224,28 @@ public static class PairEndpoints
             if (pair is null)
                 return Results.NotFound();
 
-            var reader = registry.ResolveReader(pair.Source);
-            if (reader is null)
+            // The pair's kind is implicitly "calendar" today; resolve its module from the
+            // registry. A pair whose module is unknown (no module registered for its kind)
+            // cannot run — only calendar exists for now.
+            var module = modules.GetCalendar();
+            if (module is null)
+                return NoModule();
+
+            // §B-1 — acquire the per-pair run lock before the read+mirror so a manual run and
+            // a background tick (or two ticks) never run the same destructive mirror at once.
+            // The lock WRAPS the module call; it is never taken inside the module.
+            await using var handle = await runLock
+                .TryAcquireAsync(id, LockTtl(opts.Value), owner: "run", ct)
+                .ConfigureAwait(false);
+            if (handle is null)
+                return RunLockBusy();
+
+            var (from, to) = Window(opts.Value);
+
+            // Delegate the read + destructive mirror to the calendar module. The §A-3 transient
+            // read guard and the conditional window sweep live inside the module / CalendarMirror.
+            var outcome = await module.ExecuteAsync(pair, from, to, ct).ConfigureAwait(false);
+            if (outcome.NoServerReader)
             {
                 // OutlookCom sources have no server-side read; their events arrive via /push.
                 return Results.Conflict(new
@@ -235,41 +255,8 @@ public static class PairEndpoints
                 });
             }
 
-            // §B-1 — acquire the per-pair run lock before the read+mirror so a manual run and
-            // a background tick (or two ticks) never run the same destructive mirror at once.
-            await using var handle = await runLock
-                .TryAcquireAsync(id, LockTtl(opts.Value), owner: "run", ct)
-                .ConfigureAwait(false);
-            if (handle is null)
-                return RunLockBusy();
-
-            var (from, to) = Window(opts.Value);
-
-            // §A-3 — a SOURCE read that fails transiently (throttling, 5xx, timeout, transport
-            // drop, or a truncated/malformed paged read) must NOT flow into the destructive
-            // mirror: a short source set would make the sweep delete events that still exist at
-            // the source. Abort before the mirror and report Partial (the same "retry me later"
-            // contract as a partial upsert) instead of a generic 500. Non-transient read errors
-            // (auth/consent, fatal contract) still propagate to the global handler.
-            IReadOnlyList<AppointmentRecord> events;
-            try
-            {
-                events = await reader.ReadWindowAsync(pair.Source.CalendarId, from, to, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsTransientReadFailure(ex))
-            {
-                var partial = PartialReadResult(ex);
-                await RecordRunAsync(store, pair, partial, ct).ConfigureAwait(false);
-                return Results.Ok(partial);
-            }
-
-            var writer = registry.ResolveWriter(pair.Destination);
-            var result = await writer
-                .MirrorAsync(pair.Destination.CalendarId, events, ReminderMinutes, from, to, ct)
-                .ConfigureAwait(false);
-
-            await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
-            return Results.Ok(result);
+            await RecordRunAsync(store, pair, outcome.Result!, ct).ConfigureAwait(false);
+            return Results.Ok(outcome.Result);
         }).RequireCookieOrApiKey();
     }
 
@@ -285,6 +272,16 @@ public static class PairEndpoints
         {
             error = "run_in_progress",
             message = "Another sync run for this pair is already in progress; try again shortly.",
+        });
+
+    // 409: the pair's module kind has no registered module. Only "calendar" exists today, so in
+    // practice this never triggers in production; it is a clear failure for an unknown kind
+    // rather than a NullReferenceException once Phase 9 modules (files/clipboard) are added.
+    private static IResult NoModule()
+        => Results.Conflict(new
+        {
+            error = "no_module",
+            message = "No sync module is registered for this pair's kind.",
         });
 
     // True when an endpoint references a Graph connected account (explicit, non-empty
