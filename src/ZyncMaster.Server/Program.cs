@@ -134,6 +134,19 @@ builder.Services.AddSingleton<Func<string?, MicrosoftGraphProvider>>(sp => accou
     return new MicrosoftGraphProvider(readHttp, tokenProvider, target);
 });
 builder.Services.AddSingleton<ProviderRegistry>();
+
+// Modular sync engine seam (Phase 4): a pair's execution lives behind ISyncModule so adding
+// Files/Clipboard later is "new module + tile", not a rewrite of the run engine. Today only
+// the calendar module is registered; it wraps the read+mirror that /run delegates to. The
+// per-pair run-lock stays in the endpoint and wraps the module call.
+builder.Services.AddSingleton<ICalendarSyncModule, CalendarSyncModule>();
+builder.Services.AddSingleton(sp =>
+{
+    var registry = new SyncModuleRegistry();
+    registry.Register(sp.GetRequiredService<ICalendarSyncModule>());
+    return registry;
+});
+
 builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 builder.Services.AddSingleton<ISyncRunLock, EfSyncRunLock>();
 
