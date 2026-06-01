@@ -225,6 +225,10 @@ const Bridge = (() => {
     // webPanel — the browser panel (mode 3). The UI uses this to hide device-only affordances
     // and to apply the sign-in gate, both of which are panel-only concerns.
     get webPanel() { return mode === 'web'; },
+    // desktopApp — the desktop App shell (native WebView2 or the loopback host). This is the
+    // transport that owns the IDENTITY sign-in gate (Microsoft / magic-link via getIdentityState
+    // + login + signOut). The web panel keeps its own /connect gate; mock has no bridge.
+    get desktopApp() { return mode === 'native' || mode === 'loopback'; },
     get mode() { return mode; },
     resolveTransport, start, call, windowAction,
     onStatus(cb) { statusCb = cb; },
@@ -377,6 +381,22 @@ const live = {
 // Web panel sign-in gate state. Only consulted in web mode (Bridge.webPanel). signedIn flips
 // true once getStatus resolves; a 401 from any web call flips it false and shows the gate.
 const webAuth = { resolved: false, signedIn: false };
+
+// Desktop App identity gate state. Only consulted in native/loopback (Bridge.desktopApp). The
+// App boot calls getIdentityState; isSignedIn === false shows the identity sign-in screen
+// (Microsoft / magic-link) before the dashboard. `loading` is set while a login() is in flight;
+// `error` holds the last login failure message; `magicLinkSent` is true after a magic-link
+// request so the screen shows the "check your email" state while the loopback round-trip
+// completes the sign-in on its own.
+const identityAuth = {
+  resolved: false,    // getIdentityState has answered at least once
+  signedIn: false,    // isSignedIn from getIdentityState
+  me: null,           // { userId, email, displayName, expiresAt, plan }
+  loading: false,     // a login() request is in flight
+  error: null,        // last login error message
+  magicLinkSent: false, // a magic-link was requested; awaiting the email round-trip
+  magicLinkEmail: '',   // the address the magic-link was sent to (shown in the sent state)
+};
 
 async function loadPairs() {
   if (!Bridge.available) { live.pairs = null; return PAIRS; }
@@ -1078,6 +1098,20 @@ function renderConfig(root) {
       row('Signed in as', el('div', { class: 'cfg-row__hint', text: email }), signOutBtn)));
   }
 
+  // Account (desktop App only): the signed-in identity from getIdentityState + a Sign out that
+  // drops back to the identity gate. displayName when present, else email; the email shows as a
+  // hint. Plan, when reported, is shown as a small chip.
+  if (Bridge.desktopApp && identityAuth.signedIn) {
+    const me = identityAuth.me || {};
+    const primary = me.displayName || me.email || 'Signed in';
+    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
+    const hint = el('div', { class: 'cfg-row__hint' });
+    if (me.displayName && me.email) hint.append(document.createTextNode(me.email));
+    if (me.plan) hint.append(el('span', { class: 'chip chip--ok', style: 'margin-left:8px;height:18px;font-size:9.5px', text: String(me.plan) }));
+    root.append(section('Account',
+      row(primary, hint, signOutBtn)));
+  }
+
   // Calendar
   const targetSel = el('select', { class: 'field-select' });
   ['Work · Calendar', 'Personal · Family', '+ Create new…'].forEach((o) => targetSel.append(el('option', { text: o })));
@@ -1183,6 +1217,173 @@ function signOutWeb() {
       state.view = 'home';
       rerender();
     });
+}
+
+// ---------------- Identity (desktop App: native / loopback) ----------------
+// The App's own sign-in gate, distinct from the web panel's /connect gate above and from
+// "connect a calendar account" (which lives inside the dashboard). It drives Bridge actions:
+//   getIdentityState -> { isSignedIn, userId, email, displayName, expiresAt, plan }
+//   login { provider:'microsoft' } | { provider:'magic-link', email }
+//   signOut
+// Microsoft + magic-link are the only providers the backend supports today.
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// refreshIdentity — pull the current identity from the host and cache it. Used at boot, after a
+// login completes, and after sign-out. Repaints when the signed-in flag actually changes so the
+// gate and dashboard swap without flicker. Returns the resolved snapshot (or null on failure).
+async function refreshIdentity() {
+  if (!Bridge.desktopApp) return null;
+  try {
+    const s = await Bridge.call('getIdentityState');
+    const signedIn = !!(s && s.isSignedIn);
+    const was = identityAuth.signedIn;
+    identityAuth.resolved = true;
+    identityAuth.signedIn = signedIn;
+    identityAuth.me = signedIn
+      ? { userId: s.userId, email: s.email, displayName: s.displayName, expiresAt: s.expiresAt, plan: s.plan }
+      : null;
+    if (signedIn) { identityAuth.loading = false; identityAuth.error = null; identityAuth.magicLinkSent = false; }
+    if (was !== signedIn) rerender();
+    return s;
+  } catch (_) {
+    // A failed probe leaves us unauthenticated so the gate shows rather than an empty dashboard.
+    identityAuth.resolved = true;
+    return null;
+  }
+}
+
+// startMicrosoftLogin — kick the host's Microsoft sign-in. The host opens its own browser/flow;
+// on success getIdentityState flips to signedIn and we enter the dashboard. We poll once the
+// login() promise resolves (the host may resolve immediately and complete asynchronously).
+function startMicrosoftLogin() {
+  if (!Bridge.desktopApp || identityAuth.loading) return;
+  identityAuth.loading = true;
+  identityAuth.error = null;
+  identityAuth.magicLinkSent = false;
+  rerender();
+  Bridge.call('login', JSON.stringify({ provider: 'microsoft' }), 210000)
+    .then((outcome) => {
+      if (outcome && outcome.error) { identityAuth.error = String(outcome.error); identityAuth.loading = false; rerender(); return; }
+      // Re-read the identity; success swaps to the dashboard, otherwise we stay on the gate.
+      return refreshIdentity().then(() => { if (!identityAuth.signedIn) identityAuth.loading = false; rerender(); });
+    })
+    .catch((e) => { identityAuth.error = (e && e.message) || 'Sign-in failed.'; identityAuth.loading = false; rerender(); });
+}
+
+// startMagicLinkLogin — request a magic-link email. After the host accepts the request we show
+// the "check your email" state; the actual sign-in completes when the user clicks the emailed
+// link, which returns through the loopback host and flips getIdentityState to signedIn. We
+// poll getIdentityState a few times so the screen advances on its own once that happens.
+let magicLinkPoll = null;
+function startMagicLinkLogin(email) {
+  if (!Bridge.desktopApp || identityAuth.loading) return;
+  const addr = String(email || '').trim();
+  if (!EMAIL_RE.test(addr)) { identityAuth.error = 'Enter a valid email address.'; rerender(); return; }
+  identityAuth.loading = true;
+  identityAuth.error = null;
+  rerender();
+  Bridge.call('login', JSON.stringify({ provider: 'magic-link', email: addr }), 60000)
+    .then((outcome) => {
+      if (outcome && outcome.error) { identityAuth.error = String(outcome.error); identityAuth.loading = false; rerender(); return; }
+      identityAuth.loading = false;
+      identityAuth.magicLinkSent = true;
+      identityAuth.magicLinkEmail = addr;
+      rerender();
+      // Poll for the loopback round-trip to complete the sign-in. refreshIdentity repaints and
+      // clears magicLinkSent once signedIn flips, so the poll naturally lands on the dashboard.
+      clearInterval(magicLinkPoll);
+      magicLinkPoll = setInterval(() => {
+        if (!identityAuth.magicLinkSent || identityAuth.signedIn) { clearInterval(magicLinkPoll); return; }
+        refreshIdentity();
+      }, 2500);
+    })
+    .catch((e) => { identityAuth.error = (e && e.message) || 'Could not send the magic link.'; identityAuth.loading = false; rerender(); });
+}
+
+// signOutApp — desktop App sign-out. Clears the host session, drops back to the identity gate.
+function signOutApp() {
+  if (!Bridge.desktopApp) return;
+  clearInterval(magicLinkPoll);
+  Bridge.call('signOut')
+    .catch(() => {})
+    .finally(() => {
+      identityAuth.signedIn = false;
+      identityAuth.me = null;
+      identityAuth.magicLinkSent = false;
+      identityAuth.error = null;
+      state.view = 'home';
+      rerender();
+    });
+}
+
+// renderIdentitySignIn — the desktop App identity gate. Liquid Glass card with the Microsoft
+// 4-square button and an email magic-link form. States: idle, loading (login in flight), error,
+// and the "magic-link sent" confirmation. Decorative glow lives on the buttons' own
+// border-light; nothing here moves the hit area or flickers on hover.
+function renderIdentitySignIn(root) {
+  // Magic-link sent confirmation — replaces the form until the round-trip completes.
+  if (identityAuth.magicLinkSent) {
+    const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' },
+      el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
+      el('div', { class: 'pair-title', text: 'Check your email' }),
+      el('div', { class: 'pair-sub' },
+        'We sent a sign-in link to ',
+        el('b', { style: 'color:var(--ink-1)', text: identityAuth.magicLinkEmail || 'your inbox' }),
+        '. Open it on this device to finish signing in — this screen updates automatically.'),
+      el('div', { class: 'identity-waiting' },
+        el('span', { class: 'spinner', style: 'width:14px;height:14px;border-color:var(--azure-edge);border-top-color:var(--azure)' }),
+        el('span', { class: 'identity-waiting__txt', text: 'Waiting for the link…' })),
+      el('button', { class: 'btn btn--ghost', text: 'Use a different email',
+        onclick: () => { clearInterval(magicLinkPoll); identityAuth.magicLinkSent = false; identityAuth.error = null; rerender(); } }),
+    );
+    root.append(card);
+    return;
+  }
+
+  const loading = identityAuth.loading;
+  const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' });
+  card.append(
+    el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
+    el('div', { class: 'pair-title', text: 'Sign in to Zync Master' }),
+    el('div', { class: 'pair-sub', text: 'Sign in to mirror your calendars across your accounts and devices.' }),
+  );
+
+  // Error banner (login failure). Calm, no flicker; cleared on the next attempt.
+  if (identityAuth.error) {
+    card.append(el('div', { class: 'identity-error', role: 'alert' },
+      iconEl('alert', 13, 1.8), el('span', { text: identityAuth.error })));
+  }
+
+  // Microsoft — official 4-square logo + label, on the primary glass button.
+  const msBtn = el('button', { class: 'btn btn--primary ms-signin', style: 'align-self:stretch',
+    disabled: loading, onclick: () => startMicrosoftLogin() },
+    loading
+      ? el('span', { class: 'spinner', style: 'width:16px;height:16px' })
+      : el('span', { class: 'ms-signin__logo', html: microsoftLogo({ size: 18 }) }),
+    el('span', { class: 'ms-signin__label', text: loading ? 'Signing in…' : 'Sign in with Microsoft' }));
+  card.append(msBtn);
+
+  // Divider between the providers.
+  card.append(el('div', { class: 'identity-divider' },
+    el('span', { class: 'identity-divider__line' }),
+    el('span', { class: 'identity-divider__txt', text: 'or' }),
+    el('span', { class: 'identity-divider__line' })));
+
+  // Magic-link — email input + send button.
+  const emailInput = el('input', {
+    class: 'field-input identity-email', type: 'email', inputmode: 'email',
+    autocomplete: 'email', placeholder: 'you@example.com', 'aria-label': 'Email address',
+  });
+  const submit = () => startMagicLinkLogin(emailInput.value);
+  emailInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  emailInput.disabled = loading;
+  const sendBtn = el('button', { class: 'btn identity-email__send', disabled: loading, onclick: submit },
+    iconEl('arrowright', 14, 1.8), el('span', { text: 'Sign in with email' }));
+  card.append(el('div', { class: 'identity-email-row' }, emailInput, sendBtn));
+  card.append(el('div', { class: 'identity-foot', text: 'We will email you a one-time sign-in link. No password needed.' }));
+
+  root.append(card);
 }
 
 // ---------------- Screen: About ----------------
@@ -1421,6 +1622,18 @@ function rerender() {
     root.classList.add('enter');
     return;
   }
+
+  // Desktop App identity gate: in native/loopback, until getIdentityState reports signed-in the
+  // only screen is the identity sign-in card (Microsoft / magic-link) and the bottom nav is
+  // hidden. The web panel and the mock demo do NOT use this gate.
+  if (Bridge.desktopApp && identityAuth.resolved && !identityAuth.signedIn) {
+    renderIdentitySignIn(root);
+    const nav = $('#navbar');
+    if (nav) { nav.replaceChildren(); nav.hidden = true; }
+    void root.offsetWidth;
+    root.classList.add('enter');
+    return;
+  }
   const nav = $('#navbar');
   if (nav) nav.hidden = false;
 
@@ -1446,6 +1659,7 @@ function rerenderInPlace() {
   // The sign-in gate owns the screen: a stale background repaint (e.g. a late loadPairs)
   // must never paint the dashboard over the sign-in card and leave the nav hidden.
   if (Bridge.webPanel && webAuth.resolved && !webAuth.signedIn) return;
+  if (Bridge.desktopApp && identityAuth.resolved && !identityAuth.signedIn) return;
   const root = $('#view');
   if (!root) return;
   const prevScroll = root.scrollTop;   // a tick/refresh repaint must not snap the user back to the top
@@ -1537,6 +1751,25 @@ async function boot() {
   if (Bridge.available) {
     Bridge.start();
     Bridge.onStatus((s) => applyNativeStatus(s));
+
+    // Desktop App: resolve the IDENTITY gate before the first dashboard paint. getIdentityState
+    // decides whether the sign-in screen or the dashboard shows. We mark the gate resolved even
+    // on failure so a probe error lands on the sign-in screen rather than an empty dashboard.
+    if (Bridge.desktopApp) {
+      Bridge.call('getIdentityState')
+        .then((s) => {
+          const signedIn = !!(s && s.isSignedIn);
+          identityAuth.resolved = true;
+          identityAuth.signedIn = signedIn;
+          identityAuth.me = signedIn
+            ? { userId: s.userId, email: s.email, displayName: s.displayName, expiresAt: s.expiresAt, plan: s.plan }
+            : null;
+          rerender();
+        })
+        .catch(() => { identityAuth.resolved = true; identityAuth.signedIn = false; rerender(); })
+        .finally(() => setTimeout(dismissLaunch, 450));
+    }
+
     // Dismiss the splash shortly after the first status settles (with a small floor) so the
     // app feels instant when the host responds quickly, instead of a fixed long hold.
     Bridge.call('getStatus')
