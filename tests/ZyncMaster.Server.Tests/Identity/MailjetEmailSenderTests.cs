@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
+using ZyncMaster.Server.Configuration;
 using ZyncMaster.Server.Infrastructure.Email;
 using Xunit;
 
@@ -41,20 +42,20 @@ public class MailjetEmailSenderTests
         }
     }
 
-    private static IOptions<ServerOptions> Options(
+    private static IOptions<MailjetOptions> Options(
         string apiKey = "MJ-KEY",
         string apiSecret = "MJ-SECRET",
         string fromEmail = "noreply@zyncmaster.test",
         string fromName = "Zync Master") =>
-        Microsoft.Extensions.Options.Options.Create(new ServerOptions
+        Microsoft.Extensions.Options.Options.Create(new MailjetOptions
         {
-            MailjetApiKey = apiKey,
-            MailjetApiSecret = apiSecret,
-            MailjetFromEmail = fromEmail,
-            MailjetFromName = fromName,
+            ApiKey = apiKey,
+            ApiSecret = apiSecret,
+            FromEmail = fromEmail,
+            FromName = fromName,
         });
 
-    private static MailjetEmailSender BuildSender(CapturingHandler handler, IOptions<ServerOptions>? opts = null) =>
+    private static MailjetEmailSender BuildSender(CapturingHandler handler, IOptions<MailjetOptions>? opts = null) =>
         new(new HttpClient(handler), opts ?? Options());
 
     private static HttpResponseMessage Ok() =>

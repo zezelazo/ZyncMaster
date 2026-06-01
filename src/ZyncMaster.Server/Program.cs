@@ -12,6 +12,7 @@ using ZyncMaster.Server.Modules.Calendar;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection("Server"));
+builder.Services.Configure<ZyncMaster.Server.Configuration.MailjetOptions>(builder.Configuration.GetSection("Mailjet"));
 
 // ForwardedHeaders for running behind the Azure App Service reverse proxy. App Service terminates
 // TLS at its front-end and forwards over plain http with X-Forwarded-For / X-Forwarded-Proto set;
@@ -111,13 +112,14 @@ builder.Services.AddSingleton<IIdentityTokenService, DataProtectionIdentityToken
 builder.Services.AddSingleton<IIdentityHandleStore, InMemoryIdentityHandleStore>();
 
 // Outbound email seam for the magic-link flow. Conditional registration: when BOTH Mailjet
-// credentials are configured (Server__MailjetApiKey + Server__MailjetApiSecret), the real
-// Mailjet REST v3.1 transport is wired up via a typed HttpClient; otherwise the dev/test default
-// (LoggingEmailSender, logs and sends nothing) stays in place so a no-config run never breaks
-// the magic-link flow. Mailjet is OPTIONAL — it is intentionally NOT part of the startup fail-fast.
-var mailjetOptions = builder.Configuration.GetSection("Server").Get<ServerOptions>() ?? new ServerOptions();
-if (!string.IsNullOrWhiteSpace(mailjetOptions.MailjetApiKey)
-    && !string.IsNullOrWhiteSpace(mailjetOptions.MailjetApiSecret))
+// credentials are configured (Mailjet__ApiKey + Mailjet__ApiSecret), the real Mailjet REST v3.1
+// transport is wired up via a typed HttpClient; otherwise the dev/test default (LoggingEmailSender,
+// logs and sends nothing) stays in place so a no-config run never breaks the magic-link flow.
+// Mailjet is OPTIONAL — it is intentionally NOT part of the startup fail-fast.
+var mailjetOptions = builder.Configuration.GetSection("Mailjet").Get<ZyncMaster.Server.Configuration.MailjetOptions>()
+    ?? new ZyncMaster.Server.Configuration.MailjetOptions();
+if (!string.IsNullOrWhiteSpace(mailjetOptions.ApiKey)
+    && !string.IsNullOrWhiteSpace(mailjetOptions.ApiSecret))
 {
     builder.Services.AddHttpClient<IEmailSender, MailjetEmailSender>();
 }
