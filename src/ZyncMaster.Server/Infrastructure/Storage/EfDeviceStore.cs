@@ -60,9 +60,14 @@ public sealed class EfDeviceStore : IDeviceStore
             return;
         row.Name = device.Name;
         row.ApiKeyHash = device.ApiKeyHash;
+        row.KeyId = device.KeyId;
         row.TargetCalendarId = device.TargetCalendarId;
         row.CreatedUtc = device.CreatedUtc;
         row.LastSeenUtc = device.LastSeenUtc;
+        row.Platform = device.Platform;
+        row.HasOutlookCom = device.HasOutlookCom;
+        row.AppVersion = device.AppVersion;
+        row.LeaseUntil = device.LeaseUntil;
         await db.SaveChangesAsync(ct);
     }
 
@@ -137,9 +142,14 @@ public sealed class EfDeviceStore : IDeviceStore
             : d.UserId,
         Name = d.Name,
         ApiKeyHash = d.ApiKeyHash,
+        KeyId = d.KeyId,
         TargetCalendarId = d.TargetCalendarId,
         CreatedUtc = d.CreatedUtc,
         LastSeenUtc = d.LastSeenUtc,
+        Platform = d.Platform,
+        HasOutlookCom = d.HasOutlookCom,
+        AppVersion = d.AppVersion,
+        LeaseUntil = d.LeaseUntil,
     };
 
     private static Device ToDomain(DeviceRow r) => new()
@@ -148,9 +158,14 @@ public sealed class EfDeviceStore : IDeviceStore
         UserId = r.UserId,
         Name = r.Name,
         ApiKeyHash = r.ApiKeyHash,
+        KeyId = r.KeyId,
         TargetCalendarId = r.TargetCalendarId,
         CreatedUtc = r.CreatedUtc,
         LastSeenUtc = r.LastSeenUtc,
+        Platform = r.Platform,
+        HasOutlookCom = r.HasOutlookCom,
+        AppVersion = r.AppVersion,
+        LeaseUntil = r.LeaseUntil,
     };
 
     // Pending pairings are global, not user-scoped: the row is created by an anonymous

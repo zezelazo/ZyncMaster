@@ -8,10 +8,36 @@ namespace ZyncMaster.Server.Tests.Devices;
 public class ApiKeyTests
 {
     [Fact]
-    public void Generate_produces_url_safe_key_of_expected_shape()
+    public void Generate_produces_url_safe_legacy_key_without_separator()
     {
+        // The single-string Generate() returns a LEGACY-format key: url-safe, opaque, and with NO
+        // keyId separator (modern keys come from GenerateKey() as "keyId.secret"). The legacy shape
+        // routes through the scan-path branch of the api-key handler.
         var key = ApiKeyGenerator.Generate();
-        Regex.IsMatch(key, "^[A-Za-z0-9_-]{43}$").Should().BeTrue();
+        Regex.IsMatch(key, "^[A-Za-z0-9_-]{20,64}$").Should().BeTrue();
+        key.Should().NotContain(".");
+    }
+
+    [Fact]
+    public void GenerateKey_produces_keyId_and_secret()
+    {
+        var generated = ApiKeyGenerator.GenerateKey();
+        generated.ApiKey.Should().Be($"{generated.KeyId}.{generated.Secret}");
+        ApiKeyGenerator.TryParse(generated.ApiKey, out var keyId, out var secret).Should().BeTrue();
+        keyId.Should().Be(generated.KeyId);
+        secret.Should().Be(generated.Secret);
+        Regex.IsMatch(generated.KeyId, "^[A-Za-z0-9_-]+$").Should().BeTrue();
+        Regex.IsMatch(generated.Secret, "^[A-Za-z0-9_-]+$").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("noseparator")]
+    [InlineData(".onlysecret")]
+    [InlineData("onlykeyid.")]
+    public void TryParse_rejects_malformed_or_legacy_keys(string key)
+    {
+        ApiKeyGenerator.TryParse(key, out _, out _).Should().BeFalse();
     }
 
     [Fact]

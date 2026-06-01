@@ -38,6 +38,43 @@ public static class DeviceEndpoints
             return Results.Ok(new { approved });
         }).RequireCookie();
 
+        // §A-2 — brokered registration. The owner is the identity-bearer token's user (read from
+        // the principal by the user-scoped DeviceService), NEVER a userId from the body. A body
+        // that smuggles someone else's userId is simply ignored because the request type has no
+        // such field and the service binds to the token's user.
+        app.MapPost("/api/devices/register", async (
+            DeviceRegisterRequest req, DeviceService service, CancellationToken ct) =>
+        {
+            var validation = new DeviceRegisterRequestValidator().Validate(req);
+            if (!validation.IsValid)
+                return Results.ValidationProblem(validation.ToDictionary());
+
+            var result = await service.RegisterAsync(req, ct);
+            return Results.Ok(new
+            {
+                deviceId = result.DeviceId,
+                apiKey = result.ApiKey,
+                leaseUntil = result.LeaseUntil,
+            });
+        }).RequireIdentityBearer();
+
+        // Heartbeat — the App calls this periodically (well within DeviceLeaseTtlMinutes) to renew
+        // its lease. Authenticated by the device's api key; the deviceId comes from the principal,
+        // not the body, so a device can only ever renew its OWN lease.
+        app.MapPost("/api/devices/heartbeat", async (
+            HttpContext http, DeviceService service, CancellationToken ct) =>
+        {
+            var deviceId = http.User.FindFirst("deviceId")?.Value;
+            if (string.IsNullOrWhiteSpace(deviceId))
+                return Results.Unauthorized();
+
+            var result = await service.HeartbeatAsync(deviceId, ct);
+            if (result is null)
+                return Results.Unauthorized();
+
+            return Results.Ok(new { leaseUntil = result.LeaseUntil });
+        }).RequireApiKey();
+
         app.MapGet("/api/devices", async (IDeviceStore store) =>
         {
             var devices = await store.ListAsync();

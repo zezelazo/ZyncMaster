@@ -72,4 +72,21 @@ public sealed class ServerOptions
     // excess is rejected with 429. This is anti-abuse, not anti-enumeration (it does not depend
     // on whether the email exists), so it does not leak user existence.
     public int MagicLinkMaxPerIp { get; set; } = 20;
+
+    // Device lease TTL (Track B Phase 3). On register and on every heartbeat the device's
+    // LeaseUntil is set to now + this many minutes. While LeaseUntil > now the App is treated as
+    // running that device's syncs, so the server-side cron trigger (/api/sync/run-due) skips the
+    // owning user's pairs to avoid a double run. The App heartbeats well within this window
+    // (default 10m) so a brief network hiccup does not immediately hand the user's syncs to cron.
+    public int DeviceLeaseTtlMinutes { get; set; } = 10;
+
+    // Shared secret that authenticates the EXTERNAL cron trigger calling POST /api/sync/run-due
+    // (plan §D-1/§D-2 — the cron-trigger model REPLACES the Azure Functions timer; no AlwaysOn).
+    // The caller presents it as "X-Cron-Secret: <secret>" or "Authorization: Bearer <secret>"; it
+    // is compared in CONSTANT time. This is NOT a device api key nor a user bearer — it is the
+    // scheduler's key, so the endpoint is gated by this secret alone, never RequireApiKey/Bearer.
+    // Empty by default: when unset the endpoint is DISABLED (503) rather than open, so a
+    // misconfigured deployment never exposes an unauthenticated server-side run trigger. Set it
+    // per-environment via "Server:CronTriggerSecret" (user-secrets in dev, env var in prod).
+    public string CronTriggerSecret { get; set; } = "";
 }

@@ -62,6 +62,23 @@ public sealed class DeviceRow
     public string? TargetCalendarId { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }
     public DateTimeOffset? LastSeenUtc { get; set; }
+
+    // Public, non-secret API-key lookup handle (§A-3). The key is "keyId.secret"; this column
+    // stores the keyId unhashed and indexed so an incoming key locates exactly ONE candidate
+    // device (index seek) before the single PBKDF2 verify of its secret. Null for legacy keys
+    // minted before §A-3 (those fall back to the scan path until the key is re-issued).
+    public string? KeyId { get; set; }
+
+    // Device capability flags + lease (Track B Phase 3). All nullable/defaulted so the
+    // migration is purely additive and pre-Track-B rows keep working.
+    public string Platform { get; set; } = "windows"; // "windows" | "macos" | "linux"
+    public bool HasOutlookCom { get; set; }            // can read Outlook Classic via COM
+    public string? AppVersion { get; set; }
+
+    // When the App last claimed (or renewed) an active lease. While LeaseUntil > now the App
+    // is considered to be running this device's syncs, so the server-side cron trigger skips
+    // any pair owned by this user (see /api/sync/run-due). Null = no active lease.
+    public DateTimeOffset? LeaseUntil { get; set; }
 }
 
 public sealed class PendingPairingRow
