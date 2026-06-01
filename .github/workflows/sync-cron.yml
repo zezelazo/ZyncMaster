@@ -1,0 +1,93 @@
+name: Sync cron
+
+# Drives server-side calendar sync without keeping the App Service "Always On".
+# A scheduled job pokes a secret-protected endpoint; the server then runs every due
+# sync pair that no active device lease already covers. This keeps the app on the
+# free tier — the schedule lives here, not in a 24/7 in-process timer.
+#
+# Required repository secret:
+#   SYNC_CRON_SECRET  — must match the server's ServerOptions:CronTriggerSecret
+# Optional repository variable:
+#   SYNC_BASE_URL     — defaults to https://zyncmaster.azurewebsites.net
+#
+# Until the /api/sync/run-due endpoint is deployed (Track B), the poke treats 404 as
+# "not deployed yet" and succeeds quietly, so the schedule never shows up red.
+
+on:
+  schedule:
+    # Every 10 minutes (UTC). GitHub's shortest cron granularity is 5 min and runs can
+    # lag under load; 10 min is plenty for calendar mirroring. The first hit also warms
+    # the free-tier app out of cold start.
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}   # allow a manual run from the Actions tab
+
+# No repo access or cloud credentials needed: this only makes an outbound HTTPS call.
+permissions:
+  contents: read
+
+concurrency:
+  # Never overlap two pokes; if one is still running, skip the next rather than queue it.
+  group: sync-cron
+  cancel-in-progress: false
+
+jobs:
+  poke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger due syncs
+        env:
+          BASE_URL: ${{ vars.SYNC_BASE_URL || 'https://zyncmaster.azurewebsites.net' }}
+          CRON_SECRET: ${{ secrets.SYNC_CRON_SECRET }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::SYNC_CRON_SECRET repository secret is not set."
+            exit 1
+          fi
+
+          url="${BASE_URL%/}/api/sync/run-due"
+          echo "POST $url"
+
+          # Retry to ride out the free-tier cold start (503/000 on a sleeping app).
+          # Capture the body and the HTTP status separately.
+          status=""
+          body=""
+          for attempt in 1 2 3 4 5; do
+            body="$(curl -sS -m 120 -o - -w $'\n%{http_code}' \
+              -X POST \
+              -H "X-Cron-Secret: ${CRON_SECRET}" \
+              -H "Content-Type: application/json" \
+              "$url" 2>&1)" || true
+            status="${body##*$'\n'}"
+            body="${body%$'\n'*}"
+            echo "Attempt ${attempt}: HTTP ${status:-000}"
+            case "$status" in
+              200|204) break ;;            # ran (or nothing due)
+              404)     break ;;            # endpoint not deployed yet (Track B) — tolerate
+              000|502|503|504)             # cold start / gateway — wait and retry
+                       sleep 20 ;;
+              401|403)                     # secret mismatch — fail loudly, don't retry
+                       echo "::error::Auth rejected (HTTP ${status}). Check SYNC_CRON_SECRET vs the server's CronTriggerSecret."
+                       echo "$body"
+                       exit 1 ;;
+              *)       sleep 10 ;;
+            esac
+          done
+
+          echo "----- response body -----"
+          echo "${body:-<empty>}"
+          echo "-------------------------"
+
+          case "$status" in
+            200|204)
+              echo "Sync trigger OK (HTTP ${status})."
+              ;;
+            404)
+              echo "::notice::/api/sync/run-due returned 404 — endpoint not deployed yet (Track B). Treating as no-op."
+              ;;
+            *)
+              echo "::error::Sync trigger did not succeed after retries (last HTTP ${status:-000})."
+              exit 1
+              ;;
+          esac
