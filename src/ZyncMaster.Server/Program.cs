@@ -64,6 +64,11 @@ builder.Services.AddSingleton<ISecretProvider, ConfigurationSecretProvider>();
 builder.Services.AddSingleton<IConnectedAccountStore, EfConnectedAccountStore>();
 builder.Services.AddSingleton<ICalendarAccountStore, EfCalendarAccountStore>();
 
+// §C-3 — the one place that bridges the legacy per-UPN store and the new accountId pool. It is
+// resolved everywhere the pair/token code needs to turn an Endpoint.AccountRef (which may be a
+// legacy UPN or a real pool accountId) into a canonical accountId and fetch/rotate its token.
+builder.Services.AddSingleton<ILegacyConnectedAccountAdapter, LegacyConnectedAccountAdapter>();
+
 // System clock seam shared by the identity primitives (overridden in tests for determinism).
 builder.Services.AddSingleton(TimeProvider.System);
 
@@ -100,27 +105,31 @@ builder.Services.AddRateLimiter(rl =>
 builder.Services.AddScoped<DeviceService>();
 builder.Services.AddScoped<SyncService>();
 
-builder.Services.AddSingleton<Func<string, ZyncMaster.Graph.ICalendarTarget>>(sp => upn =>
+// §C-5 — the legacy /api/sync target factory now resolves the token by accountId through the
+// adapter. The incoming string is the legacy accountRef (UPN / "default"); the adapter derives
+// the canonical accountId and reads the token from whichever store backs it, so single-account
+// devices keep syncing unchanged while the resolution path is unified on accountId.
+builder.Services.AddSingleton<Func<string, ZyncMaster.Graph.ICalendarTarget>>(sp => accountRef =>
 {
     var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("graph");
     var tokens = sp.GetRequiredService<IMicrosoftTokenService>();
-    var accounts = sp.GetRequiredService<IConnectedAccountStore>();
+    var adapter = sp.GetRequiredService<ILegacyConnectedAccountAdapter>();
     var opts = sp.GetRequiredService<IOptions<ServerOptions>>().Value;
-    var provider = new ServerGraphTokenProvider(tokens, accounts, upn);
+    var provider = new AccountAwareGraphTokenProvider(tokens, adapter, accountRef);
     return new ZyncMaster.Graph.GraphCalendarTarget(http, provider, Guid.Parse(opts.ExtendedPropertyGuid));
 });
 
-// Per-account Microsoft Graph provider (reader + writer). A null/empty accountRef
-// normalizes to the connected-account store's "default" key.
+// §C-5 — per-account Microsoft Graph provider (reader + writer) for pair sync. The accountRef
+// carried on the pair endpoint may be a real pool accountId or a legacy UPN; the adapter-backed
+// token provider resolves either to the right refresh token, bridging legacy pairs to the pool.
 builder.Services.AddSingleton<Func<string?, MicrosoftGraphProvider>>(sp => accountRef =>
 {
-    var upn = string.IsNullOrWhiteSpace(accountRef) ? "" : accountRef;
     var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("graph");
     var readHttp = sp.GetRequiredService<IHttpClientFactory>().CreateClient("graph");
     var tokens = sp.GetRequiredService<IMicrosoftTokenService>();
-    var accounts = sp.GetRequiredService<IConnectedAccountStore>();
+    var adapter = sp.GetRequiredService<ILegacyConnectedAccountAdapter>();
     var opts = sp.GetRequiredService<IOptions<ServerOptions>>().Value;
-    var tokenProvider = new ServerGraphTokenProvider(tokens, accounts, upn);
+    var tokenProvider = new AccountAwareGraphTokenProvider(tokens, adapter, accountRef);
     var target = new ZyncMaster.Graph.GraphCalendarTarget(http, tokenProvider, Guid.Parse(opts.ExtendedPropertyGuid));
     return new MicrosoftGraphProvider(readHttp, tokenProvider, target);
 });
