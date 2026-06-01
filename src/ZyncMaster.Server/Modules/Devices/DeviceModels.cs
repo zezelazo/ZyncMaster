@@ -13,6 +13,15 @@ public sealed record Device
     // paths and tests keep working; the ApiKey auth handler reads it to attach the
     // "userId" claim to the authenticated principal.
     public string UserId { get; init; } = DefaultCurrentUserAccessor.DefaultUserId;
+
+    // Public, non-secret API-key lookup handle (§A-3). See DeviceRow.KeyId. Null for legacy keys.
+    public string? KeyId { get; init; }
+
+    // Capability flags + lease (Track B Phase 3).
+    public string Platform { get; init; } = "windows";
+    public bool HasOutlookCom { get; init; }
+    public string? AppVersion { get; init; }
+    public DateTimeOffset? LeaseUntil { get; init; }
 }
 
 public sealed record PendingPairing
@@ -37,4 +46,18 @@ public sealed record PairCompleteResult
     public bool Approved { get; init; }
     public string? ApiKey { get; init; }
     public string? DeviceId { get; init; }
+}
+
+// §A-2 — result of a brokered device registration. ApiKey is the one-time full "keyId.secret"
+// string (only its hash is persisted); the caller must store it because it is unrecoverable.
+public sealed record DeviceRegisterResult
+{
+    public required string DeviceId { get; init; }
+    public required string ApiKey { get; init; }
+    public DateTimeOffset LeaseUntil { get; init; }
+}
+
+public sealed record DeviceHeartbeatResult
+{
+    public DateTimeOffset LeaseUntil { get; init; }
 }

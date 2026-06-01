@@ -88,6 +88,31 @@ public class EfDeviceStoreTests
     }
 
     [Fact]
+    public async Task Lease_and_capability_fields_round_trip()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfDeviceStore(h.Factory, h.CurrentUser);
+        var lease = DateTimeOffset.UtcNow.AddMinutes(10);
+        var device = SampleDevice() with
+        {
+            KeyId = "kid-1",
+            Platform = "macos",
+            HasOutlookCom = true,
+            AppVersion = "2.0.0",
+            LeaseUntil = lease,
+        };
+
+        await store.AddAsync(device);
+
+        var fetched = await store.GetAsync("dev-1");
+        fetched!.KeyId.Should().Be("kid-1");
+        fetched.Platform.Should().Be("macos");
+        fetched.HasOutlookCom.Should().BeTrue();
+        fetched.AppVersion.Should().Be("2.0.0");
+        fetched.LeaseUntil.Should().BeCloseTo(lease, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
     public async Task Pending_round_trip_by_id_and_code()
     {
         using var h = new EfStoreTestHarness();

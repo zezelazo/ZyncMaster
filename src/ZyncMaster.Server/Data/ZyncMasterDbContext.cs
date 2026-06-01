@@ -102,7 +102,15 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.Name).HasMaxLength(256).IsRequired();
             e.Property(x => x.ApiKeyHash).IsRequired();
             e.Property(x => x.TargetCalendarId).HasMaxLength(256);
+            e.Property(x => x.KeyId).HasMaxLength(64);
+            e.Property(x => x.Platform).HasMaxLength(16).IsRequired().HasDefaultValue("windows");
+            e.Property(x => x.HasOutlookCom).HasDefaultValue(false);
+            e.Property(x => x.AppVersion).HasMaxLength(64);
             e.HasIndex(x => x.UserId);
+            // §A-3 — indexed lookup of the single device matching an incoming key's public keyId.
+            // Filtered to non-null so legacy keyless rows do not bloat the index (SQL Server
+            // honours the filter; SQLite ignores it harmlessly).
+            e.HasIndex(x => x.KeyId).HasFilter("[KeyId] IS NOT NULL");
         });
 
         b.Entity<PendingPairingRow>(e =>

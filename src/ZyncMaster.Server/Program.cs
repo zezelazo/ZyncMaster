@@ -57,6 +57,9 @@ builder.Services.AddHttpClient("graph");
 // so injecting it into the singleton EF stores does not capture a single request's user.
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<ICurrentUserAccessor, HttpContextCurrentUserAccessor>();
+// Per-request current-user override seam (used by the cron runner to execute a pair under its
+// owner's identity). Singleton over IHttpContextAccessor, like the accessor it pairs with.
+builder.Services.AddSingleton<IHttpCurrentUserOverride, HttpCurrentUserOverride>();
 builder.Services.AddSingleton<IUserStore, EfUserStore>();
 builder.Services.AddSingleton<IDeviceStore, EfDeviceStore>();
 builder.Services.AddSingleton<ISyncStateStore, EfSyncStateStore>();
@@ -149,6 +152,11 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 builder.Services.AddSingleton<ISyncRunLock, EfSyncRunLock>();
+
+// §D-1 — the external cron-trigger runner. Singleton over the DbContext factory (cross-user
+// queries) + the run-lock + the module registry; it executes every due, uncovered pair when the
+// external scheduler hits /api/sync/run-due.
+builder.Services.AddSingleton<CronSyncRunner>();
 
 // ApiKey stays the default scheme so device endpoints (/api/*) keep working as before;
 // the Cookie scheme is added alongside it for the human panel. Cookies are HttpOnly,
@@ -311,6 +319,7 @@ app.MapIdentityConnectEndpoints();
 app.MapIdentityMagicLinkEndpoints();
 app.MapCalendarConnectEndpoints();
 app.MapSyncEndpoints();
+app.MapSyncRunDueEndpoints();
 app.MapPanelEndpoints();
 app.MapPairEndpoints();
 app.MapPairApprovalEndpoints();

@@ -2,22 +2,34 @@
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Devices;
 
 public class DeviceServiceTests
 {
-    private static (DeviceService svc, InMemoryDeviceStore store) Build()
+    private static (DeviceService svc, InMemoryDeviceStore store) Build(
+        ICurrentUserAccessor? user = null, ServerOptions? options = null)
     {
         var store = new InMemoryDeviceStore();
-        return (new DeviceService(store), store);
+        var svc = new DeviceService(
+            store,
+            user ?? new DefaultCurrentUserAccessor(),
+            Options.Create(options ?? new ServerOptions()));
+        return (svc, store);
+    }
+
+    private sealed class FixedUser : ICurrentUserAccessor
+    {
+        public FixedUser(string userId) => UserId = userId;
+        public string UserId { get; }
     }
 
     [Fact]
     public void Ctor_null_store_throws()
     {
-        Action act = () => new DeviceService(null!);
+        Action act = () => new DeviceService(null!, new DefaultCurrentUserAccessor(), Options.Create(new ServerOptions()));
         act.Should().Throw<ArgumentNullException>();
     }
 
@@ -68,7 +80,86 @@ public class DeviceServiceTests
         var device = devices.Single();
         device.Id.Should().Be(pending.ApprovedDeviceId);
         device.Name.Should().Be("Phone");
-        ApiKeyHasher.Verify(pending.OneTimeApiKey!, device.ApiKeyHash).Should().BeTrue();
+
+        // §A-3 — the issued key is "keyId.secret"; only the SECRET half is hashed and the public
+        // keyId is stored unhashed for the indexed lookup.
+        ApiKeyGenerator.TryParse(pending.OneTimeApiKey!, out var keyId, out var secret).Should().BeTrue();
+        device.KeyId.Should().Be(keyId);
+        ApiKeyHasher.Verify(secret, device.ApiKeyHash).Should().BeTrue();
+        ApiKeyHasher.Verify(pending.OneTimeApiKey!, device.ApiKeyHash).Should().BeFalse(
+            "the hash is of the secret half only, never the composite key");
+    }
+
+    [Fact]
+    public async Task Approve_binds_device_to_the_approving_user_not_default()
+    {
+        // §A-2 fix: a device created at approval must carry the REAL approving user, never the
+        // seeded default. Approve runs under the panel cookie, so the ambient user is the approver.
+        var (svc, store) = Build(user: new FixedUser("real-user"));
+        var start = await svc.StartPairingAsync("Phone");
+
+        await svc.ApproveAsync(start.Code);
+
+        var device = (await store.ListAsync()).Single();
+        device.UserId.Should().Be("real-user");
+    }
+
+    [Fact]
+    public async Task Register_binds_device_to_token_user_and_sets_lease_and_key()
+    {
+        var options = new ServerOptions { DeviceLeaseTtlMinutes = 10 };
+        var (svc, store) = Build(user: new FixedUser("token-user"), options: options);
+
+        var before = DateTimeOffset.UtcNow;
+        var result = await svc.RegisterAsync(new DeviceRegisterRequest(
+            Name: "Workstation", Platform: "windows", HasOutlookCom: true, AppVersion: "1.2.3"));
+
+        result.DeviceId.Should().NotBeNullOrWhiteSpace();
+        result.ApiKey.Should().Contain(".");
+        result.LeaseUntil.Should().BeOnOrAfter(before.AddMinutes(10).AddSeconds(-5));
+
+        var device = (await store.ListAsync()).Single();
+        device.UserId.Should().Be("token-user");
+        device.Name.Should().Be("Workstation");
+        device.Platform.Should().Be("windows");
+        device.HasOutlookCom.Should().BeTrue();
+        device.AppVersion.Should().Be("1.2.3");
+        device.LeaseUntil.Should().NotBeNull();
+
+        // The returned key authenticates: keyId stored unhashed, secret verifies against the hash.
+        ApiKeyGenerator.TryParse(result.ApiKey, out var keyId, out var secret).Should().BeTrue();
+        device.KeyId.Should().Be(keyId);
+        ApiKeyHasher.Verify(secret, device.ApiKeyHash).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Register_normalizes_unknown_platform_to_windows()
+    {
+        var (svc, store) = Build();
+        await svc.RegisterAsync(new DeviceRegisterRequest(Name: "X", Platform: "android"));
+        (await store.ListAsync()).Single().Platform.Should().Be("windows");
+    }
+
+    [Fact]
+    public async Task Heartbeat_renews_lease_for_known_device()
+    {
+        var options = new ServerOptions { DeviceLeaseTtlMinutes = 10 };
+        var (svc, store) = Build(options: options);
+        var reg = await svc.RegisterAsync(new DeviceRegisterRequest(Name: "X"));
+
+        var before = DateTimeOffset.UtcNow;
+        var result = await svc.HeartbeatAsync(reg.DeviceId);
+
+        result.Should().NotBeNull();
+        result!.LeaseUntil.Should().BeOnOrAfter(before.AddMinutes(10).AddSeconds(-5));
+        (await store.GetAsync(reg.DeviceId))!.LeaseUntil.Should().Be(result.LeaseUntil);
+    }
+
+    [Fact]
+    public async Task Heartbeat_unknown_device_returns_null()
+    {
+        var (svc, _) = Build();
+        (await svc.HeartbeatAsync("nope")).Should().BeNull();
     }
 
     [Fact]
