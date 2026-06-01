@@ -55,6 +55,32 @@ public sealed class SyncRunDueEndpointTests
         }
     }
 
+    // A writer that captures the AMBIENT identity (ICurrentUserAccessor.UserId) seen at the moment
+    // it mirrors each calendar, keyed by destination calendar id. Because MirrorAsync runs inside the
+    // /api/sync/run-due request — after the runner set the per-pair current-user override and before
+    // it cleared it — reading the singleton accessor here observes exactly which user identity each
+    // pair executed under. This is the seam a future identity-cache regression would break.
+    private sealed class IdentityCapturingWriter : ICalendarWriter
+    {
+        private readonly ICurrentUserAccessor _currentUser;
+
+        // destination calendar id -> ambient userId observed while mirroring it.
+        public readonly Dictionary<string, string> SeenIdentityByCalendar = new();
+
+        public IdentityCapturingWriter(ICurrentUserAccessor currentUser) => _currentUser = currentUser;
+
+        public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<CalendarOption>>(Array.Empty<CalendarOption>());
+
+        public Task<MirrorResult> MirrorAsync(
+            string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+        {
+            lock (SeenIdentityByCalendar) SeenIdentityByCalendar[calendarId] = _currentUser.UserId;
+            return Task.FromResult(new MirrorResult { Created = 1 });
+        }
+    }
+
     private static WebApplicationFactory<Program> Build(RecordingWriter writer) =>
         new ServerTestFactory().WithWebHostBuilder(builder =>
         {
@@ -281,6 +307,54 @@ public sealed class SyncRunDueEndpointTests
         ran.Should().Be(1, "the good pair still ran");
         failed.Should().Be(1, "the bad pair failed but did not abort the batch");
         writer.Mirrored.Should().Contain("dst-good");
+    }
+
+    // Regression guard against cross-user identity leakage: when the cron batch runs pairs owned by
+    // two different users, each pair must execute under ITS OWN owner's ambient identity, not the
+    // identity of whichever pair ran first. The AccountRef is "default" for both users, so it cannot
+    // discriminate them; the only thing that can is the per-pair current-user override the runner
+    // sets. We observe the ambient ICurrentUserAccessor.UserId inside MirrorAsync — the exact place
+    // the downstream user-scoped Graph token resolution reads it — and assert B != A per pair.
+    [Fact]
+    public async Task RunDue_each_pair_executes_under_its_owner_identity()
+    {
+        IdentityCapturingWriter? capture = null;
+
+        using var factory = new ServerTestFactory().WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Server:CronTriggerSecret", Secret);
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<ProviderRegistry>();
+                services.AddSingleton(sp =>
+                {
+                    // The same singleton accessor the production stores use; it reads the ambient
+                    // identity (override or claim) per call, so the writer sees the live per-pair
+                    // identity at MirrorAsync time.
+                    capture = new IdentityCapturingWriter(sp.GetRequiredService<ICurrentUserAccessor>());
+                    return new ProviderRegistry(
+                        readerFactory: _ => new RecordingReader(),
+                        writerFactory: _ => capture);
+                });
+            });
+        });
+
+        var p1 = await SeedAsync(factory, "u1", "dst1");
+        var p2 = await SeedAsync(factory, "u2", "dst2");
+        p1.Should().NotBe(p2);
+
+        var resp = await factory.CreateClient().SendAsync(RunDue(Secret));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (ran, _, failed) = await ParseSummary(resp);
+        ran.Should().Be(2);
+        failed.Should().Be(0);
+
+        capture.Should().NotBeNull("the ProviderRegistry factory must have been resolved");
+        capture!.SeenIdentityByCalendar.Should().ContainKey("dst1").And.ContainKey("dst2");
+        capture.SeenIdentityByCalendar["dst1"].Should().Be("u1",
+            "u1's pair must run under u1's ambient identity");
+        capture.SeenIdentityByCalendar["dst2"].Should().Be("u2",
+            "u2's pair must run under u2's ambient identity, not the first pair's owner");
     }
 
     [Fact]
