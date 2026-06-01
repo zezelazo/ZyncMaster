@@ -89,4 +89,10 @@ public sealed class ServerOptions
     // misconfigured deployment never exposes an unauthenticated server-side run trigger. Set it
     // per-environment via "Server:CronTriggerSecret" (user-secrets in dev, env var in prod).
     public string CronTriggerSecret { get; set; } = "";
+
+    // Interval (hours) between ephemeral-table purge sweeps (§A/§D hygiene). The background
+    // EphemeralPurgeService set-deletes expired identity access/refresh tokens, expired/consumed
+    // magic-links and expired run-locks every this-many hours. Low-frequency by design: these
+    // rows are tiny and self-expiring, so 6h keeps the tables tidy without adding write pressure.
+    public int EphemeralPurgeIntervalHours { get; set; } = 6;
 }

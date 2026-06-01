@@ -206,6 +206,13 @@ builder.Services.AddSingleton<IEntitlementsService, DefaultEntitlementsService>(
 // external scheduler hits /api/sync/run-due.
 builder.Services.AddSingleton<CronSyncRunner>();
 
+// §A/§D — ephemeral-table hygiene. Background sweep that set-deletes expired identity tokens,
+// expired/consumed magic-links and expired run-locks (see EphemeralPurgeService for the token
+// safety rule). Registered ONLY outside Development so the WebApplicationFactory test host never
+// starts the timer loop (the purge logic stays unit-tested via PurgeOnceAsync); production runs it.
+if (!builder.Environment.IsDevelopment())
+    builder.Services.AddHostedService<EphemeralPurgeService>();
+
 // ApiKey stays the default scheme so device endpoints (/api/*) keep working as before;
 // the Cookie scheme is added alongside it for the human panel. Cookies are HttpOnly,
 // SameSite=Lax, sliding-expiration, and Secure only over https (so the http test host
@@ -278,15 +285,45 @@ app.UseForwardedHeaders();
 //   X-Frame-Options: DENY        — the panel is never meant to be framed (clickjacking).
 //   X-Content-Type-Options: nosniff — stop MIME sniffing of served assets.
 //   Referrer-Policy: no-referrer — don't leak the panel URL to outbound navigations.
-// NOTE: no Content-Security-Policy header is set yet. A CSP would break the /pair page's
-// inline <script> and the UI's inline style attributes; it needs to be tuned against the UI
-// (hashes/nonces) before it can be enabled. TODO: add a tuned CSP as a follow-up.
+//
+// Content-Security-Policy (§C). Tuned against the THREE served surfaces so none break:
+//   * the landing (web/index.html) — external <script src=js/…> + inline style= attributes;
+//   * the dashboard (ui/index.html) — external <script type=module src=js/…> + inline style=;
+//   * the server-rendered /pair approval page — an inline <script> wiring the Approve button
+//     (and the /connect, magic-link, calendar-connect HTML pages, all 'self'-only otherwise).
+// Directives, and why each is exactly this:
+//   default-src 'self'            — same-origin only baseline; the project ships NO CDNs, so
+//                                    everything (fetch /api/*, assets) is first-party.
+//   img-src 'self' data:          — UI/landing use small inline data: URIs (icons/SVG); no
+//                                    remote images.
+//   style-src 'self' 'unsafe-inline' — both index.html files use inline style="…" attributes
+//                                    for layout (e.g. --nav-count, centring); CSP cannot allow
+//                                    a style attribute without 'unsafe-inline' (per-attr hashes
+//                                    are not supported), so it is required to not break the UI.
+//   script-src 'self' 'unsafe-inline' — the /pair page emits an inline <script> to POST the
+//                                    approval; it is server-rendered and human-reached, not an
+//                                    XSS sink. Allowing 'unsafe-inline' here keeps that page
+//                                    working without a refactor; first-party js/*.js still load
+//                                    via 'self'. (Hardening to a nonce/hash is a later follow-up
+//                                    once /pair's inline script is externalised.)
+//   object-src 'none'             — no plugins/embeds.
+//   base-uri 'self'               — block <base> hijacking of relative asset URLs.
+//   frame-ancestors 'none'        — modern equivalent of X-Frame-Options: DENY.
+const string contentSecurityPolicy =
+    "default-src 'self'; " +
+    "img-src 'self' data:; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "script-src 'self' 'unsafe-inline'; " +
+    "object-src 'none'; " +
+    "base-uri 'self'; " +
+    "frame-ancestors 'none'";
 app.Use(async (context, next) =>
 {
     var headers = context.Response.Headers;
     headers["X-Frame-Options"] = "DENY";
     headers["X-Content-Type-Options"] = "nosniff";
     headers["Referrer-Policy"] = "no-referrer";
+    headers["Content-Security-Policy"] = contentSecurityPolicy;
     await next();
 });
 
