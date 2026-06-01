@@ -1,5 +1,6 @@
 using ZyncMaster.Core;
 using ZyncMaster.Graph;
+using ZyncMaster.Server.Modules.Calendar;
 
 namespace ZyncMaster.Server;
 
@@ -91,6 +92,7 @@ public static class PairEndpoints
             CreatePairRequest req,
             ISyncPairStore store,
             IConnectedAccountStore accounts,
+            ILegacyConnectedAccountAdapter adapter,
             CancellationToken ct) =>
         {
             var validation = new CreatePairRequestValidator().Validate(req);
@@ -107,6 +109,14 @@ public static class PairEndpoints
                 return Results.BadRequest(new { error = "unknown_source_account", message = "source.accountRef does not belong to the current user." });
             if (await ReferencedAccountIsMissingAsync(req.Destination!, accounts, ct))
                 return Results.BadRequest(new { error = "unknown_destination_account", message = "destination.accountRef does not belong to the current user." });
+
+            // §B-4 — a pair must mirror BETWEEN two distinct calendars. Reject source == destination
+            // so a run can never sweep the calendar it is reading from. Sameness is compared on the
+            // canonical accountId (so a legacy UPN and the equivalent pool accountId count as the
+            // same account) plus the calendar id; for two OutlookCom (COM) endpoints there is no
+            // server account, so we compare deviceId-equivalent (AccountRef) + calendar id.
+            if (await IsSameSourceAndDestinationAsync(req.Source!, req.Destination!, adapter, ct))
+                return Results.BadRequest(new { error = "same_source_destination", message = "source and destination must be different calendars." });
 
             var pair = new SyncPair
             {
@@ -285,6 +295,43 @@ public static class PairEndpoints
         if (string.IsNullOrWhiteSpace(endpoint.AccountRef))
             return false;
         return await accounts.GetAsync(endpoint.AccountRef, ct) is null;
+    }
+
+    // §B-4 — true when source and destination address the SAME calendar, which would make a run
+    // sweep the calendar it just read. For Graph endpoints the account is compared on the
+    // canonical accountId (legacy UPN and pool accountId for the same account collapse to one id);
+    // for two OutlookCom (COM) endpoints there is no server account, so we compare on the device
+    // reference (AccountRef) instead. The calendar id is then compared within the same account.
+    //
+    // TODO (Track B): once the pair model carries a pinnedDeviceId for COM endpoints, compare on
+    // deviceId + calendar here. The COM-pin/lease itself is Track B; this method only enforces
+    // origin != destination today.
+    private static async Task<bool> IsSameSourceAndDestinationAsync(
+        Endpoint source, Endpoint destination, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
+    {
+        // Different providers can never address the same calendar (a device-side OutlookCom
+        // source is a different surface from a server-side Graph account), so they are always OK.
+        if (!string.Equals(source.Provider, destination.Provider, StringComparison.Ordinal))
+            return false;
+
+        // Same provider: the calendar id must differ within the same account. Compare the
+        // account on its canonical accountId for Graph (legacy UPN and pool accountId for the
+        // same account collapse to one id); for OutlookCom there is no server account, so the
+        // device reference (AccountRef) identifies the device-side calendar instead.
+        string sourceKey, destKey;
+        if (string.Equals(source.Provider, ProviderRegistry.OutlookCom, StringComparison.Ordinal))
+        {
+            sourceKey = source.AccountRef ?? "";
+            destKey = destination.AccountRef ?? "";
+        }
+        else
+        {
+            sourceKey = await adapter.ResolveAccountIdAsync(source.AccountRef, ct).ConfigureAwait(false);
+            destKey = await adapter.ResolveAccountIdAsync(destination.AccountRef, ct).ConfigureAwait(false);
+        }
+
+        return string.Equals(sourceKey, destKey, StringComparison.Ordinal) &&
+               string.Equals(source.CalendarId, destination.CalendarId, StringComparison.Ordinal);
     }
 
     private static (DateTimeOffset from, DateTimeOffset to) Window(ServerOptions opts)
