@@ -2,12 +2,13 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using ZyncMaster.Server.Configuration;
 
 namespace ZyncMaster.Server.Infrastructure.Email;
 
 // Production IEmailSender backed by the Mailjet Send API v3.1 (POST https://api.mailjet.com/v3.1/send).
 // Authentication is HTTP Basic with "apiKey:apiSecret" Base64-encoded in the Authorization header.
-// Registered in Program.cs ONLY when both MailjetApiKey and MailjetApiSecret are configured;
+// Registered in Program.cs ONLY when both Mailjet ApiKey and ApiSecret are configured;
 // otherwise the dev/test default (LoggingEmailSender) stays in place so a no-config run never
 // breaks the magic-link flow.
 //
@@ -22,10 +23,10 @@ public sealed class MailjetEmailSender : IEmailSender
     private const string SendEndpoint = "https://api.mailjet.com/v3.1/send";
 
     private readonly HttpClient _http;
-    private readonly ServerOptions _options;
+    private readonly MailjetOptions _options;
     private readonly AuthenticationHeaderValue _authHeader;
 
-    public MailjetEmailSender(HttpClient http, IOptions<ServerOptions> opts)
+    public MailjetEmailSender(HttpClient http, IOptions<MailjetOptions> opts)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         ArgumentNullException.ThrowIfNull(opts);
@@ -33,7 +34,7 @@ public sealed class MailjetEmailSender : IEmailSender
 
         // Basic apiKey:apiSecret, Base64. Built once: the credentials are fixed for the lifetime
         // of the sender. A sane request timeout guards against a wedged upstream.
-        var raw = $"{_options.MailjetApiKey}:{_options.MailjetApiSecret}";
+        var raw = $"{_options.ApiKey}:{_options.ApiSecret}";
         _authHeader = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(raw)));
         if (_http.Timeout == System.Threading.Timeout.InfiniteTimeSpan || _http.Timeout > TimeSpan.FromSeconds(30))
             _http.Timeout = TimeSpan.FromSeconds(30);
@@ -69,7 +70,7 @@ public sealed class MailjetEmailSender : IEmailSender
     {
         var message = new
         {
-            From = new { Email = _options.MailjetFromEmail, Name = _options.MailjetFromName },
+            From = new { Email = _options.FromEmail, Name = _options.FromName },
             To = new[] { new { Email = toEmail } },
             Subject = subject,
             HTMLPart = htmlBody,
