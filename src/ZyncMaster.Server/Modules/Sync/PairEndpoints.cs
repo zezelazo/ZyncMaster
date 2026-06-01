@@ -112,9 +112,13 @@ public static class PairEndpoints
 
             // §B-4 — a pair must mirror BETWEEN two distinct calendars. Reject source == destination
             // so a run can never sweep the calendar it is reading from. Sameness is compared on the
-            // canonical accountId (so a legacy UPN and the equivalent pool accountId count as the
-            // same account) plus the calendar id; for two OutlookCom (COM) endpoints there is no
-            // server account, so we compare deviceId-equivalent (AccountRef) + calendar id.
+            // canonical accountId: two refs of the SAME representation for one account collapse
+            // (a legacy UPN resolves to its derived id, a pool ref to itself), plus the calendar id.
+            // CAVEAT: a pool account uses a fresh Guid, not the UPN-derived id, so the same mailbox
+            // connected BOTH as a legacy AND a pool account does NOT collapse — that cross-
+            // representation self-mirror is not caught here. TODO(Track A-2): dedupe legacy<->pool by
+            // mailbox. For two OutlookCom (COM) endpoints there is no server account, so we compare
+            // deviceId-equivalent (AccountRef) + calendar id.
             if (await IsSameSourceAndDestinationAsync(req.Source!, req.Destination!, adapter, ct))
                 return Results.BadRequest(new { error = "same_source_destination", message = "source and destination must be different calendars." });
 
