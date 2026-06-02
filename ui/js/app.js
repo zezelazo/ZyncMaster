@@ -1811,6 +1811,7 @@ function applyNativeStatus(s) {
     webAuth.signedIn = true;
     live.me = { email: s.email, displayName: s.displayName };
   }
+  const prevSync = state.sync;
   if (!s.paired) state.sync = 'unpaired';
   else if (s.status === 'Error') state.sync = 'error';
   else if (s.status === 'Offline') state.sync = 'offline';
@@ -1818,7 +1819,14 @@ function applyNativeStatus(s) {
   else if (s.status === 'Syncing') state.sync = 'syncing';
   else state.sync = 'ok';
   const tag = $('#pausedTag'); if (tag) tag.hidden = state.sync !== 'paused';
-  rerender();
+
+  // The engine pushes a status event on every scheduler tick (~30s) and on each sync cycle.
+  // A full rerender() here replays the staggered entrance animation and rebuilds the whole
+  // view, which the user sees as the screen flickering/redrawing every few seconds. Only
+  // repaint when the sync state actually CHANGED, and even then do it in place (no entrance
+  // replay) so a routine "still ok" heartbeat is a no-op instead of a visible flash.
+  if (state.sync === prevSync) return;
+  rerenderInPlace();
 }
 
 // ---------------- Bottom nav ----------------
