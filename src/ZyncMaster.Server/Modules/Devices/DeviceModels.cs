@@ -61,3 +61,11 @@ public sealed record DeviceHeartbeatResult
 {
     public DateTimeOffset LeaseUntil { get; init; }
 }
+
+// Result of a device self-rename. Echoes the resolved id + the persisted (trimmed) name so the
+// App can update its UI without a follow-up read.
+public sealed record DeviceRenameResult
+{
+    public required string DeviceId { get; init; }
+    public required string Name { get; init; }
+}

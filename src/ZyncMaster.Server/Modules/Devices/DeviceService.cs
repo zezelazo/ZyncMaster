@@ -139,6 +139,38 @@ public sealed class DeviceService
         return new DeviceHeartbeatResult { LeaseUntil = leaseUntil };
     }
 
+    // Renames the device identified by the api-key principal to itself. The deviceId is the
+    // caller's own (from the principal, NEVER from the body); the store is user-scoped so the
+    // lookup + update can only ever touch a device owned by the caller's user. Returns null when
+    // the device is unknown (a race that removed it after auth). The name is trimmed before save;
+    // the endpoint validates it is non-empty and <=100 chars (post-trim).
+    public async Task<DeviceRenameResult?> RenameAsync(string deviceId, string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return null;
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Device name is required.", nameof(name));
+
+        var device = await _store.GetAsync(deviceId, ct);
+        if (device is null)
+            return null;
+
+        var trimmed = name.Trim();
+        await _store.UpdateAsync(device with { Name = trimmed }, ct);
+
+        return new DeviceRenameResult { DeviceId = device.Id, Name = trimmed };
+    }
+
+    // Returns the device identified by the api-key principal (the caller's own device), or null if
+    // it no longer exists. User-scoped through the store, so it can only ever return the caller's
+    // device — used by the App to pre-load the real current name into Settings.
+    public Task<Device?> GetMeAsync(string deviceId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return Task.FromResult<Device?>(null);
+        return _store.GetAsync(deviceId, ct);
+    }
+
     private static string NormalizePlatform(string? platform)
     {
         var p = platform?.Trim().ToLowerInvariant();

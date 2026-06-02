@@ -47,3 +47,20 @@ public sealed class DeviceRegisterRequestValidator : AbstractValidator<DeviceReg
         RuleFor(x => x.AppVersion).MaximumLength(64);
     }
 }
+
+// Device self-rename body. NOTE: there is intentionally NO deviceId field; the device renames
+// ITSELF — the target id is the ApiKey principal's "deviceId" claim, never a value from the body.
+// Name is validated against the server-side trimmed length (1..100).
+public sealed record DeviceRenameRequest(string Name);
+
+public sealed class DeviceRenameRequestValidator : AbstractValidator<DeviceRenameRequest>
+{
+    public DeviceRenameRequestValidator()
+    {
+        RuleFor(x => x.Name)
+            .Must(n => !string.IsNullOrWhiteSpace(n))
+            .WithMessage("Device name is required.")
+            .Must(n => (n ?? string.Empty).Trim().Length <= 100)
+            .WithMessage("Device name must be at most 100 characters.");
+    }
+}

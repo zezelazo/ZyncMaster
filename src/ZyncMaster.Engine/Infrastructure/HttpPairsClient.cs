@@ -153,6 +153,32 @@ public sealed class HttpPairsClient : IPairsClient
         return ids;
     }
 
+    public async Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
+    {
+        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+
+        var root = await SendAsync(HttpMethod.Get, "/api/devices/me", apiKey, null, ct) as JObject ?? new JObject();
+        return ParseDeviceInfo(root);
+    }
+
+    public async Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct)
+    {
+        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+        if (name == null) throw new ArgumentNullException(nameof(name));
+
+        // The server reads the deviceId from the api key, so the body carries ONLY the name.
+        var body = new JObject { ["name"] = name };
+        var root = await SendAsync(HttpMethod.Post, "/api/devices/rename", apiKey, body, ct) as JObject ?? new JObject();
+        return ParseDeviceInfo(root);
+    }
+
+    private static DeviceInfo ParseDeviceInfo(JObject obj) => new()
+    {
+        DeviceId = obj["deviceId"]?.Value<string>() ?? "",
+        Name = obj["name"]?.Value<string>() ?? "",
+        Platform = obj["platform"]?.Value<string>() ?? "",
+    };
+
     private static JObject EndpointToJson(Endpoint e)
     {
         var obj = new JObject

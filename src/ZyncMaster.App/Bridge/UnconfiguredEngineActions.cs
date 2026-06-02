@@ -79,6 +79,14 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
         => throw NotConfigured();
 
+    // Device self-management needs a configured + paired engine; surface the clear "configure
+    // first" error so the UI degrades visibly instead of failing opaquely.
+    public Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<DeviceInfo> RenameDeviceAsync(string name, CancellationToken ct = default)
+        => throw NotConfigured();
+
     // The basic .txt export does not need the server, but it does need a configured
     // CalExport path; without a valid engine config we cannot run it, so report cancelled.
     public Task<string?> GenerateTxtAsync(CancellationToken ct = default)

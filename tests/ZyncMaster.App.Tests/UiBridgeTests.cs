@@ -165,6 +165,26 @@ public class UiBridgeTests
             return AffectedPairIdsToReturn;
         }
 
+        // Device self-management capture.
+        public int GetDeviceCalls;
+        public string? RenameDeviceArg;
+        public DeviceInfo DeviceToReturn = new() { DeviceId = "dev-1", Name = "Current Name", Platform = "windows" };
+        public DeviceInfo RenamedDeviceToReturn = new() { DeviceId = "dev-1", Name = "New Name", Platform = "windows" };
+
+        public async Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GetDeviceCalls++;
+            return DeviceToReturn;
+        }
+
+        public async Task<DeviceInfo> RenameDeviceAsync(string name, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            RenameDeviceArg = name;
+            return RenamedDeviceToReturn;
+        }
+
         public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
@@ -552,6 +572,54 @@ public class UiBridgeTests
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
         var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
         payload.GetProperty("affectedPairIds").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public void GetDevice_calls_engine_and_returns_device_info()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("getDevice", "d1"));
+
+        engine.GetDeviceCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("d1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("deviceId").GetString().Should().Be("dev-1");
+        payload.GetProperty("name").GetString().Should().Be("Current Name");
+        payload.GetProperty("platform").GetString().Should().Be("windows");
+    }
+
+    [Fact]
+    public void RenameDevice_object_payload_passes_name_and_returns_renamed_device()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("renameDevice", "d2", "{\"name\":\"New Name\"}"));
+
+        engine.RenameDeviceArg.Should().Be("New Name");
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("name").GetString().Should().Be("New Name");
+    }
+
+    [Fact]
+    public void RenameDevice_bare_string_payload_is_taken_as_name()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("renameDevice", "d3", "Laptop"));
+
+        engine.RenameDeviceArg.Should().Be("Laptop");
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

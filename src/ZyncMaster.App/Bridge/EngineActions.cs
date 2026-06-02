@@ -261,6 +261,39 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return await _pairs.UnlinkAccountAsync(key, accountRef, ct);
     }
 
+    public async Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default)
+    {
+        var key = await RequireKeyAsync(ct);
+        return await _pairs.GetDeviceMeAsync(key, ct);
+    }
+
+    public async Task<DeviceInfo> RenameDeviceAsync(string name, CancellationToken ct = default)
+    {
+        if (name == null) throw new ArgumentNullException(nameof(name));
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0)
+            throw new InvalidOperationException("Device name is required.");
+
+        var key = await RequireKeyAsync(ct);
+        var info = await _pairs.RenameDeviceAsync(key, trimmed, ct);
+
+        // Keep AppSettings.DeviceName in sync so a later re-register uses the renamed value as its
+        // fallback. The hot rename above is the source of truth for the live device; this just
+        // mirrors it into the local config.
+        try
+        {
+            var current = _settingsRepo.TryLoad(_settingsPath) ?? new AppSettings();
+            current.DeviceName = info.Name;
+            _settingsRepo.Save(current, _settingsPath);
+        }
+        catch
+        {
+            // A config-mirror failure must not fail the rename: the server is already updated.
+        }
+
+        return info;
+    }
+
     public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
     {
         var now = DateTime.Now;
