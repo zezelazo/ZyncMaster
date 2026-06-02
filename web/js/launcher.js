@@ -1,6 +1,6 @@
 /* =========================================================
    Zync Master — launcher behaviour (framework-free)
-   - Sticky nav becomes solid on scroll
+   - Brand card scrolls back to top
    - Ambient constellation (canvas) behind the hero
    - Device-network overlay (SVG glyphs + travelling comets)
    - Scroll reveal via IntersectionObserver
@@ -11,12 +11,13 @@
 
   var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // ---- sticky nav solidifies on scroll ----
-  var nav = document.getElementById("nav");
-  if (nav) {
-    addEventListener("scroll", function () {
-      nav.classList.toggle("s", scrollY > 20);
-    }, { passive: true });
+  // ---- brand card scrolls back to the top ----
+  var brand = document.getElementById("brandCard");
+  if (brand) {
+    brand.addEventListener("click", function (e) {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
+    });
   }
 
   // ---- ambient constellation (canvas) ----

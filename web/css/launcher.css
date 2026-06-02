@@ -59,34 +59,50 @@ button { font-family: inherit; cursor: pointer; }
 .wrap { position: relative; z-index: 2; pointer-events: none; }
 .wrap a, .wrap button, .wrap input { pointer-events: auto; }
 
-/* ---- top bar ---- */
-.nav {
+/* ---- floating glass nav cards ----
+   No full-width bar. Two fixed frosted-glass pills float over the
+   content: brand top-left, actions top-right. The gap between them
+   is fully transparent — the hero/content scrolls behind. */
+.nav-card {
   position: fixed;
-  top: 0; left: 0; right: 0;
-  height: 64px;
-  display: flex;
-  align-items: center;
-  padding: 0 36px;
+  top: 18px;
   z-index: 30;
-}
-.nav.s {
   /* opaque fallback first — content must NOT read through when blur is unsupported */
-  background: rgba(8, 11, 20, .92);
-  border-bottom: 1px solid var(--stroke);
-  box-shadow: 0 8px 30px -16px rgba(0, 0, 0, .9);
+  background: rgba(14, 18, 30, .9);
+  border: 1px solid var(--stroke);
+  border-radius: 16px;
+  box-shadow: 0 14px 40px -18px rgba(0, 0, 0, .85), inset 0 1px 0 rgba(255, 255, 255, .06);
 }
-/* where backdrop blur is available, lean on it and ease the tint a touch */
+/* real frosted glass where supported: translucent fill + blur/saturate
+   so whatever scrolls behind is glared/blurred like frosted glass */
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .nav.s {
-    background: rgba(8, 11, 20, .72);
-    -webkit-backdrop-filter: blur(20px) saturate(140%);
-            backdrop-filter: blur(20px) saturate(140%);
+  .nav-card {
+    background: rgba(14, 18, 30, .52);
+    -webkit-backdrop-filter: blur(22px) saturate(160%);
+            backdrop-filter: blur(22px) saturate(160%);
   }
 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; }
+
+.brand.nav-card {
+  left: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 18px 0 14px;
+  font-weight: 650;
+  font-size: 16px;
+}
 .brand svg { width: 24px; height: 24px; }
-.sp { flex: 1; }
-.act { display: flex; gap: 10px; align-items: center; }
+
+.act.nav-card {
+  right: 22px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  height: 52px;
+  padding: 0 10px;
+}
 
 /* DEV-only "Open app / Test" button — clearly temporary.
    To remove for production: delete every element with class .dev
@@ -126,68 +142,26 @@ button { font-family: inherit; cursor: pointer; }
 }
 .ghost:hover { background: rgba(255, 255, 255, .07); }
 
-/* ---- header Download CTA: accent fill + travelling border-light ---- */
+/* ---- header Download button: sober, matches the neutral "Open app" look ----
+   Same height/typography as .dev, neutral surface, subtle hover.
+   No azure gradient, no glow, no travelling border-light. */
 .dl {
-  position: relative;
   display: inline-flex;
   align-items: center;
+  gap: 7px;
   height: 38px;
-  padding: 0 18px;
+  padding: 0 14px;
   border-radius: 10px;
   font-size: 13px;
-  font-weight: 700;
-  color: #fff;
-  /* azure→terra accent so it clearly outranks the rest of the nav */
-  background: linear-gradient(180deg, var(--azure2), var(--azure));
-  box-shadow: 0 8px 22px -10px var(--azure);
-  isolation: isolate;
-  overflow: hidden;
+  font-weight: 600;
+  color: var(--ink);
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid var(--stroke);
 }
-.dl__t { position: relative; z-index: 2; }
-/* steady glow that breathes underneath */
-.dl::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  background: radial-gradient(120% 140% at 50% 120%, rgba(224, 138, 99, .55), transparent 60%);
-  opacity: .65;
-  z-index: 0;
-  pointer-events: none;
-  animation: dlPulse 3.2s ease-in-out infinite;
-}
-/* hairline of light that travels around the border */
-.dl::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1.4px;
-  background: conic-gradient(from var(--dl-ang, 0deg),
-    transparent 0deg,
-    rgba(255, 255, 255, .15) 40deg,
-    #fff 70deg,
-    var(--azure2) 90deg,
-    transparent 140deg,
-    transparent 360deg);
-  /* mask to a ring so only the border edge lights up */
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
-  z-index: 1;
-  pointer-events: none;
-  animation: dlSpin 3.4s linear infinite;
-}
+.dl:hover { background: rgba(255, 255, 255, .09); }
 .dl:active { transform: scale(.98); }
-
-@property --dl-ang {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-@keyframes dlSpin { to { --dl-ang: 360deg; } }
-@keyframes dlPulse { 50% { opacity: 1; } }
+.dl__t { line-height: 1; }
+.dl__ic { width: 16px; height: 16px; display: block; color: var(--ink2); }
 
 /* ---- "Sign in with Microsoft" button (official 4-square mark) ---- */
 .ms {
@@ -213,8 +187,10 @@ button { font-family: inherit; cursor: pointer; }
 .hero {
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  padding: 96px 36px 40px;
+  /* nudge the content up from dead-center; the top padding still clears
+     the floating brand card so the h1 never tucks under it */
+  align-items: flex-start;
+  padding: 132px 36px 40px;
   max-width: 1240px;
   margin: 0 auto;
   position: relative;
@@ -326,13 +302,21 @@ h1 .g {
             mask-image: linear-gradient(180deg, transparent 2%, #000 45%);
     opacity: .5;
   }
-  .hero { padding-top: 120px; }
+  .hero { padding-top: 116px; }
   .devnet { display: none; }
 }
 @media (max-width: 600px) {
-  .nav { padding: 0 16px; }
+  .nav-card { top: 12px; height: 48px; }
+  .brand.nav-card { left: 12px; padding: 0 12px; gap: 0; }
   .brand span { display: none; }
+  .act.nav-card { right: 12px; gap: 7px; padding: 0 8px; }
   .act .ms span { display: none; }
+}
+/* very narrow phones: trim the action pill so it can't collide with the brand */
+@media (max-width: 400px) {
+  .dev { padding: 0 10px; gap: 5px; }
+  .dl { padding: 0 11px; }
+  .dl__t { display: none; }
 }
 
 /* ---- sections ---- */
@@ -432,8 +416,5 @@ h1 .g {
   .dn-edge, .dn-node { animation: none; }
   .reveal { opacity: 1; transform: none; transition: none; }
   .mod::after { transition: none; }
-  /* Download CTA: keep it prominent but stop the motion */
-  .dl::before { animation: none; opacity: .8; }
-  .dl::after { animation: none; background: linear-gradient(180deg, rgba(255, 255, 255, .35), transparent); }
   .go::before { animation: none; opacity: .7; }
 }
