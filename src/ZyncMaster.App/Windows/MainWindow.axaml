@@ -5,51 +5,26 @@
         Icon="/Assets/icon.png"
         Width="440" Height="680"
         MinWidth="380" MinHeight="560"
-        ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaChromeHints="NoChrome"
-        ExtendClientAreaTitleBarHeightHint="-1"
+        WindowDecorations="BorderOnly"
         Background="#0c0e16"
         TransparencyLevelHint="None"
         CanResize="True"
         ShowInTaskbar="True"
         WindowStartupLocation="CenterScreen">
-  <!-- Frameless-but-resizable chrome. ACTIVE = Option A (extend client area, no chrome).
+  <!-- Frameless-but-resizable chrome. ACTIVE = WindowDecorations="BorderOnly".
+       This is the known-good behaviour the user verified: native resize on the 4 edges/
+       corners (the WM hit-tests the border ABOVE the WebView2 child HWND, fixing the
+       airspace fall-through) and working maximize/restore with no "snow" (transparency is
+       OFF + opaque Background; the WebView2 host re-layouts on WindowState changes via the
+       PropertyChanged handler in MainWindow.axaml.cs). The custom title bar (min/max/close +
+       drag) lives in the web UI, so the look stays frameless apart from a thin top border.
 
-       GOAL: visually frameless (no top strip) + native resize on the 4 edges/corners +
-       working maximize/restore with no WebView2 "snow".
-
-       === Option A (ACTIVE) — ExtendClientArea*, NoChrome ===
-         ExtendClientAreaToDecorationsHint="True"  -> the client area is drawn over the
-           whole decoration area, so the window manager paints NO top strip/border on top
-           of our content. This is what removes the ugly top border the user marked.
-         ExtendClientAreaChromeHints="NoChrome"     -> no OS caption buttons / title bar.
-         ExtendClientAreaTitleBarHeightHint="-1"    -> let the platform pick the (collapsed)
-           caption height; our content covers it. The window manager STILL owns the resize
-           hit-test on all 4 edges/corners (extend-to-decorations keeps the WM frame for
-           resizing — it just isn't painted), so dragging an edge resizes instead of falling
-           through to the WebView2 child HWND (the airspace bug stays fixed).
-
-         Why this is now safe even though it was removed before: the earlier desync was
-         ExtendClientArea* WITHOUT a re-layout on WindowState changes — maximize/restore left
-         the WebView2's CoreWebView2 bounds at the previous state ("lost everything" on
-         restore). That re-layout handler now EXISTS in MainWindow.axaml.cs (PropertyChanged on
-         WindowStateProperty -> InvalidateHostLayout), so the host re-measures/-arranges on
-         every state change and the WebView2 bounds follow the new client size. Transparency
-         stays OFF (TransparencyLevelHint="None") + opaque Background, which is what killed the
-         maximize "snow"; Option A does not touch that, so the snow fix is preserved.
-
-       === Option B (FALLBACK) — revert to the previous BorderOnly chrome ===
-         If Option A reintroduces ANY WebView2 desync on maximize/restore, revert these three
-         attributes to a single line:  WindowDecorations="BorderOnly"
-         That restores the known-good resize+maximize behaviour at the cost of the thin top
-         strip the user dislikes. It is a one-line swap with no other code change required.
-
-       RISK NOTE (UI could not be run here): Option A is expected to remove the top strip and
-       keep resize+maximize working given the re-layout handler is already in place, but this
-       was NOT verified live. If maximize/restore regresses, switch to Option B above.
-
-       The embedded WebView2 (or the loopback placeholder) fills the client area; the
-       web UI hides its own cosmetic title bar's OS-chrome when it detects the shell. -->
+       FOLLOW-UP (removing the thin top border): the extend-client-area approach
+       (ExtendClientAreaToDecorationsHint + ExtendClientAreaChromeHints=NoChrome) does NOT
+       compile as plain XAML attributes on Avalonia 12.0.3 (AVLN2000: the ChromeHints enum
+       value doesn't resolve as an attribute here). Removing the top strip needs setting those
+       in code-behind with the Avalonia.Platform enums, or a verified 12.x XAML form — left as
+       a separate, properly-investigated change rather than risking the build. -->
   <Panel x:Name="HostPanel">
     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
       <TextBlock Text="Zync Master"
