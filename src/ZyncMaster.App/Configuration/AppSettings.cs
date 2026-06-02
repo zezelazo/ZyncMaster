@@ -8,9 +8,17 @@ namespace ZyncMaster.App.Configuration;
 // CalImport's / the Cli's settings style: a plain POCO with [JsonProperty] names.
 public sealed class AppSettings
 {
-    // Required: base URL of the ZyncMaster server the device pairs and syncs against.
+    // Production server the released app pairs and syncs against. Used as the default for
+    // serverBaseUrl so a fresh install works out of the box without hand-editing settings.json.
+    // A developer can point at a local server by setting the ZYNCMASTER_SERVER_URL environment
+    // variable (honoured in AppSettingsResolver) or by editing serverBaseUrl in settings.json.
+    public const string ProductionServerBaseUrl = "https://zyncmaster.azurewebsites.net";
+
+    // Base URL of the ZyncMaster server the device pairs and syncs against. Defaults to the
+    // production server; the generated settings.json therefore ships pointing at prod, and the
+    // user can override it there (or via ZYNCMASTER_SERVER_URL) to target another environment.
     [JsonProperty("serverBaseUrl")]
-    public string? ServerBaseUrl { get; set; }
+    public string? ServerBaseUrl { get; set; } = ProductionServerBaseUrl;
 
     // Friendly name shown when approving the device; defaults to the machine name.
     [JsonProperty("deviceName")]
