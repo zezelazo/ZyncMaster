@@ -258,7 +258,10 @@ if (mql && mql.addEventListener) {
 }
 
 // ---------------- App state ----------------
-const VERSION = '1.0.0';
+// Product version shown in About + the Settings "About" row. Hardcoded because the web UI has
+// no channel to read the host's .NET assembly version; keep it in step with the published
+// release (currently 0.1.0, beta).
+const VERSION = '0.1.0';
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -1613,24 +1616,36 @@ function renderIdentitySignIn(root) {
 }
 
 // ---------------- Screen: About ----------------
+// External destinations. The landing is the product's website/source; release notes ("What's
+// new") live on the GitHub Releases page. Rendered as real <a target="_blank"> links so the
+// browser panel / standalone demo open them in a new tab natively. In the native WebView2 shell
+// the host would need a NewWindowRequested->shell-open handler for these to open the system
+// browser (out of scope here); the links are never dead — the href always points somewhere real.
+const ABOUT_WEBSITE_URL = 'https://zyncmaster.azurewebsites.net';
+const ABOUT_RELEASES_URL = 'https://github.com/zezelazo/ZyncMaster/releases';
+
 function renderAbout(root) {
   root.append(viewHeader('About', { onBack: () => navigate('config') }));
-  const link = (ic, label) => el('button', { class: 'about-link' }, iconEl(ic, 13, 1.6), label);
+  const link = (ic, label, href) => el('a', {
+    class: 'about-link', href, target: '_blank', rel: 'noopener noreferrer',
+  }, iconEl(ic, 13, 1.6), label);
   root.append(el('div', { class: 'glass glass--card about-card' },
     el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
     el('div', { class: 'about-name', text: 'Zync Master' }),
-    el('div', { class: 'about-version num', text: 'VERSION 1.0.0 · BUILD 248' }),
+    // Version is hardcoded: the web UI has no channel to read the .NET assembly version of the
+    // host. Keep this in step with the published release (currently 0.1.0, beta). No build number.
+    el('div', { class: 'about-version num', text: 'VERSION 0.1.0 · BETA' }),
     el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
-    el('div', { class: 'about-links' }, link('link', 'Website'), link('sparkle', "What's new"), link('note', 'Privacy policy'), link('folder', 'Open-source notices')),
+    el('div', { class: 'about-links' },
+      link('link', 'Website', ABOUT_WEBSITE_URL),
+      link('sparkle', "What's new", ABOUT_RELEASES_URL)),
   ));
   root.append(el('div', { class: 'glass glass--card about-credits' },
-    el('div', { class: 'about-credits__hd', text: 'Made with care' }),
-    el('div', { class: 'about-credits__txt', text: 'Designed and built by a small group of people who really, really hate copy-pasting events between calendars.' }),
-    el('div', { class: 'about-credits__list' },
-      el('div', null, el('b', { text: 'Design' }), ' · Zync Master team'),
-      el('div', null, el('b', { text: 'Engineering' }), ' · Zync Master team'),
-      el('div', null, el('b', { text: 'Icon' }), ' · custom · 24px line set')),
-    el('div', { class: 'about-sys', text: 'Built on WebView2 · Chromium · © 2026' }),
+    el('div', { class: 'about-credits__hd', text: 'Made by DevLab-Pe' }),
+    el('div', { class: 'about-credits__txt', text: 'For people who are tired of keeping things in sync across their devices — PCs, Macs and phones — by hand, over and over.' }),
+    el('a', { class: 'about-credits__link', href: ABOUT_WEBSITE_URL, target: '_blank', rel: 'noopener noreferrer' },
+      iconEl('link', 12, 1.6), el('span', { text: 'zyncmaster.azurewebsites.net' })),
+    el('div', { class: 'about-sys', text: '© 2026 DevLab-Pe · still in beta' }),
   ));
 }
 
