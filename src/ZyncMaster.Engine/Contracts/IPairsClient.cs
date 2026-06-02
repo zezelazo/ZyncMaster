@@ -26,4 +26,10 @@ public interface IPairsClient
     Task<MirrorResult> RunPairAsync(string apiKey, string id, CancellationToken ct);
 
     Task<IReadOnlyList<string>> UnlinkAccountAsync(string apiKey, string accountRef, CancellationToken ct);
+
+    // Device self-management. The server resolves the deviceId from the api key, so neither call
+    // sends an id; a device can only ever read/rename ITSELF.
+    Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct);
+
+    Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct);
 }

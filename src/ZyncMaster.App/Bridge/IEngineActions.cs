@@ -32,6 +32,12 @@ public interface IEngineActions
     Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default);
 
+    // Device self-management. GetDeviceAsync reads the REAL current device (id + name + platform)
+    // from the server so Settings can pre-fill the actual registered name. RenameDeviceAsync
+    // renames the device in place on the server (hot rename) and returns the persisted echo.
+    Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default);
+    Task<DeviceInfo> RenameDeviceAsync(string name, CancellationToken ct = default);
+
     // Writes a Simple-mode .txt export to a user-chosen path. Returns the saved path,
     // or null if the user cancelled the save dialog.
     Task<string?> GenerateTxtAsync(CancellationToken ct = default);

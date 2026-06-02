@@ -78,6 +78,10 @@ public sealed class PairSchedulerTests
         }
         public Task<IReadOnlyList<string>> UnlinkAccountAsync(string apiKey, string accountRef, CancellationToken ct)
             => Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
+            => Task.FromResult(new DeviceInfo());
+        public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct)
+            => Task.FromResult(new DeviceInfo { Name = name });
     }
 
     private static SyncPair Pair(string id, string state, int intervalMin, string sourceProvider)

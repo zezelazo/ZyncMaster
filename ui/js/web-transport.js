@@ -18,6 +18,9 @@ const enc = encodeURIComponent;
 // web mode, so these resolve to inert no-ops rather than hitting the server.
 export const INERT_ACTIONS = Object.freeze([
   'getAutoStart', 'setAutoStart', 'generateTxt', 'saveConfig', 'pair', 'syncNow',
+  // Device self-management is a desktop-App concern (a browser panel is not a paired device); the
+  // UI hides the "This device" section in web mode, so these are inert no-ops there.
+  'getDevice', 'renameDevice',
 ]);
 
 // Returns the REST request for a given action, or null when the action is composite

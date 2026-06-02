@@ -80,6 +80,13 @@ test('device-only actions are inert (null mapping)', () => {
   }
 });
 
+test('device self-management actions are inert in the web panel', () => {
+  for (const a of ['getDevice', 'renameDevice']) {
+    assert.equal(isInertAction(a), true, `${a} must be inert in web mode`);
+    assert.equal(webRequestFor(a), null);
+  }
+});
+
 test('unmapped action throws', () => {
   assert.throws(() => webRequestFor('bogusAction'), /unmapped action "bogusAction"/);
 });

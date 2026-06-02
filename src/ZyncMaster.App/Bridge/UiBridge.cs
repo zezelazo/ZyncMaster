@@ -162,6 +162,16 @@ public sealed class UiBridge
                 var affected = await _engine.UnlinkAccountAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(new { affectedPairIds = affected }, JsonOptions);
             }
+            case "getDevice":
+            {
+                var device = await _engine.GetDeviceAsync(ct);
+                return JsonSerializer.Serialize(device, JsonOptions);
+            }
+            case "renameDevice":
+            {
+                var device = await _engine.RenameDeviceAsync(ParseDeviceName(message.Payload), ct);
+                return JsonSerializer.Serialize(device, JsonOptions);
+            }
             case "generateTxt":
             {
                 var path = await _engine.GenerateTxtAsync(ct);
@@ -244,6 +254,31 @@ public sealed class UiBridge
 
         // Not an object: treat the whole payload as the provider name.
         return (UnwrapString(trimmed), null);
+    }
+
+    // Parses a {"name":"..."} rename payload. A bare string payload is tolerated too (the whole
+    // value is taken as the name). Missing/blank yields "" so the engine surfaces a clear
+    // "name required" error rather than the bridge throwing.
+    private static string ParseDeviceName(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return "";
+
+        var trimmed = payload.Trim();
+        if (trimmed[0] == '{')
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                return doc.RootElement.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+            }
+            catch (JsonException)
+            {
+                return "";
+            }
+        }
+
+        return UnwrapString(trimmed);
     }
 
     private static bool ParseBool(string? payload)

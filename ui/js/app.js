@@ -376,6 +376,8 @@ const live = {
   calendars: {},     // accountRef -> [CalendarInfo]
   autoStart: null,   // bool from getAutoStart
   me: null,          // { email, displayName } from getStatus/api/me (web panel)
+  device: null,      // { deviceId, name, platform } from getDevice (desktop App, lazy-loaded)
+  deviceLoading: false,  // a getDevice call is in flight
   loadedPairs: false,
   loadingPairs: false,
   pairsAttempted: false,  // web panel: home auto-loads pairs at most once (a 401 must not loop)
@@ -1357,16 +1359,30 @@ function renderConfig(root) {
   // registered as part of the identity sign-in, so there is no key/"Paired" chip/"Unpair" button.
   if (!Bridge.webPanel) {
     if (Bridge.available) {
-      // Real desktop App. The device name is backed by AppSettings.DeviceName (sent through
-      // saveConfig and used when the device registers; an empty value falls back to the machine
-      // name host-side). We don't pre-fill an invented name, so the placeholder shows for a fresh
-      // install. Below it, an HONEST signed-in line derived from the real identity (identityAuth.me)
-      // — no key, no fake "Paired" state. With no identity yet the line simply doesn't render.
-      const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
+      // Real desktop App. The device name is the REAL name of the registered device, read live
+      // from the server via getDevice (live.device). The input pre-fills with that name and a
+      // change (blur / Enter) renames the device IN PLACE through renameDevice — a hot rename, not
+      // just a settings.json write. settings.deviceName is still kept in step host-side as the
+      // fallback used by a future re-register. Below it, an HONEST signed-in line derived from the
+      // real identity (identityAuth.me). With no identity yet the line simply doesn't render.
+      const currentName = (live.device && live.device.name) || settings.deviceName || '';
+      const nameInput = el('input', { class: 'field-input', value: currentName, placeholder: 'Name this device' });
+      const feedback = el('span', { class: 'cfg-row__hint', style: 'margin-left:10px' });
       nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
-      nameInput.addEventListener('change', pushConfig);
+      nameInput.addEventListener('change', () => saveDeviceName(nameInput, feedback));
+
+      // Lazy-load the real device once, then repaint Settings in place — the same load-then-rerender
+      // pattern the rest of renderConfig (accounts/calendars, auto-start) uses.
+      if (live.device === null && !live.deviceLoading) {
+        live.deviceLoading = true;
+        Bridge.call('getDevice')
+          .then((d) => { live.device = d || {}; if (d && d.name) settings.deviceName = d.name; })
+          .catch(() => { live.device = {}; })
+          .finally(() => { live.deviceLoading = false; if (state.view === 'config') rerender(); });
+      }
+
       const deviceRows = [
-        row('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput),
+        row('Device name', el('div', { class: 'cfg-row__hint' }, document.createTextNode('Visible to your other devices'), feedback), nameInput),
       ];
       if (identityAuth.signedIn && identityAuth.me) {
         const who = identityAuth.me.displayName || identityAuth.me.email;
@@ -2027,6 +2043,30 @@ function togglePair(id) {
 }
 
 // ---------------- Config push to host ----------------
+// Renames the current device in place (hot rename) through the host. Shows inline feedback next
+// to the input: "Saving…", then "Saved" or an error. A no-op when the name is unchanged or blank.
+// On success live.device is updated so a later render keeps showing the real name.
+function saveDeviceName(input, feedback) {
+  if (!Bridge.available || !input) return;
+  const name = (input.value || '').trim();
+  const setMsg = (text, color) => { if (feedback) { feedback.textContent = text; feedback.style.color = color || ''; } };
+
+  if (!name) { setMsg('Name cannot be empty', 'var(--err)'); return; }
+  if (live.device && live.device.name === name) { setMsg(''); return; }
+
+  setMsg('Saving…', 'var(--ink-2)');
+  Bridge.call('renameDevice', JSON.stringify({ name }))
+    .then((d) => {
+      const saved = (d && d.name) || name;
+      live.device = Object.assign({}, live.device, { name: saved });
+      settings.deviceName = saved;
+      input.value = saved;
+      setMsg('Saved', 'var(--ok)');
+      setTimeout(() => { if (feedback) feedback.textContent = ''; }, 2000);
+    })
+    .catch((err) => setMsg((err && err.message) ? err.message : 'Could not rename', 'var(--err)'));
+}
+
 function pushConfig() {
   if (!Bridge.available) return;
   const cfg = {
