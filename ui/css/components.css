@@ -516,4 +516,6 @@
   .btn--primary { animation: none; }
   /* Keep the border-light as a still glow; do not let it travel. */
   .btn:hover::before { animation: none; }
+  /* Spinner: hold still rather than spin (the "waiting" copy still reads as in-progress). */
+  .spinner { animation: none; }
 }

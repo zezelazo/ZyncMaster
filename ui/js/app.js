@@ -1264,6 +1264,9 @@ function startMicrosoftLogin() {
   rerender();
   Bridge.call('login', JSON.stringify({ provider: 'microsoft' }), 210000)
     .then((outcome) => {
+      // Cancelled (user hit Cancel, or a newer login superseded this one): cancelAppLogin already
+      // reset the form, so do nothing — never show an error banner for a cancel.
+      if (outcome && outcome.cancelled) return;
       if (outcome && outcome.error) { identityAuth.error = String(outcome.error); identityAuth.loading = false; rerender(); return; }
       // Re-read the identity; success swaps to the dashboard, otherwise we stay on the gate.
       return refreshIdentity().then(() => { if (!identityAuth.signedIn) identityAuth.loading = false; rerender(); });
@@ -1301,6 +1304,21 @@ function startMagicLinkLogin(email) {
     .catch((e) => { identityAuth.error = (e && e.message) || 'Could not send the magic link.'; identityAuth.loading = false; rerender(); });
 }
 
+// cancelAppLogin — abort the sign-in attempt in flight and return to the sign-in form. The host
+// cancels the pending loopback wait and frees the port (cancelLogin), so the next login() starts
+// clean — this is the recovery path when the user closed the browser tab before finishing OAuth.
+// Resets the gate state synchronously so the form reappears immediately; the host call is
+// fire-and-forget (a failure to cancel still leaves the UI on the retry-able form).
+function cancelAppLogin() {
+  if (!Bridge.desktopApp) return;
+  clearInterval(magicLinkPoll);
+  identityAuth.loading = false;
+  identityAuth.error = null;
+  identityAuth.magicLinkSent = false;
+  rerender();
+  Bridge.call('cancelLogin').catch(() => {});
+}
+
 // signOutApp — desktop App sign-out. Clears the host session, drops back to the identity gate.
 function signOutApp() {
   if (!Bridge.desktopApp) return;
@@ -1322,7 +1340,9 @@ function signOutApp() {
 // and the "magic-link sent" confirmation. Decorative glow lives on the buttons' own
 // border-light; nothing here moves the hit area or flickers on hover.
 function renderIdentitySignIn(root) {
-  // Magic-link sent confirmation — replaces the form until the round-trip completes.
+  // Magic-link sent confirmation — replaces the form until the round-trip completes. The user
+  // still has to click the emailed link (which opens the browser), so we also nudge them to
+  // continue in the browser and give a Cancel/Back path (cancelLogin) for the closed-tab case.
   if (identityAuth.magicLinkSent) {
     const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' },
       el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
@@ -1333,9 +1353,27 @@ function renderIdentitySignIn(root) {
         '. Open it on this device to finish signing in — this screen updates automatically.'),
       el('div', { class: 'identity-waiting' },
         el('span', { class: 'spinner', style: 'width:14px;height:14px;border-color:var(--azure-edge);border-top-color:var(--azure)' }),
-        el('span', { class: 'identity-waiting__txt', text: 'Waiting for the link…' })),
-      el('button', { class: 'btn btn--ghost', text: 'Use a different email',
-        onclick: () => { clearInterval(magicLinkPoll); identityAuth.magicLinkSent = false; identityAuth.error = null; rerender(); } }),
+        el('span', { class: 'identity-waiting__txt', text: 'Continue in your browser to finish signing in…' })),
+      el('button', { class: 'btn btn--ghost', text: 'Cancel and use a different email',
+        onclick: () => cancelAppLogin() }),
+    );
+    root.append(card);
+    return;
+  }
+
+  // Login in flight (Microsoft, or magic-link request before it lands) — the host has opened the
+  // system browser and is waiting on the loopback callback. Replace the form with a clear
+  // "continue in your browser" panel plus a Cancel button so a closed tab is recoverable without
+  // restarting the App (cancelLogin frees the port and resets the attempt).
+  if (identityAuth.loading) {
+    const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' },
+      el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
+      el('div', { class: 'pair-title', text: 'Continue in your browser' }),
+      el('div', { class: 'pair-sub', text: 'We opened your browser to finish signing in. Come back here once you are done — this screen updates on its own.' }),
+      el('div', { class: 'identity-waiting' },
+        el('span', { class: 'spinner', style: 'width:14px;height:14px;border-color:var(--azure-edge);border-top-color:var(--azure)' }),
+        el('span', { class: 'identity-waiting__txt', text: 'Waiting for the browser…' })),
+      el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => cancelAppLogin() }),
     );
     root.append(card);
     return;

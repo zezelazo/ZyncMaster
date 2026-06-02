@@ -299,6 +299,90 @@ public class IdentityLoginServiceTests
         loopback.StopCalls.Should().BeGreaterThanOrEqualTo(1);
     }
 
+    // ---- CancelLogin / single-attempt-in-flight -----------------------------------------------
+
+    [Fact]
+    public async Task CancelLogin_aborts_in_flight_microsoft_login_as_canceled_and_stops_loopback()
+    {
+        var loopback = new FakeLoopback { TimeOut = true }; // never gets a callback on its own
+        var svc = Build(new FakeServer(), new FakeCache(), loopback, new FakeBrowser(),
+                        // long timeout so the only way out is the explicit cancel
+                        timeout: TimeSpan.FromMinutes(3));
+
+        var login = svc.LoginWithMicrosoftAsync();
+        // Let the login reach its WaitForCallbackAsync before cancelling.
+        await WaitUntil(() => loopback.WaitCalls >= 1);
+
+        svc.CancelLogin();
+        var outcome = await login;
+
+        outcome.Success.Should().BeFalse();
+        outcome.Cancelled.Should().BeTrue();
+        outcome.Error.Should().BeNull();
+        loopback.StopCalls.Should().BeGreaterThanOrEqualTo(1); // port released
+    }
+
+    [Fact]
+    public async Task Second_login_supersedes_pending_one_without_clashing_on_the_port()
+    {
+        // The first login hangs waiting for its callback; the second must cancel it (so the two never
+        // race for the loopback) and then complete on its own loopback.
+        var first = new FakeLoopback { Port = 5001, TimeOut = true };
+        var second = new FakeLoopback { Port = 5002 };
+
+        var loopbacks = new Queue<FakeLoopback>(new[] { first, second });
+        var server = new FakeServer
+        {
+            RedeemResult = new IdentityTokens("a", "r"),
+            MeResult = new IdentityProfile("u1", "u1@test", "User One", null),
+        };
+        var browser = new FakeBrowser();
+        var svc = new IdentityLoginService(server, new FakeCache(), () => loopbacks.Dequeue(),
+            browser, BaseUrl, TimeProvider.System, TimeSpan.FromMinutes(3));
+
+        // The second browser-open relays its nonce into the second loopback so the callback verifies.
+        browser.OpenCallsRelay = url =>
+        {
+            if (browser.OpenCalls == 2)
+                second.CallbackToReturn = Callback(("nonce", ExtractQuery(url, "nonce")), ("handle", "H"));
+        };
+
+        var firstLogin = svc.LoginWithMicrosoftAsync();
+        await WaitUntil(() => first.WaitCalls >= 1); // first is parked on its wait
+
+        var secondOutcome = await svc.LoginWithMicrosoftAsync();
+        var firstOutcome = await firstLogin;
+
+        secondOutcome.Success.Should().BeTrue();          // the new attempt wins
+        firstOutcome.Cancelled.Should().BeTrue();          // the old one was superseded, not errored
+        first.StopCalls.Should().BeGreaterThanOrEqualTo(1); // its port was released
+    }
+
+    [Fact]
+    public void CancelLogin_with_nothing_in_flight_is_a_noop()
+    {
+        var svc = Build(new FakeServer(), new FakeCache(), new FakeLoopback(), new FakeBrowser());
+        ((Action)svc.CancelLogin).Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task CancelLogin_aborts_pending_magic_link_wait()
+    {
+        var server = new FakeServer { MagicLinkOk = true };
+        var loopback = new FakeLoopback { TimeOut = true };
+        var svc = Build(server, new FakeCache(), loopback, new FakeBrowser(),
+                        timeout: TimeSpan.FromMinutes(3));
+
+        var requested = await svc.RequestMagicLinkAsync("me@test");
+        requested.Requested.Should().BeTrue();
+        await WaitUntil(() => loopback.WaitCalls >= 1); // background wait is parked
+
+        svc.CancelLogin();
+        await WaitUntil(() => loopback.StopCalls >= 1); // the wait unwound and released the port
+
+        loopback.StopCalls.Should().BeGreaterThanOrEqualTo(1);
+    }
+
     // ---- RequestMagicLinkAsync ----------------------------------------------------------------
 
     [Fact]
@@ -440,6 +524,19 @@ public class IdentityLoginServiceTests
     }
 
     // ---- helpers ------------------------------------------------------------------------------
+
+    // Spins until the predicate holds or a short cap elapses, so the async cancellation tests do not
+    // rely on fixed sleeps. Throws if it never becomes true (surfaces a hang as a test failure).
+    private static async Task WaitUntil(Func<bool> predicate, int timeoutMs = 2000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (!predicate())
+        {
+            if (Environment.TickCount64 > deadline)
+                throw new TimeoutException("Condition was not met in time.");
+            await Task.Delay(10);
+        }
+    }
 
     private static string ExtractQuery(string url, string key)
     {

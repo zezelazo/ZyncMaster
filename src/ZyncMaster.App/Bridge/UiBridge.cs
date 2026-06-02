@@ -184,6 +184,11 @@ public sealed class UiBridge
                 var outcome = await _engine.LoginAsync(provider, email, ct);
                 return JsonSerializer.Serialize(outcome, JsonOptions);
             }
+            case "cancelLogin":
+            {
+                await _engine.CancelLoginAsync(ct);
+                return null;
+            }
             case "signOut":
             {
                 await _engine.SignOutAsync(ct);

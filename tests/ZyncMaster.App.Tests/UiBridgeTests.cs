@@ -198,6 +198,13 @@ public class UiBridgeTests
             return LoginOutcomeToReturn;
         }
 
+        public int CancelLoginCalls;
+        public async Task CancelLoginAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CancelLoginCalls++;
+        }
+
         public async Task SignOutAsync(CancellationToken ct = default)
         {
             if (Throw != null) await Throw();

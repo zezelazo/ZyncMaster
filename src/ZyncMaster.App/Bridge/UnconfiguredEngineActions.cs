@@ -92,6 +92,8 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default)
         => Task.FromResult(LoginOutcome.Fail("Set the server URL in Settings before signing in."));
 
+    public Task CancelLoginAsync(CancellationToken ct = default) => Task.CompletedTask;
+
     public Task SignOutAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     private static InvalidOperationException NotConfigured()
