@@ -613,12 +613,13 @@ function activityRow(row) {
   );
 }
 
-// Real dashboard stats for the browser panel, derived from the pairs the panel already
-// loads. "Items synced" sums created+updated+deleted across each pair's lastResult; "Sync
-// runs" counts pairs that have a recorded run. The server's MirrorResult exposes no failure
-// count, so "Conflicts" has no real value to show: it renders an em-dash placeholder rather
-// than a fabricated 0. Until the pairs snapshot has loaded, every cell is an em-dash.
-function webPanelHomeStats() {
+// Real dashboard stats for ANY transport with a bridge (desktop App native/loopback AND the
+// browser web panel), derived from the pairs the shell already loads. "Items synced" sums
+// created+updated+deleted across each pair's lastResult; "Sync runs" counts pairs that have a
+// recorded run. The server's MirrorResult exposes no failure count, so "Conflicts" has no real
+// value to show: it renders an em-dash placeholder rather than a fabricated 0. Until the pairs
+// snapshot has loaded, every cell is an em-dash — never a demo number.
+function liveHomeStats() {
   const dash = '—';
   if (!live.loadedPairs) return { items: dash, runs: dash, conflicts: dash };
   const pairs = live.pairs || [];
@@ -637,6 +638,29 @@ function webPanelHomeStats() {
   };
 }
 
+// Real module tiles for any bridged transport. Only the Calendar module ships today; its tile
+// reflects the real pair state instead of the hardcoded demo ("2 calendars / Last sync 2 min
+// ago / Active"). With one or more active pairs it shows "Active" + the calendar count; with
+// none it shows an impersonal "Set up" state (no fake last-sync, no fake counts) while still
+// opening the Calendar screen so the user can add the first pair. The remaining modules stay
+// "Coming soon" exactly as in the catalog. Never returns the demo MODULES literals.
+function liveModules(activePairCount) {
+  const count = activePairCount || 0;
+  const calendar = count > 0
+    ? {
+        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: true, opens: true,
+        stat: `${count} ${count === 1 ? 'pair' : 'pairs'}`,
+        sub: live.loadedPairs ? 'Active sync pairs' : 'Loading…',
+      }
+    : {
+        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: false, opens: true,
+        stat: '', sub: live.loadedPairs ? 'No pairs yet' : 'Loading…',
+      };
+  // Reuse the catalog for the not-yet-shipped modules so titles/icons/sub stay in one place.
+  const comingSoon = MODULES.filter((m) => m.id !== 'calendar').map((m) => ({ ...m, opens: false }));
+  return [calendar, ...comingSoon];
+}
+
 // ---------------- Screen: Home ----------------
 function renderHome(root) {
   const cfg = STATUS[state.sync];
@@ -653,17 +677,18 @@ function renderHome(root) {
     el('div', { class: 'stat__lab', text: lab }),
   );
 
-  // In the browser panel we must never show fabricated demo numbers to a real signed-in
-  // user. Derive the dashboard stats from the real pairs the panel already loads; where no
-  // real value exists yet (snapshot not loaded) fall back to an em-dash placeholder. The
-  // literal 1,248 / 24 / 0 demo numbers are kept ONLY for the standalone mock (file://) demo.
-  const homeStats = Bridge.webPanel ? webPanelHomeStats() : { items: '1,248', runs: '24', conflicts: '0' };
+  // In any real transport (desktop App or web panel) we must never show fabricated demo
+  // numbers to a real signed-in user. Derive the dashboard stats from the real pairs the shell
+  // already loads; where no real value exists yet (snapshot not loaded) fall back to an em-dash
+  // placeholder. The literal 1,248 / 24 / 0 demo numbers are kept ONLY for the standalone mock
+  // (file://) demo. On a fresh, unpaired first run with a bridge, every cell is an em-dash.
+  const homeStats = Bridge.available ? liveHomeStats() : { items: '1,248', runs: '24', conflicts: '0' };
 
   root.append(el('div', { class: 'glass glass--card stats-card' },
     el('div', { class: 'stats-card__hd' },
       el('span', { class: 'status-dot', dataset: { state: cfg.dot } }),
       el('span', { class: 'stats-card__status', text: statusLabel }),
-      el('span', { class: 'stats-card__sub', text: Bridge.webPanel ? 'LAST RUN' : 'THIS WEEK' }),
+      el('span', { class: 'stats-card__sub', text: Bridge.available ? 'LAST RUN' : 'THIS WEEK' }),
     ),
     el('div', { class: 'stats-grid' },
       stat(homeStats.items, 'Items synced'),
@@ -674,41 +699,51 @@ function renderHome(root) {
     ),
   ));
 
-  // Modules summary line: "N active · M available". In the web panel, N is the count of
-  // active real pairs; M stays the catalog size (the single Calendar module is the only one
-  // shipped today, so "available" mirrors the demo's catalog count). Mock keeps its demo line.
-  const moduleActive = Bridge.webPanel
-    ? String((live.pairs || []).filter((p) => p && p.state === 'active').length)
-    : '1';
+  // Modules summary line: "N active · M available". In any real transport, N is the count of
+  // active real pairs (0 on a fresh unpaired run); M stays the catalog size (the single Calendar
+  // module is the only one shipped today, so "available" mirrors the catalog count). Mock keeps
+  // its demo line ("1 active").
+  const activePairCount = (live.pairs || []).filter((p) => p && p.state === 'active').length;
+  const moduleActive = Bridge.available ? String(activePairCount) : '1';
   root.append(el('div', { class: 'section-head' },
     el('span', { class: 'section-head__title', text: 'Sync modules' }),
     el('span', { class: 'section-head__action', style: 'pointer-events:none;color:var(--ink-3)' },
       el('span', { class: 'num', text: moduleActive }), ' active · ', el('span', { class: 'num', text: '5' }), ' available'),
   ));
 
-  // Browser panel: ensure the pairs snapshot the stats above derive from is actually loaded,
-  // and repaint once it lands (the first home paint may precede any pairs fetch).
-  if (Bridge.webPanel && !live.loadedPairs && !live.loadingPairs && !live.pairsAttempted) {
+  // Any real transport: ensure the pairs snapshot the stats/modules above derive from is loaded,
+  // and repaint once it lands (the first home paint may precede any pairs fetch). pairsAttempted
+  // fires this at most once so a 401/empty response does not loop.
+  if (Bridge.available && !live.loadedPairs && !live.loadingPairs && !live.pairsAttempted) {
     live.pairsAttempted = true;  // fire once; rerenderInPlace below must not re-trigger this on a 401
     loadPairs().then(() => { if (state.view === 'home') rerenderInPlace(); });
   }
 
+  // In a real transport the module tiles must reflect the real state: with no active pairs the
+  // Calendar module is "not configured" (inactive, no fake "2 calendars / 2 min ago" line),
+  // never the hardcoded demo. Mock keeps the demo MODULES untouched for the standalone file://
+  // walkthrough.
+  const modules = Bridge.available ? liveModules(activePairCount) : MODULES;
   const grid = el('div', { class: 'module-grid' });
-  MODULES.forEach((m) => {
+  modules.forEach((m) => {
+    // A tile is navigable (clickable) when it is active OR explicitly opens (the shipped Calendar
+    // module always opens its screen even with zero pairs, so the user can add the first pair).
+    const navigable = m.active || m.opens;
+    const footChip = m.active
+      ? el('span', { class: 'chip chip--ok' },
+          el('span', { class: 'status-dot', dataset: { state: 'ok' }, style: 'width:6px;height:6px' }), 'Active')
+      : el('span', { class: 'chip chip--skipped', text: m.opens ? 'Set up' : 'Soon' });
     const tile = el('button', {
       class: 'module-tile glass',
       dataset: { active: String(m.active) },
-      disabled: !m.active,
-      onclick: () => { if (m.active) navigate('calendar'); },
+      disabled: !navigable,
+      onclick: () => { if (navigable) navigate('calendar'); },
     },
       el('div', { class: 'module-tile__icon', html: icon(m.icon, { size: 20, stroke: 1.6 }) }),
       el('div', { class: 'module-tile__title', text: m.title }),
       el('div', { class: 'module-tile__sub', text: m.sub }),
       el('div', { class: 'module-tile__foot' },
-        m.active
-          ? el('span', { class: 'chip chip--ok' },
-              el('span', { class: 'status-dot', dataset: { state: 'ok' }, style: 'width:6px;height:6px' }), 'Active')
-          : el('span', { class: 'chip chip--skipped', text: 'Soon' }),
+        footChip,
         el('span', { class: 'module-tile__stat num', text: m.stat }),
       ),
     );
@@ -1177,7 +1212,12 @@ function renderAddCalendar(root) {
 function backFromAddCalendar() { clearTimeout(addCal.timer); addCal.step = 0; navigate(state.returnTo || 'calendar'); }
 
 // ---------------- Screen: Settings ----------------
-const settings = { autoSync: true, startup: true, interval: 15, windowDays: 14, deviceName: "Daniel's MacBook" };
+// deviceName starts empty; the "Daniel's MacBook" demo name is applied at RENDER time only in
+// mock mode (see renderConfig). It must NOT be decided here at module load: the loopback
+// transport (the desktop App) resolves Bridge.available asynchronously after boot's /health
+// probe, so reading Bridge.available now would still be false and would wrongly seed the demo
+// name into the real App. Deciding in the render keeps the value impersonal for any real shell.
+const settings = { autoSync: true, startup: true, interval: 15, windowDays: 14, deviceName: '' };
 
 function toggle(get, set) {
   const t = el('div', { class: 'toggle', role: 'switch', 'aria-checked': String(get()), tabindex: '0' });
@@ -1269,7 +1309,10 @@ function renderConfig(root) {
   // This device — device identity + the device's own pairing key. Device-only: a browser panel
   // is not a paired device, so the whole section is hidden in the web panel.
   if (!Bridge.webPanel) {
-    const nameInput = el('input', { class: 'field-input', value: settings.deviceName });
+    // Mock-only: seed the demo device name so the standalone file:// walkthrough shows a value.
+    // Any real transport keeps it empty (impersonal) and relies on the placeholder.
+    if (!Bridge.available && !settings.deviceName) settings.deviceName = "Daniel's MacBook";
+    const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
     nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
     nameInput.addEventListener('change', pushConfig);
     root.append(section('This device',
@@ -1592,7 +1635,10 @@ function renderAbout(root) {
 }
 
 // ---------------- Screen: Pairing ----------------
-const pairing = { step: 0, name: "Daniel's MacBook", timer: null };
+// name starts empty; the "Daniel's MacBook" demo name is applied at RENDER time only in mock
+// mode (see renderPairing). Decided in the render, not at module load, for the same loopback
+// timing reason as settings.deviceName above.
+const pairing = { step: 0, name: '', timer: null };
 
 function renderPairing(root) {
   const labels = ['Name', 'Approve', 'Done'];
@@ -1605,7 +1651,9 @@ function renderPairing(root) {
   root.append(el('div', { class: 'glass glass--card', style: 'margin-top:6px;padding:0' }, stepper));
 
   if (pairing.step === 0) {
-    const nameInput = el('input', { class: 'field-input', value: pairing.name, style: 'width:100%;height:36px;margin-top:4px' });
+    // Mock-only: seed the demo device name for the standalone walkthrough; real shells stay empty.
+    if (!Bridge.available && !pairing.name) pairing.name = "Daniel's MacBook";
+    const nameInput = el('input', { class: 'field-input', value: pairing.name, placeholder: 'Name this device', style: 'width:100%;height:36px;margin-top:4px' });
     nameInput.addEventListener('input', () => { pairing.name = nameInput.value; });
     root.append(el('div', { class: 'glass glass--card pair-card', style: 'margin-top:14px' },
       el('div', { style: 'width:56px;height:56px;margin:4px auto 0;border-radius:14px;display:grid;place-items:center;background:var(--azure-soft);color:var(--azure);border:1px solid var(--azure-edge)', html: icon('link', { size: 26, stroke: 1.6 }) }),
