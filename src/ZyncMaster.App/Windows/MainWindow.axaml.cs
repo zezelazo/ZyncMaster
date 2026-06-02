@@ -113,8 +113,9 @@ public partial class MainWindow : Window, IWindowControl
     }
 
     // Set just before a real shutdown (tray "Quit") so OnClosing lets the window close
-    // instead of cancelling and hiding it. Without this the explicit Shutdown() would be
-    // swallowed by the hide-to-tray guard and the process would never exit.
+    // instead of cancelling and hiding it. Note: Shutdown() forces teardown and ignores the
+    // OnClosing cancel regardless, so this is defensive — it keeps Quit working if the exit
+    // path is ever switched to the cancel-respecting TryShutdown().
     private bool _allowClose;
 
     // Allows the next close to proceed (used by the tray Quit path through the lifetime).

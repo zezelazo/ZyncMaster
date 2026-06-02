@@ -56,9 +56,12 @@ public sealed class TrayController : IDisposable
         var quitItem = new NativeMenuItem("Quit");
         quitItem.Click += (_, _) =>
         {
-            // Real exit: let the window actually close (the hide-to-tray guard would
-            // otherwise cancel it), then tear the lifetime down.
-            _window?.AllowClose();
+            // Real exit. Shutdown() forces teardown (it ignores the OnClosing cancel that the
+            // hide-to-tray guard raises), so the app closes regardless. AllowClose() is belt-
+            // and-suspenders in case the exit path is ever changed to the cancel-respecting
+            // TryShutdown(); resolve the single window via the factory so it applies even when
+            // the tray's "Open" was never used (e.g. the window came up via startup auto-show).
+            (_window ??= _windowFactory()).AllowClose();
             _desktop.Shutdown();
         };
 
