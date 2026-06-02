@@ -9,27 +9,27 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="stylesheet" href="css/launcher.css" />
 </head>
-<body>
+<body id="top">
 <div class="bg" aria-hidden="true"></div>
 <canvas id="net" aria-hidden="true"></canvas>
 
 <div class="wrap">
-  <header class="nav" id="nav">
-    <a class="brand" href="#" aria-label="Zync Master home">
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="rgba(255,255,255,.04)" stroke="rgba(255,255,255,.1)"/>
-        <path d="M6.5 11.5A5.5 5.5 0 0 1 16.5 9.2" stroke="#7aa6ff" stroke-width="2.1" stroke-linecap="round"/>
-        <path d="M17.5 12.5A5.5 5.5 0 0 1 7.5 14.8" stroke="#ee9476" stroke-width="2.1" stroke-linecap="round"/>
-      </svg>
-      <span>Zync Master</span>
+  <a class="brand nav-card" id="brandCard" href="#top" aria-label="Zync Master — scroll to top">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="rgba(255,255,255,.04)" stroke="rgba(255,255,255,.1)"/>
+      <path d="M6.5 11.5A5.5 5.5 0 0 1 16.5 9.2" stroke="#7aa6ff" stroke-width="2.1" stroke-linecap="round"/>
+      <path d="M17.5 12.5A5.5 5.5 0 0 1 7.5 14.8" stroke="#ee9476" stroke-width="2.1" stroke-linecap="round"/>
+    </svg>
+    <span>Zync Master</span>
+  </a>
+  <div class="act nav-card">
+    <!-- DEV-ONLY · TEMPORARY · remove for production (see web/css/launcher.css .dev block) -->
+    <a class="dev" href="/app" title="Open the desktop dashboard in the browser (development only)"><span class="devt">DEV</span>Open app</a>
+    <a class="dl" href="https://github.com/zezelazo/ZyncMaster/releases/latest">
+      <svg class="dl__ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v9m0 0l-3.5-3.5M12 13l3.5-3.5M5 18.5h14"/></svg>
+      <span class="dl__t">Download</span>
     </a>
-    <div class="sp"></div>
-    <div class="act">
-      <!-- DEV-ONLY · TEMPORARY · remove for production (see web/css/launcher.css .dev block) -->
-      <a class="dev" href="/app" title="Open the desktop dashboard in the browser (development only)"><span class="devt">DEV</span>Open app</a>
-      <a class="dl" href="https://github.com/zezelazo/ZyncMaster/releases/latest"><span class="dl__t">Download</span></a>
-    </div>
-  </header>
+  </div>
 
   <section class="hero">
     <div class="devnet" id="devnet" aria-hidden="true"></div>
