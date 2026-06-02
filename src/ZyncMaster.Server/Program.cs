@@ -260,16 +260,37 @@ using (var scope = app.Services.CreateScope())
         var logger = scope.ServiceProvider
             .GetRequiredService<ILoggerFactory>()
             .CreateLogger("Startup.Migrate");
-        try
+        // Azure SQL (especially on the lower tiers / when waking) frequently resets the FIRST
+        // login TCP handshake on a cold start: "Connection reset by peer" / SqlException 35 during
+        // login. A single Migrate() attempt that hits that reset would kill the process and the
+        // container never binds its port -> Azure reports "did not start within 230s". So retry the
+        // migration with backoff, treating the first transient failures as the DB still coming up;
+        // only refuse to start (fail-fast against a half-migrated DB) once retries are exhausted.
+        const int maxAttempts = 8;
+        var delay = TimeSpan.FromSeconds(3);
+        for (var attempt = 1; ; attempt++)
         {
-            logger.LogInformation("Applying pending database migrations.");
-            db.Database.Migrate();
-            logger.LogInformation("Database migrations applied.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogCritical(ex, "Database migration failed on startup; refusing to start.");
-            throw;
+            try
+            {
+                logger.LogInformation("Applying pending database migrations (attempt {Attempt}/{Max}).", attempt, maxAttempts);
+                db.Database.Migrate();
+                logger.LogInformation("Database migrations applied.");
+                break;
+            }
+            catch (Exception ex) when (attempt < maxAttempts)
+            {
+                // Transient on a cold DB — log a warning and back off (capped) rather than crash.
+                logger.LogWarning(ex,
+                    "Database migration attempt {Attempt}/{Max} failed; retrying in {Delay}s.",
+                    attempt, maxAttempts, delay.TotalSeconds);
+                await Task.Delay(delay);
+                delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 1.8, 20));
+            }
+            catch (Exception ex)
+            {
+                logger.LogCritical(ex, "Database migration failed after {Max} attempts; refusing to start.", maxAttempts);
+                throw;
+            }
         }
     }
 }
