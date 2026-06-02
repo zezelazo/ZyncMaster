@@ -5,16 +5,33 @@
         Icon="/Assets/icon.png"
         Width="440" Height="680"
         MinWidth="380" MinHeight="560"
-        WindowDecorations="None"
-        ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaTitleBarHeightHint="-1"
+        WindowDecorations="BorderOnly"
         Background="#0c0e16"
+        TransparencyLevelHint="None"
         CanResize="True"
         ShowInTaskbar="True"
         WindowStartupLocation="CenterScreen">
-  <!-- Native window decorations: the OS provides move / resize / minimize / close. The
-       embedded WebView2 (or the loopback placeholder) fills the client area. The web UI
-       hides its own cosmetic title bar when it detects the native shell. -->
+  <!-- Frameless-but-resizable chrome.
+       WindowDecorations="BorderOnly" keeps the OS resize border (the 4 edges + corners
+       are hit-tested by the window manager, which sits ABOVE the embedded WebView2's
+       child HWND, so dragging an edge resizes instead of falling through to the window
+       behind — the airspace bug) WITHOUT drawing an OS title bar. The custom title bar
+       (min / max / close + drag) lives in the web UI and drives the window through the
+       bridge, so visually the look stays frameless; only the thin resizable border is
+       added back.
+
+       No transparency (TransparencyLevelHint="None") and an opaque Background: a
+       transparent/blurred window composited over the WebView2 child HWND is what
+       produced the "snow"/noise artifacts on maximize and the dead-border hit-test.
+       The web UI paints its own opaque background, so dropping transparency is visually
+       invisible while it fixes both the resize fall-through and the maximize corruption.
+
+       ExtendClientAreaToDecorationsHint is intentionally NOT set: combined with
+       BorderOnly it left the client area in an inconsistent extended state that
+       desynced the WebView2 bounds on WindowState changes (the broken restore).
+
+       The embedded WebView2 (or the loopback placeholder) fills the client area; the
+       web UI hides its own cosmetic title bar's OS-chrome when it detects the shell. -->
   <Panel x:Name="HostPanel">
     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
       <TextBlock Text="Zync Master"

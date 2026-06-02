@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
+using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using ZyncMaster.App.Bridge;
@@ -22,11 +23,54 @@ public partial class MainWindow : Window, IWindowControl
     public MainWindow()
     {
         InitializeComponent();
+
+        // When the window is maximized/restored the embedded WebView2 (a native child HWND
+        // managed by a NativeControlHost) must be re-laid-out so its CoreWebView2 bounds
+        // match the new client size; otherwise the previous-state bounds linger and the
+        // content renders at the wrong size ("lost everything" on restore). Avalonia does
+        // re-arrange on a state change, but the WindowState transition and the host's
+        // ArrangeOverride can race, so we force an extra invalidation on the next UI turn.
+        PropertyChanged += (_, e) =>
+        {
+            if (e.Property == WindowStateProperty)
+                Dispatcher.UIThread.Post(InvalidateHostLayout, DispatcherPriority.Loaded);
+        };
     }
 
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
+    }
+
+    // Forces a measure/arrange pass on the web host control so the embedded WebView2 syncs
+    // its native bounds to the current client size (run after a WindowState change).
+    private void InvalidateHostLayout()
+    {
+        var hostPanel = this.FindControl<Panel>("HostPanel");
+        if (hostPanel == null)
+            return;
+        hostPanel.InvalidateMeasure();
+        hostPanel.InvalidateArrange();
+        foreach (var child in hostPanel.Children)
+        {
+            child.InvalidateMeasure();
+            child.InvalidateArrange();
+        }
+    }
+
+    // Brings the window to the foreground, restoring it if minimized or hidden. Used by the
+    // tray "Open" action and by a second launch attempt (single-instance focus hand-off).
+    public void ShowToFront()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (WindowState == WindowState.Minimized)
+                WindowState = WindowState.Normal;
+            Show();
+            Activate();
+            Topmost = true;
+            Topmost = false;
+        });
     }
 
     // Attaches the web host and the "open in browser" action. Called by the composition
@@ -68,11 +112,24 @@ public partial class MainWindow : Window, IWindowControl
             openButton.Click += (_, _) => _openPanel?.Invoke();
     }
 
+    // Set just before a real shutdown (tray "Quit") so OnClosing lets the window close
+    // instead of cancelling and hiding it. Without this the explicit Shutdown() would be
+    // swallowed by the hide-to-tray guard and the process would never exit.
+    private bool _allowClose;
+
+    // Allows the next close to proceed (used by the tray Quit path through the lifetime).
+    public void AllowClose() => _allowClose = true;
+
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        // Closing hides, never quits: keep the tray-resident process alive.
-        e.Cancel = true;
-        Hide();
+        // Closing hides to the tray, never quits — the X on the custom title bar (bridge
+        // Close) and the OS-level close both land here, keeping the process resident so
+        // background sync keeps running. A real Quit sets _allowClose first.
+        if (!_allowClose)
+        {
+            e.Cancel = true;
+            Hide();
+        }
         base.OnClosing(e);
     }
 

@@ -30,6 +30,7 @@ public partial class App : Application
     private EngineHost? _engineHost;
     private UiBridge? _bridge;
     private MainWindow? _mainWindow;
+    private RegisteredWaitHandle? _showWindowWait;
     private readonly CancellationTokenSource _shutdown = new();
 
     public override void Initialize()
@@ -72,15 +73,30 @@ public partial class App : Application
             // --silent (used by login auto-start): stay in the tray, never surface a window.
             var silent = IsSilentLaunch(desktop.Args);
 
-            // Debug/smoke aid: open the window on startup so the window + WebView2 path can
-            // be exercised without a tray click. Off unless ZYNCMASTER_AUTOSHOW=1, and never
-            // when launched with --silent.
-            if (!silent && Environment.GetEnvironmentVariable("ZYNCMASTER_AUTOSHOW") == "1")
+            // Surface the window on startup so the app is visible the moment it launches
+            // (it previously stayed hidden behind the tray icon, which read as "didn't
+            // start"). With --silent (login auto-start) we deliberately stay tray-only.
+            if (!silent)
                 Dispatcher.UIThread.Post(() => CreateWindow().Show());
+
+            // Single-instance hand-off: a second launch signals this (owning) instance to
+            // surface its window instead of starting a second app. Wait on the named event
+            // off-thread and marshal the show onto the UI thread.
+            var signal = Program.ShowWindowSignal;
+            if (signal != null)
+            {
+                _showWindowWait = ThreadPool.RegisterWaitForSingleObject(
+                    signal,
+                    (_, _) => Dispatcher.UIThread.Post(() => CreateWindow().ShowToFront()),
+                    state: null,
+                    millisecondsTimeOutInterval: Timeout.Infinite,
+                    executeOnlyOnce: false);
+            }
 
             desktop.Exit += (_, _) =>
             {
                 _shutdown.Cancel();
+                _showWindowWait?.Unregister(null);
                 _tray?.Dispose();
                 _bridge = null;
                 _engineHost?.Dispose();
@@ -271,8 +287,14 @@ public partial class App : Application
     private static void Dispatch(Action action)
         => Avalonia.Threading.Dispatcher.UIThread.Post(action);
 
+    // Returns the single dashboard window, creating + wiring it on first use. The window is
+    // never destroyed (closing only hides it to the tray), so a startup auto-show and a later
+    // tray "Open" share the same instance — avoiding a second window / a second WebView2.
     private MainWindow CreateWindow()
     {
+        if (_mainWindow != null)
+            return _mainWindow;
+
         var window = new MainWindow();
         _mainWindow = window;
         if (_webHost != null)
