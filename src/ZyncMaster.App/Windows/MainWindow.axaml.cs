@@ -27,7 +27,9 @@ public partial class MainWindow : Window, IWindowControl
         // When the window is maximized/restored the embedded WebView2 (a native child HWND
         // managed by a NativeControlHost) must be re-laid-out so its CoreWebView2 bounds
         // match the new client size; otherwise the previous-state bounds linger and the
-        // content renders at the wrong size ("lost everything" on restore). Avalonia does
+        // content renders at the wrong size ("lost everything" on restore). This handler is
+        // also what makes the extend-client-area chrome (MainWindow.axaml Option A) safe: it
+        // re-syncs the WebView2 to the new client size on every WindowState change. Avalonia does
         // re-arrange on a state change, but the WindowState transition and the host's
         // ArrangeOverride can race, so we force an extra invalidation on the next UI turn.
         PropertyChanged += (_, e) =>
@@ -135,8 +137,8 @@ public partial class MainWindow : Window, IWindowControl
     }
 
     // ---- IWindowControl: driven by the web title bar through the bridge ----
-    // The window is frameless (BorderOnly: resizable border, no OS title bar), so these
-    // provide minimize / maximize / close / move. All marshal to the UI thread.
+    // The window is frameless (extend-client-area + NoChrome: resizable WM frame, no painted
+    // title bar), so these provide minimize / maximize / close / move. All marshal to the UI thread.
 
     public void Minimize() => Dispatcher.UIThread.Post(() => WindowState = WindowState.Minimized);
 
