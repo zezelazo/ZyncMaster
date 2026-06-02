@@ -979,14 +979,27 @@
   font-size: 12px; font-weight: 500;
   cursor: pointer;
   text-align: left;
+  text-decoration: none;
 }
 .about-link:hover { background: var(--ctrl-hover); }
 .about-link svg { width: 13px; height: 13px; color: var(--ink-2); }
 
 .about-credits {
+  /* A touch more air between the About cards — they sat flush before. */
+  margin-top: 14px;
   padding: 14px 16px;
   display: grid; gap: 4px;
 }
+.about-credits__link {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 8px;
+  font-size: 12px; font-weight: 500;
+  color: var(--azure);
+  text-decoration: none;
+  width: fit-content;
+}
+.about-credits__link:hover { text-decoration: underline; }
+.about-credits__link svg { width: 12px; height: 12px; }
 .about-credits__hd {
   font-size: 10.5px; font-weight: 700;
   color: var(--ink-3);
