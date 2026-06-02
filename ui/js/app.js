@@ -1161,6 +1161,17 @@ function completeAddPairLive() {
 const addCal = { step: 0, providerId: null, selected: new Set(['d1', 'd2']), timer: null };
 
 function renderAddCalendar(root) {
+  // Demo-only wizard. Every literal below (PROVIDERS / DISCOVERED, the fabricated
+  // `zyncmaster.app/auth/.../8h3-4f2a` link, the 2.4s OAuth-simulating timer) is mock data, so it
+  // must never paint in a real transport. In the App / web panel, connecting an account is the
+  // server-driven flow (renderAddPairLive → onlineCalendarPicker, sourced from listAccounts /
+  // listCalendars), so bounce there instead of showing this fabricated wizard.
+  if (Bridge.available) {
+    clearTimeout(addCal.timer);
+    navigate('add-pair');
+    return;
+  }
+
   const labels = ['Provider', 'Authorize', 'Calendars'];
   const provider = PROVIDERS.find((p) => p.id === addCal.providerId);
 
@@ -1262,9 +1273,41 @@ function renderConfig(root) {
       row(primary, hint, signOutBtn)));
   }
 
-  // Calendar
+  // Calendar — the "Target calendar" <select>. In a REAL transport (Bridge.available: the desktop
+  // App and the web panel) it must list the user's actual calendars, never demo literals. We derive
+  // them from the connected accounts (live.accounts) and their calendars (live.calendars), exactly
+  // like onlineCalendarPicker / renderAddPairLive. With no connected account or no calendars yet we
+  // show a single honest, disabled placeholder rather than inventing "Work · Calendar" entries. Only
+  // the mock file:// walkthrough keeps the demo options so the standalone ui/index.html shows
+  // something. Note: pushConfig does not currently persist a target-calendar value (AppSettings has
+  // no such field and the host's saveConfig would drop it), so the change handler stays a no-op for
+  // now — wiring it to a real host field is a separate, deliberate contract change.
   const targetSel = el('select', { class: 'field-select' });
-  ['Work · Calendar', 'Personal · Family', '+ Create new…'].forEach((o) => targetSel.append(el('option', { text: o })));
+  if (Bridge.available) {
+    const accounts = live.accounts || [];
+    const cals = accounts.flatMap((acc) => (live.calendars[acc.accountRef] || []).map((c) => ({ acc, c })));
+    if (cals.length === 0) {
+      // Honest empty state. accounts === [] with no calendars means nothing is connected yet.
+      const placeholder = accounts.length === 0 ? 'Connect an account first' : 'No calendars yet';
+      targetSel.append(el('option', { text: placeholder, value: '', disabled: true, selected: true }));
+    } else {
+      cals.forEach(({ acc, c }) => targetSel.append(
+        el('option', { value: c.id, text: `${acc.displayName || acc.accountRef} · ${c.displayName || c.id}` })));
+    }
+    // Lazily load accounts and their calendars, then repaint Settings in place once they arrive —
+    // the same load-then-rerender pattern the rest of renderConfig and the add-pair wizard use.
+    if (live.accounts === null) {
+      loadAccounts().then((list) => {
+        (list || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === 'config') rerender(); }); });
+        if (state.view === 'config') rerender();
+      });
+    } else {
+      accounts.forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === 'config') rerender(); }); });
+    }
+  } else {
+    // Mock-only demo so the standalone file:// walkthrough still shows representative options.
+    ['Work · Calendar', 'Personal · Family', '+ Create new…'].forEach((o) => targetSel.append(el('option', { text: o })));
+  }
   targetSel.addEventListener('change', pushConfig);
   root.append(section('Calendar',
     row('Target calendar', el('div', { class: 'cfg-row__hint', text: 'Where mirrored events are written' }), targetSel),
@@ -1309,21 +1352,45 @@ function renderConfig(root) {
     root.append(section('Tools', ...toolRows));
   }
 
-  // This device — device identity + the device's own pairing key. Device-only: a browser panel
-  // is not a paired device, so the whole section is hidden in the web panel.
+  // This device — device identity. Device-only (a browser panel is not a paired device), so the
+  // whole section is hidden in the web panel. Manual pairing-key entry is gone: a device is now
+  // registered as part of the identity sign-in, so there is no key/"Paired" chip/"Unpair" button.
   if (!Bridge.webPanel) {
-    // Mock-only: seed the demo device name so the standalone file:// walkthrough shows a value.
-    // Any real transport keeps it empty (impersonal) and relies on the placeholder.
-    if (!Bridge.available && !settings.deviceName) settings.deviceName = "Daniel's MacBook";
-    const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
-    nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
-    nameInput.addEventListener('change', pushConfig);
-    root.append(section('This device',
-      row('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput),
-      row('Pairing key',
-        el('div', { class: 'cfg-row__hint' }, el('span', { class: 'chip chip--ok', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Paired'),
-          el('span', { class: 'num', style: 'color:var(--ink-2)', text: '•••• 3f2a' })),
-        el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Unpair…', onclick: () => { state.sync = 'unpaired'; pushConfig(); rerender(); } }))));
+    if (Bridge.available) {
+      // Real desktop App. The device name is backed by AppSettings.DeviceName (sent through
+      // saveConfig and used when the device registers; an empty value falls back to the machine
+      // name host-side). We don't pre-fill an invented name, so the placeholder shows for a fresh
+      // install. Below it, an HONEST signed-in line derived from the real identity (identityAuth.me)
+      // — no key, no fake "Paired" state. With no identity yet the line simply doesn't render.
+      const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
+      nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
+      nameInput.addEventListener('change', pushConfig);
+      const deviceRows = [
+        row('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput),
+      ];
+      if (identityAuth.signedIn && identityAuth.me) {
+        const who = identityAuth.me.displayName || identityAuth.me.email;
+        if (who) {
+          deviceRows.push(row('Status',
+            el('div', { class: 'cfg-row__hint' },
+              el('span', { class: 'chip chip--ok', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'),
+              el('span', { style: 'color:var(--ink-2)', text: `This device is signed in as ${who}` }))));
+        }
+      }
+      root.append(section('This device', ...deviceRows));
+    } else {
+      // Mock-only (file:// walkthrough): seed a demo device name and an honest "signed in" line so
+      // the standalone page shows something — but never an invented pairing key.
+      if (!settings.deviceName) settings.deviceName = "Daniel's MacBook";
+      const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
+      nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
+      root.append(section('This device',
+        row('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput),
+        row('Status',
+          el('div', { class: 'cfg-row__hint' },
+            el('span', { class: 'chip chip--ok', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'),
+            el('span', { style: 'color:var(--ink-2)', text: 'This device is signed in as daniel@outlook.com' })))));
+    }
   }
 
   // Appearance — Dark / Light / Auto (Auto follows the OS)
@@ -1651,10 +1718,12 @@ function renderAbout(root) {
   ));
 }
 
-// ---------------- Screen: Pairing ----------------
-// name starts empty; the "Daniel's MacBook" demo name is applied at RENDER time only in mock
-// mode (see renderPairing). Decided in the render, not at module load, for the same loopback
-// timing reason as settings.deviceName above.
+// ---------------- Screen: Pairing (MOCK-ONLY) ----------------
+// Legacy manual pairing-by-key walkthrough. A device now registers as part of the identity
+// sign-in, so this screen is unreachable in every real transport: navItems() drops the "Pair"
+// tab and navigate() bounces 'pairing' to Settings whenever Bridge.available. It survives only in
+// the standalone mock (file://) demo, so the data below — the demo name, the fabricated link, the
+// timer that auto-advances — is fixed mock content that never runs against a real host.
 const pairing = { step: 0, name: '', timer: null };
 
 function renderPairing(root) {
@@ -1668,8 +1737,8 @@ function renderPairing(root) {
   root.append(el('div', { class: 'glass glass--card', style: 'margin-top:6px;padding:0' }, stepper));
 
   if (pairing.step === 0) {
-    // Mock-only: seed the demo device name for the standalone walkthrough; real shells stay empty.
-    if (!Bridge.available && !pairing.name) pairing.name = "Daniel's MacBook";
+    // Mock-only demo name for the standalone walkthrough (this screen never renders with a bridge).
+    if (!pairing.name) pairing.name = "Daniel's MacBook";
     const nameInput = el('input', { class: 'field-input', value: pairing.name, placeholder: 'Name this device', style: 'width:100%;height:36px;margin-top:4px' });
     nameInput.addEventListener('input', () => { pairing.name = nameInput.value; });
     root.append(el('div', { class: 'glass glass--card pair-card', style: 'margin-top:14px' },
@@ -1679,7 +1748,7 @@ function renderPairing(root) {
       nameInput,
       el('div', { style: 'display:flex;gap:10px;align-self:stretch' },
         el('button', { class: 'btn btn--ghost', style: 'flex:none', text: 'Cancel', onclick: () => { pairing.step = 0; navigate('home'); } }),
-        el('button', { class: 'btn btn--primary', style: 'flex:1', onclick: () => { if (Bridge.available) Bridge.call('pair', null, 210000).catch(() => {}); pairing.step = 1; rerender(); } },
+        el('button', { class: 'btn btn--primary', style: 'flex:1', onclick: () => { pairing.step = 1; rerender(); } },
           el('span', { text: 'Continue' }), iconEl('arrowright', 14, 1.8)))));
     clearTimeout(pairing.timer);
   } else if (pairing.step === 1) {
@@ -1838,10 +1907,12 @@ const NAV = [
 // Map sub-routes back to a parent tab so the indicator follows the user.
 const TAB_MAP = { home: 'home', calendar: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', about: 'config', pairing: 'pairing' };
 
-// The visible tabs. "Pair" is device self-pairing — meaningless in the browser panel — so it
-// is dropped in web mode. The pairing screen is gated separately in navigate().
+// The visible tabs. "Pair" is the legacy manual pairing-by-key walkthrough; a device now
+// registers as part of the identity sign-in, so the tab is meaningless in every REAL transport
+// (the App and the web panel). It survives ONLY in the mock file:// demo so the standalone page
+// still showcases the flow. The pairing screen is gated again in navigate().
 function navItems() {
-  return Bridge.webPanel ? NAV.filter((i) => i.id !== 'pairing') : NAV;
+  return Bridge.available ? NAV.filter((i) => i.id !== 'pairing') : NAV;
 }
 
 function renderNav() {
@@ -1943,8 +2014,9 @@ function rerenderInPlace() {
 }
 
 function navigate(view) {
-  // Device self-pairing has no meaning in the browser panel; bounce it to Settings.
-  if (view === 'pairing' && Bridge.webPanel) view = 'config';
+  // Legacy manual pairing-by-key is retired in every real transport (the device registers via the
+  // identity sign-in), so bounce it to Settings. It stays reachable only in the mock file:// demo.
+  if (view === 'pairing' && Bridge.available) view = 'config';
   state.view = view;
   rerender();
 }
@@ -2010,6 +2082,8 @@ async function boot() {
   applyTheme(storedTheme());
   wireTitlebar();
   const tag = $('#pausedTag'); if (tag) tag.hidden = true;
+  // Single source of truth for the splash version: write VERSION over the HTML placeholder.
+  const launchVer = $('#launchVersion'); if (launchVer) launchVer.textContent = `v${VERSION}`;
 
   // Settle the http(s) transport (web vs the App's loopback host) before the first
   // data-driven paint. Native + mock resolve synchronously; this only awaits the probe.
