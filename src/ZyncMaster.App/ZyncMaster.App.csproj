@@ -10,6 +10,10 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>ZyncMaster.App</RootNamespace>
     <AssemblyName>ZyncMaster.App</AssemblyName>
+    <!-- Embeds the .ico into the Win32 resources of the exe so Windows shows the brand icon
+         on the taskbar / Alt-Tab / Explorer. The Avalonia Window.Icon (Assets/icon.png) only
+         covers the in-app window chrome; the executable / taskbar icon comes from this. -->
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <!-- Release versioning. The release workflow overrides this with /p:Version=<input>;
          the value here is the local/dev default and the floor for the first beta. -->
     <Version>0.1.0</Version>
