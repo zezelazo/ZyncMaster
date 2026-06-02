@@ -54,7 +54,16 @@ public sealed class TrayController : IDisposable
         _pauseItem.Click += (_, _) => TogglePause();
 
         var quitItem = new NativeMenuItem("Quit");
-        quitItem.Click += (_, _) => _desktop.Shutdown();
+        quitItem.Click += (_, _) =>
+        {
+            // Real exit. Shutdown() forces teardown (it ignores the OnClosing cancel that the
+            // hide-to-tray guard raises), so the app closes regardless. AllowClose() is belt-
+            // and-suspenders in case the exit path is ever changed to the cancel-respecting
+            // TryShutdown(); resolve the single window via the factory so it applies even when
+            // the tray's "Open" was never used (e.g. the window came up via startup auto-show).
+            (_window ??= _windowFactory()).AllowClose();
+            _desktop.Shutdown();
+        };
 
         var menu = new NativeMenu
         {
@@ -102,9 +111,10 @@ public sealed class TrayController : IDisposable
         // message pump and crashes the process (0xc000041d). Posting runs it on a clean turn.
         Dispatcher.UIThread.Post(() =>
         {
+            // The factory returns the single shared window (created + wired on first use),
+            // so this reuses the startup-shown window rather than spawning a second one.
             _window ??= _windowFactory();
-            _window.Show();
-            _window.Activate();
+            _window.ShowToFront();
         });
     }
 
