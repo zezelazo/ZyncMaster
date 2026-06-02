@@ -1623,6 +1623,8 @@ function renderIdentitySignIn(root) {
 // browser (out of scope here); the links are never dead — the href always points somewhere real.
 const ABOUT_WEBSITE_URL = 'https://zyncmaster.azurewebsites.net';
 const ABOUT_RELEASES_URL = 'https://github.com/zezelazo/ZyncMaster/releases';
+// Company site (DevLab-Pe), distinct from the product landing above.
+const ABOUT_COMPANY_URL = 'https://devlabperu.com';
 
 function renderAbout(root) {
   root.append(viewHeader('About', { onBack: () => navigate('config') }));
@@ -1643,8 +1645,8 @@ function renderAbout(root) {
   root.append(el('div', { class: 'glass glass--card about-credits' },
     el('div', { class: 'about-credits__hd', text: 'Made by DevLab-Pe' }),
     el('div', { class: 'about-credits__txt', text: 'For people who are tired of keeping things in sync across their devices — PCs, Macs and phones — by hand, over and over.' }),
-    el('a', { class: 'about-credits__link', href: ABOUT_WEBSITE_URL, target: '_blank', rel: 'noopener noreferrer' },
-      iconEl('link', 12, 1.6), el('span', { text: 'zyncmaster.azurewebsites.net' })),
+    el('a', { class: 'about-credits__link', href: ABOUT_COMPANY_URL, target: '_blank', rel: 'noopener noreferrer' },
+      iconEl('link', 12, 1.6), el('span', { text: 'devlabperu.com' })),
     el('div', { class: 'about-sys', text: '© 2026 DevLab-Pe · still in beta' }),
   ));
 }

@@ -1,6 +1,7 @@
 ﻿#if WIN_WEBVIEW2
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -124,6 +125,15 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
             core.SetVirtualHostNameToFolderMapping(
                 VirtualHost, _uiRoot, CoreWebView2HostResourceAccessKind.Allow);
             core.WebMessageReceived += OnWebMessageReceived;
+
+            // External links in the UI use <a target="_blank"> (About: Website, What's new,
+            // the DevLab-Pe company link). WebView2 blocks new windows unless a handler claims
+            // them, so those clicks would silently do nothing. Cancel the in-WebView window and
+            // hand the URL to the system browser instead. Only http/https is allowed — any other
+            // scheme (file:, javascript:, etc.) is dropped so a hostile/odd link can't shell out.
+            try { core.NewWindowRequested += OnNewWindowRequested; }
+            catch { /* older WebView2 runtime: external links just won't open, no crash */ }
+
             core.Navigate(StartUrl);
 
             _ready = true;
@@ -136,6 +146,23 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
             // crash. The tray remains usable and the engine keeps running headless.
             _ready = false;
         }
+    }
+
+    // target="_blank" / window.open from the UI: open the URL in the system browser and stop
+    // WebView2 from spawning its own window. Restricted to http/https so non-web schemes are
+    // never launched. Best-effort: a failed Process.Start must not bubble out of the WebView.
+    private void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        e.Handled = true; // never let WebView2 open a popup window
+        try
+        {
+            if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri))
+                return;
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                return;
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch { /* no browser / blocked: swallow, do not crash the host */ }
     }
 
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
