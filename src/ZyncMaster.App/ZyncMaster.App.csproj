@@ -39,6 +39,16 @@
          WebView2 / loopback host can resolve it at runtime. Linked rather than copied
          into the project so there is a single source of truth (no drift). -->
     <Content Include="..\..\ui\**\*" Link="Assets\ui\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- Local dev convenience: a developer settings.json copied next to the exe so F5 from
+         Visual Studio works out of the box (pointing at the production server) without the
+         "Set the server URL" prompt. It is .gitignored (each dev keeps their own; can point
+         at a local server) so it is NOT in the repo or in CI publishes — the app still
+         generates a prod-default settings.json at runtime when none is present. The
+         Exists() guard keeps a clean checkout / the release CI build from failing when the
+         file is absent. PreserveNewest so it seeds the output once but never clobbers an
+         edited copy there. -->
+    <Content Include="$(MSBuildProjectDirectory)\settings.json" Link="settings.json" Condition="Exists('$(MSBuildProjectDirectory)\settings.json')" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.3" />
