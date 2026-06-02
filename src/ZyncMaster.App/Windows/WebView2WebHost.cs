@@ -100,6 +100,27 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
             try { core.Settings.IsNonClientRegionSupportEnabled = true; }
             catch { /* older WebView2 runtime: the bridge drag fallback still applies */ }
 
+            // Lock down the embedded browser chrome so the app does not look or behave like a
+            // browser tab. In RELEASE there is no right-click context menu (no Reload/Save/
+            // Inspect), no DevTools, no built-in error pages, and no Ctrl+/zoom — a stray
+            // Reload would blow away the in-page app state. DEBUG keeps the context menu and
+            // DevTools so developers can still inspect the WebView during development.
+            try
+            {
+                var s = core.Settings;
+#if DEBUG
+                s.AreDefaultContextMenusEnabled = true;
+                s.AreDevToolsEnabled = true;
+#else
+                s.AreDefaultContextMenusEnabled = false;
+                s.AreDevToolsEnabled = false;
+                s.IsZoomControlEnabled = false;
+                s.IsBuiltInErrorPageEnabled = false;
+                s.IsStatusBarEnabled = false;
+#endif
+            }
+            catch { /* older WebView2 runtime may not expose every setting: best-effort */ }
+
             core.SetVirtualHostNameToFolderMapping(
                 VirtualHost, _uiRoot, CoreWebView2HostResourceAccessKind.Allow);
             core.WebMessageReceived += OnWebMessageReceived;
