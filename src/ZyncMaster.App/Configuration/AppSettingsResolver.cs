@@ -11,11 +11,22 @@ public sealed class AppSettingsResolver
 {
     private const string DefaultCalExportPath = "ZyncMaster.CalExport.exe";
 
+    // Lets a developer point the app at a local server without editing settings.json:
+    // ZYNCMASTER_SERVER_URL takes precedence over the file when set.
+    private const string ServerUrlEnvVar = "ZYNCMASTER_SERVER_URL";
+
     public EngineSettings Resolve(AppSettings settings)
     {
         if (settings == null) throw new ArgumentNullException(nameof(settings));
 
-        if (string.IsNullOrWhiteSpace(settings.ServerBaseUrl))
+        // Precedence: ZYNCMASTER_SERVER_URL env var > serverBaseUrl in settings.json. The POCO
+        // default is the production server, so a fresh install already resolves to prod here.
+        var envServerUrl = Environment.GetEnvironmentVariable(ServerUrlEnvVar);
+        var serverBaseUrl = !string.IsNullOrWhiteSpace(envServerUrl)
+            ? envServerUrl
+            : settings.ServerBaseUrl;
+
+        if (string.IsNullOrWhiteSpace(serverBaseUrl))
             throw new SettingsValidationException(
                 "'serverBaseUrl' is empty in settings.json. Set it to the ZyncMaster server URL, " +
                 "for example 'https://sync.example.com'.");
@@ -41,7 +52,7 @@ public sealed class AppSettingsResolver
 
         return new EngineSettings
         {
-            ServerBaseUrl = settings.ServerBaseUrl!.Trim(),
+            ServerBaseUrl = serverBaseUrl!.Trim(),
             DeviceName = deviceName,
             SyncWindowDays = syncWindowDays,
             IntervalMinutes = intervalMinutes,

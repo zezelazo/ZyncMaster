@@ -1,0 +1,83 @@
+name: Release App
+
+# Manual only. The HUMAN triggers this from the Actions tab (Run workflow) and chooses the
+# version; nothing publishes on push or tag. This job builds a self-contained Windows x64
+# build of the desktop app, zips it, and creates a GitHub PRERELEASE with the zip attached.
+# It does NOT touch Azure. The release is created automatically once dispatched, but because
+# the trigger is manual the human stays in control of when (and whether) a release appears.
+#
+# Runs on windows-latest because the app targets net10.0-windows and embeds WebView2 — it
+# cannot be published from Linux. App-side WebView2 is a managed shim (Microsoft.Web.WebView2);
+# the end user needs the Evergreen WebView2 Runtime at run time (built into Windows 11).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (semver, no leading v)'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write   # required to create the GitHub Release and upload the asset
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish app (self-contained win-x64)
+        shell: pwsh
+        # Self-contained so the user does not need the .NET runtime installed. The app does
+        # not reference ZyncMaster.CalExport (it invokes ZyncMaster.CalExport.exe by path at
+        # run time), so this publish carries no Outlook COM dependency.
+        run: >
+          dotnet publish src/ZyncMaster.App/ZyncMaster.App.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          /p:Version=${{ inputs.version }}
+          /p:AssemblyVersion=${{ inputs.version }}.0
+          /p:FileVersion=${{ inputs.version }}.0
+          -o "${{ runner.temp }}/publish"
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $zip = "${{ runner.temp }}/ZyncMaster-App-v${{ inputs.version }}-win-x64.zip"
+          Compress-Archive -Path "${{ runner.temp }}/publish/*" -DestinationPath $zip -Force
+          "ASSET_PATH=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: Zync Master App v${{ inputs.version }} (beta)
+          prerelease: true
+          files: ${{ env.ASSET_PATH }}
+          body: |
+            ## Zync Master App v${{ inputs.version }} — Windows (beta)
+
+            Early beta build. Unsigned: Windows SmartScreen will warn about an
+            "unknown publisher". To run it: click **More info** → **Run anyway**.
+
+            ### What's included
+            - Tray-resident desktop app for Windows (calendar sync).
+            - Connects to the Zync Master service at `https://zyncmaster.azurewebsites.net`
+              by default. You connect your calendar accounts from inside the app.
+
+            ### Requirements
+            - Windows 10 or 11 (x64).
+            - WebView2 Runtime — already present on Windows 11; on Windows 10 install the
+              Evergreen WebView2 Runtime from Microsoft if the window stays blank.
+            - No .NET install needed: this build is self-contained.
+
+            ### Install
+            1. Download `ZyncMaster-App-v${{ inputs.version }}-win-x64.zip`.
+            2. Extract it to a folder of your choice.
+            3. Run `ZyncMaster.App.exe`. The app lives in the system tray.
