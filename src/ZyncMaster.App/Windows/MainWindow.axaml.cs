@@ -24,6 +24,12 @@ public partial class MainWindow : Window, IWindowControl
     {
         InitializeComponent();
 
+        // Frameless, no-top-border chrome is declared in XAML: WindowDecorations="None" +
+        // ExtendClientAreaToDecorationsHint="True". On Avalonia 12.0.3 the old
+        // ExtendClientAreaChromeHints enum no longer exists on Window (it was removed in the 12.x
+        // decorations rework — only ExtendClientAreaToDecorationsHint / *TitleBarHeightHint and the
+        // WindowDecorations enum {None,BorderOnly,Full} remain), so there is nothing to set here.
+
         // When the window is maximized/restored the embedded WebView2 (a native child HWND
         // managed by a NativeControlHost) must be re-laid-out so its CoreWebView2 bounds
         // match the new client size; otherwise the previous-state bounds linger and the

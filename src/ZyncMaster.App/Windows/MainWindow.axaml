@@ -5,26 +5,30 @@
         Icon="/Assets/icon.png"
         Width="440" Height="680"
         MinWidth="380" MinHeight="560"
-        WindowDecorations="BorderOnly"
+        WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
         Background="#0c0e16"
         TransparencyLevelHint="None"
         CanResize="True"
         ShowInTaskbar="True"
         WindowStartupLocation="CenterScreen">
-  <!-- Frameless-but-resizable chrome. ACTIVE = WindowDecorations="BorderOnly".
-       This is the known-good behaviour the user verified: native resize on the 4 edges/
-       corners (the WM hit-tests the border ABOVE the WebView2 child HWND, fixing the
-       airspace fall-through) and working maximize/restore with no "snow" (transparency is
-       OFF + opaque Background; the WebView2 host re-layouts on WindowState changes via the
-       PropertyChanged handler in MainWindow.axaml.cs). The custom title bar (min/max/close +
-       drag) lives in the web UI, so the look stays frameless apart from a thin top border.
+  <!-- Frameless-but-resizable chrome, no top border. This is the Avalonia 12.x supported form for
+       a custom-titlebar window on Windows: WindowDecorations="None" suppresses ALL native chrome
+       (the thin top strip that WindowDecorations="BorderOnly" left behind is gone) and
+       ExtendClientAreaToDecorationsHint="True" extends the client area over the decorations while
+       the WM keeps a resizable frame — the WM still hit-tests the resize border ABOVE the WebView2
+       child HWND, so 4-edge/corner resize and maximize/restore keep working with CanResize="True".
 
-       FOLLOW-UP (removing the thin top border): the extend-client-area approach
-       (ExtendClientAreaToDecorationsHint + ExtendClientAreaChromeHints=NoChrome) does NOT
-       compile as plain XAML attributes on Avalonia 12.0.3 (AVLN2000: the ChromeHints enum
-       value doesn't resolve as an attribute here). Removing the top strip needs setting those
-       in code-behind with the Avalonia.Platform enums, or a verified 12.x XAML form — left as
-       a separate, properly-investigated change rather than risking the build. -->
+       NOTE on the API: Avalonia 12.0.3 REMOVED the old ExtendClientAreaChromeHints enum from Window
+       (verified by reflecting Avalonia.Controls.dll: Window exposes only
+       ExtendClientAreaToDecorationsHint, ExtendClientAreaTitleBarHeightHint, and the
+       WindowDecorations enum {None, BorderOnly, Full}; the NoChrome value no longer exists). That is
+       why the earlier ExtendClientAreaChromeHints="NoChrome" attribute failed with AVLN2000 — the
+       enum is gone, not merely unresolvable as an attribute. The replacement is WindowDecorations="None".
+
+       No "snow": transparency stays OFF + opaque Background, and the WebView2 host re-layouts on
+       WindowState changes via the PropertyChanged handler in MainWindow.axaml.cs. The custom title
+       bar (min/max/close + drag) lives in the web UI. -->
   <Panel x:Name="HostPanel">
     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
       <TextBlock Text="Zync Master"
