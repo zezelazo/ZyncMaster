@@ -119,8 +119,26 @@ public static class IdentityConnectEndpoints
                 return Results.BadRequest("Missing authorization code.");
 
             // Identity exchange: identity scopes only; the calendar refresh token in the
-            // result is intentionally ignored and never stored.
-            var result = await tokenService.ExchangeIdentityCodeAsync(code, context.RequestAborted);
+            // result is intentionally ignored and never stored. If Microsoft rejects the
+            // exchange (bad/expired client secret, redirect mismatch, etc.) surface the
+            // NON-SECRET OAuth error/error_description as a 400 page instead of a blind 500,
+            // so the failure is diagnosable. The exception message already scrubs token
+            // material (see MicrosoftTokenService.BuildFailureMessage).
+            TokenResult result;
+            try
+            {
+                result = await tokenService.ExchangeIdentityCodeAsync(code, context.RequestAborted);
+            }
+            catch (ZyncMaster.Graph.AuthenticationFailedException ex)
+            {
+                var html =
+                    "<!DOCTYPE html><html><body>" +
+                    "<h1>Sign-in failed</h1>" +
+                    "<p>The Microsoft token exchange was rejected.</p>" +
+                    $"<p><code>{System.Net.WebUtility.HtmlEncode(ex.Message)}</code></p>" +
+                    "</body></html>";
+                return Results.Content(html, "text/html", statusCode: StatusCodes.Status400BadRequest);
+            }
 
             var subject = string.IsNullOrEmpty(result.Subject)
                 ? (result.UserPrincipalName ?? "")
