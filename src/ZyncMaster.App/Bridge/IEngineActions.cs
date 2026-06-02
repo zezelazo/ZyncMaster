@@ -11,6 +11,11 @@ namespace ZyncMaster.App.Bridge;
 // engine. Kept narrow on purpose: every action maps to exactly one web verb.
 public interface IEngineActions
 {
+    // Server warm-up probe (GET {ServerBaseUrl}/health) used at App boot to wake the Azure F1
+    // free-tier server out of its cold start and confirm it is alive before the identity gate.
+    // Makes ONE attempt with a short timeout; the UI owns the retry/poll loop.
+    Task<ServerHealth> CheckServerHealthAsync(CancellationToken ct = default);
+
     Task<AppStatus> GetStatusAsync(CancellationToken ct = default);
     Task<ZyncMaster.Engine.SyncResult> SyncNowAsync(CancellationToken ct = default);
     Task<ZyncMaster.Engine.PairingOutcome> PairAsync(CancellationToken ct = default);

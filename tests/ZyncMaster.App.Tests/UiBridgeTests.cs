@@ -45,6 +45,9 @@ public class UiBridgeTests
         public string? UnlinkAccountArg;
         public bool? SetAutoStartValue;
 
+        public int CheckServerHealthCalls;
+        public ServerHealth ServerHealthToReturn = ServerHealth.Healthy;
+
         public AppStatus StatusToReturn = new() { Status = SyncStatus.Idle, Paired = true };
         public SyncResult SyncResultToReturn = new() { Push = new SyncPushResult { Created = 2 } };
         public PairingOutcome PairingToReturn = new() { Success = true, Code = "9F2A" };
@@ -66,6 +69,13 @@ public class UiBridgeTests
         public IReadOnlyList<string> AffectedPairIdsToReturn = new List<string> { "p1", "p2" };
         public string? GenerateTxtPathToReturn = "C:/exports/calendar.txt";
         public bool AutoStartToReturn = true;
+
+        public async Task<ServerHealth> CheckServerHealthAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CheckServerHealthCalls++;
+            return ServerHealthToReturn;
+        }
 
         public async Task<AppStatus> GetStatusAsync(CancellationToken ct = default)
         {
@@ -256,6 +266,28 @@ public class UiBridgeTests
         payload.Should().NotBeNullOrEmpty();
         var status = JsonSerializer.Deserialize<JsonElement>(payload!);
         status.GetProperty("paired").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void CheckServerHealth_calls_engine_and_replies_with_health()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            ServerHealthToReturn = ServerHealth.Waking("warming up"),
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("checkServerHealth", "h1"));
+
+        engine.CheckServerHealthCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("h1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("ok").GetBoolean().Should().BeFalse();
+        payload.GetProperty("status").GetString().Should().Be("waking");
+        payload.GetProperty("message").GetString().Should().Be("warming up");
     }
 
     [Fact]

@@ -90,6 +90,11 @@ public sealed class UiBridge
     {
         switch (message.Action)
         {
+            case "checkServerHealth":
+            {
+                var health = await _engine.CheckServerHealthAsync(ct);
+                return JsonSerializer.Serialize(health, JsonOptions);
+            }
             case "getStatus":
             {
                 var status = await _engine.GetStatusAsync(ct);

@@ -398,6 +398,113 @@ const identityAuth = {
   magicLinkEmail: '',   // the address the magic-link was sent to (shown in the sent state)
 };
 
+// Desktop App server warm-up gate state (Bridge.desktopApp only; web/mock skip it). The Azure F1
+// free tier cold-starts, so the first request after idle can take ~30-60s. At boot we ping
+// {ServerBaseUrl}/health and keep this gate IN FRONT of the identity gate until the server is
+// alive. Kept separate from identityAuth on purpose so the two gates compose without one
+// rewriting the other.
+//   checked  — the first probe has answered at least once (controls whether the gate shows).
+//   ok       — the server answered /health; the identity gate / dashboard takes over.
+//   waking   — the probe is mid-flight or the server is cold-starting; spinner + "waking up".
+//   error    — the retry budget ran out without a healthy answer; friendly error + Retry.
+//   attempts — probes made in the current cycle (drives the retry budget).
+const serverHealth = {
+  checked: false,
+  ok: false,
+  waking: false,
+  error: false,
+  attempts: 0,
+};
+
+// Warm-up tuning: one probe every ~5s, up to ~60s total, to cover an Azure F1 cold start. The
+// per-attempt timeout on the host side is ~8s, so MAX_ATTEMPTS * interval comfortably spans 60s.
+const HEALTH_POLL_MS = 5000;
+const HEALTH_MAX_ATTEMPTS = 12;
+let healthPoll = null;
+
+// Probes {ServerBaseUrl}/health once and updates serverHealth. On "ok" it clears the poll and
+// hands off to the identity gate (which boot kicks once the server is alive). On "unconfigured"
+// it lets the UI fall straight through to Settings. Otherwise it schedules the next attempt
+// until the budget is spent, then surfaces the friendly error + Retry.
+function probeServerHealth() {
+  if (!Bridge.desktopApp) return;
+  serverHealth.attempts += 1;
+  serverHealth.waking = serverHealth.attempts > 1; // first probe shows "Connecting…", later ones "Waking up…"
+  serverHealth.error = false;
+  if (!serverHealth.checked && serverHealth.attempts === 1) rerender();
+
+  Bridge.call('checkServerHealth', null, 12000)
+    .then((h) => {
+      const status = (h && h.status) || 'unreachable';
+      if (status === 'ok' || status === 'unconfigured') {
+        serverHealth.checked = true;
+        serverHealth.ok = true; // "unconfigured" also clears the gate so the user can reach Settings
+        serverHealth.waking = false;
+        serverHealth.error = false;
+        clearHealthPoll();
+        onServerReady();
+        rerender();
+        return;
+      }
+      // "waking" / "unreachable": keep trying until the budget is spent.
+      scheduleNextHealthProbe();
+    })
+    .catch(() => { scheduleNextHealthProbe(); });
+}
+
+function scheduleNextHealthProbe() {
+  if (serverHealth.ok) return;
+  if (serverHealth.attempts >= HEALTH_MAX_ATTEMPTS) {
+    // Budget spent: stop polling and show the friendly error with a Retry button.
+    serverHealth.checked = true;
+    serverHealth.waking = false;
+    serverHealth.error = true;
+    clearHealthPoll();
+    rerender();
+    return;
+  }
+  serverHealth.checked = true;
+  serverHealth.waking = true;
+  rerender();
+  clearHealthPoll();
+  healthPoll = setTimeout(probeServerHealth, HEALTH_POLL_MS);
+}
+
+function clearHealthPoll() {
+  if (healthPoll) { clearTimeout(healthPoll); healthPoll = null; }
+}
+
+// Server is alive (or unconfigured): hand off to the IDENTITY gate. Resolves getIdentityState so
+// the sign-in screen or the dashboard paints. Marks the gate resolved even on failure so a probe
+// error lands on the sign-in screen rather than an empty dashboard. Mirrors the pre-warmup boot
+// behaviour, just deferred until the server has woken.
+function onServerReady() {
+  if (!Bridge.desktopApp || identityAuth.resolved) return;
+  Bridge.call('getIdentityState')
+    .then((s) => {
+      const signedIn = !!(s && s.isSignedIn);
+      identityAuth.resolved = true;
+      identityAuth.signedIn = signedIn;
+      identityAuth.me = signedIn
+        ? { userId: s.userId, email: s.email, displayName: s.displayName, expiresAt: s.expiresAt, plan: s.plan }
+        : null;
+      rerender();
+    })
+    .catch(() => { identityAuth.resolved = true; identityAuth.signedIn = false; rerender(); })
+    .finally(() => setTimeout(dismissLaunch, 450));
+}
+
+// User-driven Retry from the error screen: reset the budget and probe again.
+function retryServerHealth() {
+  clearHealthPoll();
+  serverHealth.attempts = 0;
+  serverHealth.error = false;
+  serverHealth.ok = false;
+  serverHealth.waking = false;
+  serverHealth.checked = false;
+  probeServerHealth();
+}
+
 async function loadPairs() {
   if (!Bridge.available) { live.pairs = null; return PAIRS; }
   live.loadingPairs = true;
@@ -1335,6 +1442,44 @@ function signOutApp() {
     });
 }
 
+// renderServerWarmup — the desktop App server warm-up gate. Shown before the identity gate while
+// the Azure F1 server cold-starts. Three states: connecting (first probe), waking (cold start in
+// progress, with a subtle border-light spinner), and error (budget spent → friendly message +
+// Retry). Liquid Glass card; decorative glow lives on the spinner's own ring, nothing flickers on
+// hover and the Retry button stays clickable.
+function renderServerWarmup(root) {
+  // Error state: the warm-up budget ran out without a healthy answer.
+  if (serverHealth.error) {
+    const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' },
+      el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
+      el('div', { class: 'pair-title', text: 'Can’t reach Zync Master' }),
+      el('div', { class: 'pair-sub', text: 'Can’t reach the Zync Master server right now. Check your connection and try again.' }),
+      el('div', { class: 'identity-error', role: 'alert', style: 'margin-top:2px' },
+        iconEl('alert', 13, 1.8), el('span', { text: 'The server did not respond in time.' })),
+      el('button', { class: 'btn btn--primary', style: 'align-self:stretch', onclick: () => retryServerHealth() },
+        iconEl('sync', 14, 1.8), el('span', { text: 'Retry' })),
+    );
+    root.append(card);
+    return;
+  }
+
+  // Connecting (first probe) vs waking (cold start in progress).
+  const waking = serverHealth.waking;
+  const title = waking ? 'Waking up the server…' : 'Connecting to Zync Master…';
+  const sub = waking
+    ? 'This can take a moment on first launch — the server is starting up.'
+    : 'Reaching the Zync Master server.';
+  const card = el('div', { class: 'glass glass--card pair-card identity-card warmup-card', style: 'margin-top:14px' },
+    el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
+    el('div', { class: 'pair-title', text: title }),
+    el('div', { class: 'pair-sub', text: sub }),
+    el('div', { class: 'identity-waiting warmup-waiting' },
+      el('span', { class: 'spinner warmup-spinner' }),
+      el('span', { class: 'identity-waiting__txt', text: waking ? 'Waking up…' : 'Connecting…' })),
+  );
+  root.append(card);
+}
+
 // renderIdentitySignIn — the desktop App identity gate. Liquid Glass card with the Microsoft
 // 4-square button and an email magic-link form. States: idle, loading (login in flight), error,
 // and the "magic-link sent" confirmation. Decorative glow lives on the buttons' own
@@ -1661,6 +1806,20 @@ function rerender() {
     return;
   }
 
+  // Desktop App server warm-up gate: in native/loopback, this gate sits IN FRONT of the identity
+  // gate. While the server is cold-starting (Azure F1) we show "connecting / waking up" with a
+  // spinner; if the warm-up budget runs out we show a friendly error + Retry. Only once the
+  // server is alive (serverHealth.ok) does the identity gate below get a chance to paint. The web
+  // panel and mock demo do NOT use this gate.
+  if (Bridge.desktopApp && !serverHealth.ok && (serverHealth.waking || serverHealth.error || !serverHealth.checked)) {
+    renderServerWarmup(root);
+    const nav = $('#navbar');
+    if (nav) { nav.replaceChildren(); nav.hidden = true; }
+    void root.offsetWidth;
+    root.classList.add('enter');
+    return;
+  }
+
   // Desktop App identity gate: in native/loopback, until getIdentityState reports signed-in the
   // only screen is the identity sign-in card (Microsoft / magic-link) and the bottom nav is
   // hidden. The web panel and the mock demo do NOT use this gate.
@@ -1697,6 +1856,7 @@ function rerenderInPlace() {
   // The sign-in gate owns the screen: a stale background repaint (e.g. a late loadPairs)
   // must never paint the dashboard over the sign-in card and leave the nav hidden.
   if (Bridge.webPanel && webAuth.resolved && !webAuth.signedIn) return;
+  if (Bridge.desktopApp && !serverHealth.ok) return;
   if (Bridge.desktopApp && identityAuth.resolved && !identityAuth.signedIn) return;
   const root = $('#view');
   if (!root) return;
@@ -1790,22 +1950,12 @@ async function boot() {
     Bridge.start();
     Bridge.onStatus((s) => applyNativeStatus(s));
 
-    // Desktop App: resolve the IDENTITY gate before the first dashboard paint. getIdentityState
-    // decides whether the sign-in screen or the dashboard shows. We mark the gate resolved even
-    // on failure so a probe error lands on the sign-in screen rather than an empty dashboard.
+    // Desktop App: warm up the server FIRST. The Azure F1 free tier cold-starts, so before the
+    // identity gate (which talks to the server) we ping /health and show "waking up" feedback.
+    // probeServerHealth → onServerReady resolves the identity gate once the server answers; the
+    // identity call is no longer kicked directly here so a sleeping server never stalls login.
     if (Bridge.desktopApp) {
-      Bridge.call('getIdentityState')
-        .then((s) => {
-          const signedIn = !!(s && s.isSignedIn);
-          identityAuth.resolved = true;
-          identityAuth.signedIn = signedIn;
-          identityAuth.me = signedIn
-            ? { userId: s.userId, email: s.email, displayName: s.displayName, expiresAt: s.expiresAt, plan: s.plan }
-            : null;
-          rerender();
-        })
-        .catch(() => { identityAuth.resolved = true; identityAuth.signedIn = false; rerender(); })
-        .finally(() => setTimeout(dismissLaunch, 450));
+      probeServerHealth();
     }
 
     // Dismiss the splash shortly after the first status settles (with a small floor) so the
