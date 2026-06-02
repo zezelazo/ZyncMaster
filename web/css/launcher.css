@@ -70,9 +70,18 @@ button { font-family: inherit; cursor: pointer; }
   z-index: 30;
 }
 .nav.s {
-  background: rgba(8, 11, 20, .55);
-  backdrop-filter: blur(18px);
+  /* opaque fallback first — content must NOT read through when blur is unsupported */
+  background: rgba(8, 11, 20, .92);
   border-bottom: 1px solid var(--stroke);
+  box-shadow: 0 8px 30px -16px rgba(0, 0, 0, .9);
+}
+/* where backdrop blur is available, lean on it and ease the tint a touch */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .nav.s {
+    background: rgba(8, 11, 20, .72);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+            backdrop-filter: blur(20px) saturate(140%);
+  }
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; }
 .brand svg { width: 24px; height: 24px; }
@@ -116,6 +125,69 @@ button { font-family: inherit; cursor: pointer; }
   border: 1px solid var(--stroke);
 }
 .ghost:hover { background: rgba(255, 255, 255, .07); }
+
+/* ---- header Download CTA: accent fill + travelling border-light ---- */
+.dl {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  /* azure→terra accent so it clearly outranks the rest of the nav */
+  background: linear-gradient(180deg, var(--azure2), var(--azure));
+  box-shadow: 0 8px 22px -10px var(--azure);
+  isolation: isolate;
+  overflow: hidden;
+}
+.dl__t { position: relative; z-index: 2; }
+/* steady glow that breathes underneath */
+.dl::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: radial-gradient(120% 140% at 50% 120%, rgba(224, 138, 99, .55), transparent 60%);
+  opacity: .65;
+  z-index: 0;
+  pointer-events: none;
+  animation: dlPulse 3.2s ease-in-out infinite;
+}
+/* hairline of light that travels around the border */
+.dl::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.4px;
+  background: conic-gradient(from var(--dl-ang, 0deg),
+    transparent 0deg,
+    rgba(255, 255, 255, .15) 40deg,
+    #fff 70deg,
+    var(--azure2) 90deg,
+    transparent 140deg,
+    transparent 360deg);
+  /* mask to a ring so only the border edge lights up */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  z-index: 1;
+  pointer-events: none;
+  animation: dlSpin 3.4s linear infinite;
+}
+.dl:active { transform: scale(.98); }
+
+@property --dl-ang {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes dlSpin { to { --dl-ang: 360deg; } }
+@keyframes dlPulse { 50% { opacity: 1; } }
 
 /* ---- "Sign in with Microsoft" button (official 4-square mark) ---- */
 .ms {
@@ -202,6 +274,7 @@ h1 .g {
 .cta { margin: 30px 0 0; max-width: 460px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
 
 .go {
+  position: relative;
   height: 52px;
   padding: 0 24px;
   border: 0;
@@ -214,10 +287,24 @@ h1 .g {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  isolation: isolate;
+}
+/* soft breathing edge-glow — decorative, never shifts the hit area */
+.go::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px rgba(143, 176, 255, .55), 0 0 22px -2px var(--azure);
+  opacity: .55;
+  z-index: -1;
+  pointer-events: none;
+  animation: goGlow 3.6s ease-in-out infinite;
 }
 .go:hover { filter: brightness(1.06); }
 .go:active { transform: scale(.98); }
 .go svg { width: 16px; height: 16px; }
+@keyframes goGlow { 50% { opacity: 1; } }
 
 .note { margin-top: 14px; font-size: 12px; color: var(--ink3); }
 
@@ -345,4 +432,8 @@ h1 .g {
   .dn-edge, .dn-node { animation: none; }
   .reveal { opacity: 1; transform: none; transition: none; }
   .mod::after { transition: none; }
+  /* Download CTA: keep it prominent but stop the motion */
+  .dl::before { animation: none; opacity: .8; }
+  .dl::after { animation: none; background: linear-gradient(180deg, rgba(255, 255, 255, .35), transparent); }
+  .go::before { animation: none; opacity: .7; }
 }
