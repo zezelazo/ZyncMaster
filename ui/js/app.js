@@ -1262,9 +1262,41 @@ function renderConfig(root) {
       row(primary, hint, signOutBtn)));
   }
 
-  // Calendar
+  // Calendar — the "Target calendar" <select>. In a REAL transport (Bridge.available: the desktop
+  // App and the web panel) it must list the user's actual calendars, never demo literals. We derive
+  // them from the connected accounts (live.accounts) and their calendars (live.calendars), exactly
+  // like onlineCalendarPicker / renderAddPairLive. With no connected account or no calendars yet we
+  // show a single honest, disabled placeholder rather than inventing "Work · Calendar" entries. Only
+  // the mock file:// walkthrough keeps the demo options so the standalone ui/index.html shows
+  // something. Note: pushConfig does not currently persist a target-calendar value (AppSettings has
+  // no such field and the host's saveConfig would drop it), so the change handler stays a no-op for
+  // now — wiring it to a real host field is a separate, deliberate contract change.
   const targetSel = el('select', { class: 'field-select' });
-  ['Work · Calendar', 'Personal · Family', '+ Create new…'].forEach((o) => targetSel.append(el('option', { text: o })));
+  if (Bridge.available) {
+    const accounts = live.accounts || [];
+    const cals = accounts.flatMap((acc) => (live.calendars[acc.accountRef] || []).map((c) => ({ acc, c })));
+    if (cals.length === 0) {
+      // Honest empty state. accounts === [] with no calendars means nothing is connected yet.
+      const placeholder = accounts.length === 0 ? 'Connect an account first' : 'No calendars yet';
+      targetSel.append(el('option', { text: placeholder, value: '', disabled: true, selected: true }));
+    } else {
+      cals.forEach(({ acc, c }) => targetSel.append(
+        el('option', { value: c.id, text: `${acc.displayName || acc.accountRef} · ${c.displayName || c.id}` })));
+    }
+    // Lazily load accounts and their calendars, then repaint Settings in place once they arrive —
+    // the same load-then-rerender pattern the rest of renderConfig and the add-pair wizard use.
+    if (live.accounts === null) {
+      loadAccounts().then((list) => {
+        (list || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === 'config') rerender(); }); });
+        if (state.view === 'config') rerender();
+      });
+    } else {
+      accounts.forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === 'config') rerender(); }); });
+    }
+  } else {
+    // Mock-only demo so the standalone file:// walkthrough still shows representative options.
+    ['Work · Calendar', 'Personal · Family', '+ Create new…'].forEach((o) => targetSel.append(el('option', { text: o })));
+  }
   targetSel.addEventListener('change', pushConfig);
   root.append(section('Calendar',
     row('Target calendar', el('div', { class: 'cfg-row__hint', text: 'Where mirrored events are written' }), targetSel),
