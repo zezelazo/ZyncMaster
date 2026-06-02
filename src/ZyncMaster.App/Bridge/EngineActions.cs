@@ -268,6 +268,12 @@ public sealed class EngineActions : IEngineActions, IDisposable
         }
     }
 
+    public Task CancelLoginAsync(CancellationToken ct = default)
+    {
+        _identity.CancelLogin();
+        return Task.CompletedTask;
+    }
+
     public Task SignOutAsync(CancellationToken ct = default) => _identity.SignOutAsync(ct);
 
     private async Task<string> RequireKeyAsync(CancellationToken ct)

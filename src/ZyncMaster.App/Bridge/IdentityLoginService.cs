@@ -42,6 +42,15 @@ public sealed class IdentityLoginService
     private readonly TimeProvider _clock;
     private readonly TimeSpan _loginTimeout;
 
+    // Single-attempt-in-flight bookkeeping. Only ONE sign-in may be pending at a time so two
+    // concurrent logins never race for the loopback port. The in-flight attempt owns a CTS and the
+    // loopback it raised; CancelLogin() (or a fresh login that supersedes it) cancels the CTS — which
+    // aborts the pending GetContext via the token registration inside HttpListenerIdentityLoopback —
+    // and stops the loopback so the port is released and the service is ready for a new login().
+    private readonly object _attemptLock = new();
+    private CancellationTokenSource? _attemptCts;
+    private IIdentityLoopback? _attemptLoopback;
+
     public IdentityLoginService(
         IIdentityServerClient server,
         IIdentityTokenCache cache,
@@ -61,22 +70,86 @@ public sealed class IdentityLoginService
         _loginTimeout = loginTimeout ?? DefaultLoginTimeout;
     }
 
+    // --- Attempt lifecycle (single login in flight) ------------------------------------------
+
+    // Cancels any login currently in flight and clears the slot. Called from the UI (cancelLogin)
+    // when the user closes the browser tab / hits "Cancel", and internally when a fresh login
+    // supersedes a pending one. Cancelling the CTS aborts the pending GetContext; Stop() releases
+    // the loopback port. Safe to call when nothing is pending. Idempotent.
+    public void CancelLogin()
+    {
+        CancellationTokenSource? cts;
+        IIdentityLoopback? loopback;
+        lock (_attemptLock)
+        {
+            cts = _attemptCts;
+            loopback = _attemptLoopback;
+            _attemptCts = null;
+            _attemptLoopback = null;
+        }
+
+        if (cts is not null)
+        {
+            try { cts.Cancel(); } catch { /* already disposed/cancelled */ }
+        }
+        // Stop the loopback eagerly so the port is freed even before the awaiting task unwinds.
+        try { loopback?.Stop(); } catch { /* already stopped */ }
+    }
+
+    // Registers a new attempt, cancelling and replacing any previous one (so two logins never race
+    // for the port). Returns a CTS linked to the caller's token plus the in-flight cancel so the
+    // attempt ends on EITHER. The caller disposes it and clears the slot via EndAttempt.
+    private CancellationTokenSource BeginAttempt(IIdentityLoopback loopback, CancellationToken ct)
+    {
+        CancelLogin(); // supersede any pending attempt cleanly before claiming the slot
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        lock (_attemptLock)
+        {
+            _attemptCts = cts;
+            _attemptLoopback = loopback;
+        }
+        return cts;
+    }
+
+    // Clears the slot if it still points at this attempt (a later login may already own it) and
+    // stops the loopback. Always called in the attempt's finally.
+    private void EndAttempt(CancellationTokenSource cts, IIdentityLoopback loopback)
+    {
+        lock (_attemptLock)
+        {
+            if (ReferenceEquals(_attemptCts, cts))
+            {
+                _attemptCts = null;
+                _attemptLoopback = null;
+            }
+        }
+        try { loopback.Stop(); } catch { /* already stopped */ }
+        cts.Dispose();
+    }
+
     // --- Microsoft sign-in -------------------------------------------------------------------
 
     public async Task<LoginOutcome> LoginWithMicrosoftAsync(CancellationToken ct = default)
     {
         var nonce = GenerateNonce();
         var loopback = _loopbackFactory();
+        var attemptCts = BeginAttempt(loopback, ct);
         try
         {
-            await loopback.StartAsync(ct);
+            await loopback.StartAsync(attemptCts.Token);
 
             var url =
                 $"{_serverBaseUrl}/identity/connect/microsoft" +
                 $"?port={loopback.Port}&nonce={Uri.EscapeDataString(nonce)}";
             _browser.Open(url);
 
-            return await AwaitAndCompleteAsync(loopback, nonce, ct);
+            return await AwaitAndCompleteAsync(loopback, nonce, attemptCts.Token, ct);
+        }
+        catch (OperationCanceledException) when (attemptCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // Cancelled by the user (cancelLogin) or superseded by a newer login — not an error.
+            return LoginOutcome.Canceled();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -88,7 +161,7 @@ public sealed class IdentityLoginService
         }
         finally
         {
-            loopback.Stop();
+            EndAttempt(attemptCts, loopback);
         }
     }
 
@@ -106,42 +179,52 @@ public sealed class IdentityLoginService
 
         var nonce = GenerateNonce();
         var loopback = _loopbackFactory();
+        var attemptCts = BeginAttempt(loopback, ct);
         try
         {
-            await loopback.StartAsync(ct);
-            var requested = await _server.RequestMagicLinkAsync(email, loopback.Port, nonce, ct);
+            await loopback.StartAsync(attemptCts.Token);
+            var requested = await _server.RequestMagicLinkAsync(email, loopback.Port, nonce, attemptCts.Token);
             if (!requested)
             {
-                loopback.Stop();
+                EndAttempt(attemptCts, loopback);
                 return RequestMagicLinkOutcome.Fail("Could not reach the server to send the sign-in link.");
             }
 
             // Wait for the click in the background; the loopback completes the sign-in via the same
             // handle/nonce path the Microsoft flow uses. Fire-and-forget so the UI can show
-            // "check your email" immediately. The loopback is stopped when the await completes.
+            // "check your email" immediately. The attempt stays registered so cancelLogin can abort
+            // the pending GetContext and free the port; EndAttempt runs when the await completes
+            // (callback, timeout, or cancellation).
             _ = Task.Run(async () =>
             {
-                try { await AwaitAndCompleteAsync(loopback, nonce, ct); }
+                try { await AwaitAndCompleteAsync(loopback, nonce, attemptCts.Token, ct); }
                 catch { /* surfaced via the next GetIdentityStateAsync poll */ }
-                finally { loopback.Stop(); }
-            }, ct);
+                finally { EndAttempt(attemptCts, loopback); }
+            }, CancellationToken.None);
 
             return RequestMagicLinkOutcome.Ok();
         }
         catch (Exception ex)
         {
-            loopback.Stop();
+            EndAttempt(attemptCts, loopback);
             return RequestMagicLinkOutcome.Fail($"Could not start the sign-in: {ex.Message}");
         }
     }
 
     // --- Shared callback handling ------------------------------------------------------------
 
-    // Awaits the single loopback callback (bounded by the login timeout), verifies the nonce,
-    // redeems the handle, persists the tokens, and resolves the signed-in state.
-    private async Task<LoginOutcome> AwaitAndCompleteAsync(IIdentityLoopback loopback, string expectedNonce, CancellationToken ct)
+    // Awaits the single loopback callback (bounded by the login timeout OR an explicit cancel),
+    // verifies the nonce, redeems the handle, persists the tokens, and resolves the signed-in state.
+    //
+    // attemptToken already folds in the caller's token and the in-flight cancel (cancelLogin). It is
+    // cancelled when: the user cancels, a newer login supersedes this one, or the original caller
+    // token fires. The hard timeout (_loginTimeout, default 3 min) is layered on top as a backstop.
+    // callerToken is passed separately only to tell apart "the original caller asked to cancel"
+    // (rethrow) from "user-cancel / supersede / timeout" (a quiet Canceled/timeout outcome).
+    private async Task<LoginOutcome> AwaitAndCompleteAsync(
+        IIdentityLoopback loopback, string expectedNonce, CancellationToken attemptToken, CancellationToken callerToken)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(attemptToken);
         timeoutCts.CancelAfter(_loginTimeout);
 
         LoopbackCallback callback;
@@ -149,12 +232,22 @@ public sealed class IdentityLoginService
         {
             callback = await loopback.WaitForCallbackAsync(timeoutCts.Token);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (OperationCanceledException) when (attemptToken.IsCancellationRequested)
+        {
+            // Cancelled by the user / superseded by a newer login — quiet, not an error.
+            return LoginOutcome.Canceled();
+        }
+        catch (OperationCanceledException)
+        {
+            // The linked CTS fired without the attempt token: the hard timeout elapsed.
             return LoginOutcome.Fail("Sign-in timed out waiting for the browser.");
         }
 
-        return await CompleteCallbackAsync(callback, expectedNonce, ct);
+        return await CompleteCallbackAsync(callback, expectedNonce, callerToken);
     }
 
     // The pure-logic tail of every sign-in: nonce check → handle extraction → redeem → persist →
