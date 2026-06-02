@@ -39,6 +39,12 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly Func<string, Task<string?>> _saveDialog;
     private readonly string _autoStartExePath;
     private readonly IdentityLoginService _identity;
+    private readonly HttpClient _http;
+    private readonly string _healthUrl;
+
+    // One warm-up probe must fail fast, not hang on the App's default HttpClient timeout: the UI
+    // re-polls, so a short per-attempt budget keeps the "waking up" feedback responsive.
+    private static readonly TimeSpan HealthProbeTimeout = TimeSpan.FromSeconds(8);
 
     private SyncStatus _status = SyncStatus.Idle;
     private bool _paused;
@@ -61,6 +67,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         Func<string, Task<string?>> saveDialog,
         string autoStartExePath,
         IdentityLoginService identity,
+        HttpClient http,
         HttpClient? ownedHttp = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
@@ -76,10 +83,52 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _saveDialog = saveDialog ?? throw new ArgumentNullException(nameof(saveDialog));
         _autoStartExePath = autoStartExePath ?? throw new ArgumentNullException(nameof(autoStartExePath));
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+        _http = http ?? throw new ArgumentNullException(nameof(http));
+        _healthUrl = $"{(_engineSettings.ServerBaseUrl ?? "").TrimEnd('/')}/health";
         _ownedHttp = ownedHttp;
     }
 
     public bool IsPaused => _paused;
+
+    // Single warm-up probe of GET {ServerBaseUrl}/health. The Azure F1 free tier cold-starts, so a
+    // timeout (or a transient 5xx) almost certainly means the server is waking, not dead — that maps
+    // to "waking" so the UI keeps polling. A hard transport failure (DNS/refused/offline) maps to
+    // "unreachable". A 2xx is "ok". The UI owns the retry budget that covers the full cold start.
+    public async Task<ServerHealth> CheckServerHealthAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_engineSettings.ServerBaseUrl))
+            return ServerHealth.Unconfigured;
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(HealthProbeTimeout);
+
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, _healthUrl);
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+
+            if (resp.IsSuccessStatusCode)
+                return ServerHealth.Healthy;
+
+            // 5xx / 429 / 408 while waking are expected during a cold start; treat anything non-2xx
+            // as "still waking" so the UI re-polls rather than giving up on a transient blip.
+            return ServerHealth.Waking($"Server responded with {(int)resp.StatusCode}.");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The caller (shutdown) cancelled — re-throw so the UI/host treats it as a cancellation.
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Our per-attempt timeout fired: the server is most likely cold-starting.
+            return ServerHealth.Waking("The server did not respond in time — it may be waking up.");
+        }
+        catch (HttpRequestException ex)
+        {
+            return ServerHealth.Unreachable(ex.Message);
+        }
+    }
 
     public async Task<AppStatus> GetStatusAsync(CancellationToken ct = default)
     {

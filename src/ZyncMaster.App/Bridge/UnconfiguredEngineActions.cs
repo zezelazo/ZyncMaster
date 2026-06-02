@@ -25,6 +25,11 @@ public sealed class UnconfiguredEngineActions : IEngineActions
         _settingsPath = settingsPath;
     }
 
+    // No server URL configured yet → report "unconfigured" so the UI skips the warm-up gate and
+    // lets the user reach Settings (the identity gate / config screen) instead of polling forever.
+    public Task<ServerHealth> CheckServerHealthAsync(CancellationToken ct = default)
+        => Task.FromResult(ServerHealth.Unconfigured);
+
     public Task<AppStatus> GetStatusAsync(CancellationToken ct = default)
         => Task.FromResult(new AppStatus
         {

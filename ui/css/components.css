@@ -201,6 +201,18 @@
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Server warm-up gate (cold-start splash). The waiting pill reuses .identity-waiting; the
+   spinner picks up the azure accent so it reads as the brand "border-light" glow rather than a
+   white loader. No hover flicker — the only motion is the spin, disabled under reduced-motion. */
+.warmup-spinner {
+  width: 15px; height: 15px;
+  border: 2px solid var(--azure-edge);
+  border-top-color: var(--azure);
+}
+@media (prefers-reduced-motion: reduce) {
+  .warmup-spinner { animation: none; }
+}
+
 /* checkmark / error states on primary */
 .btn--primary[data-state="success"] {
   background: linear-gradient(180deg, #5cce8f 0%, var(--ok) 100%);

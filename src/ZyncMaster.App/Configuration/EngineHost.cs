@@ -99,6 +99,7 @@ public sealed class EngineHost : IDisposable
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
             pairsClient, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
             identityLogin,
+            http,
             ownedHttp: null);
 
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
