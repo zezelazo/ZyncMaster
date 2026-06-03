@@ -30,6 +30,17 @@ public static class CalendarConnectEndpoints
     // calendar state can never be unprotected as an identity state and vice-versa.
     private const string StateProtectorPurpose = "ZyncMaster.CalendarOAuthState";
 
+    // Flow mode carried INSIDE the signed (inforgeable) state. It decides whether the callback
+    // enforces the double-submit CSRF cookie:
+    //   * "web" — the browser-initiated GET /calendar/connect/graph 302 flow: the SAME browser
+    //     does both legs, so the cookie round-trips and the double-submit check is meaningful.
+    //   * "app" — the cookie-less App flow (POST /start and upgrade-scope return an authorizeUrl
+    //     the App opens in the SYSTEM browser, a different cookie jar). The cookie never round-
+    //     trips, so requiring it would break the connect. Integrity comes from the signed state
+    //     (the server can't be tricked about the user) + the loopback nonce the App verifies.
+    private const string ModeWeb = "web";
+    private const string ModeApp = "app";
+
     public static void MapCalendarConnectEndpoints(this WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -54,11 +65,11 @@ public static class CalendarConnectEndpoints
             if (!TryReadLoopback(context, out var port, out var nonce, out var error))
                 return Results.BadRequest(error);
 
-            // prompt=select_account: let the user pick which Microsoft account to connect. The
-            // signed state + CSRF cookie are produced by the shared helper so the GET (redirect)
-            // and the POST /start (JSON) flows can never drift apart.
+            // prompt=select_account: let the user pick which Microsoft account to connect. This is
+            // the browser-initiated WEB flow (the same browser does both legs), so the state is
+            // marked "web" and the double-submit CSRF cookie is enforced at the callback.
             var authorizeUrl = BuildConnectStartUrl(
-                context, dp, options, userId, scope.Value, port, nonce, "select_account");
+                context, dp, options, userId, scope.Value, port, nonce, "select_account", ModeWeb);
             return Results.Redirect(authorizeUrl);
         }).RequireIdentityBearer();
 
@@ -90,8 +101,11 @@ public static class CalendarConnectEndpoints
                 ? AccountScope.ReadWrite
                 : ParseScope(body.Scope)!.Value;
 
+            // App (cookie-less) flow: the App opens this authorizeUrl in the SYSTEM browser, which
+            // never saw a server cookie. Mark the state "app" so the callback does NOT require the
+            // double-submit cookie; the signed state + the loopback nonce are the integrity here.
             var authorizeUrl = BuildConnectStartUrl(
-                context, dp, options, userId, scope, body.Port, body.Nonce!, "select_account");
+                context, dp, options, userId, scope, body.Port, body.Nonce!, "select_account", ModeApp);
             return Results.Ok(new { authorizeUrl });
         }).RequireIdentityBearer();
 
@@ -129,10 +143,12 @@ public static class CalendarConnectEndpoints
                 Port = port,
                 Nonce = nonce,
                 Csrf = csrf,
+                // App (cookie-less) flow: the App opens the returned authorizeUrl in the system
+                // browser, so the callback must NOT require the double-submit cookie. The signed
+                // state (which also pins the AccountId to this user) + the loopback nonce protect it.
+                Mode = ModeApp,
             };
             var state = ProtectState(dp, stateModel);
-
-            AppendCsrfCookie(context, csrf);
 
             // prompt=consent re-prompts for the broader read/write grant even if the user
             // already consented to read-only.
@@ -167,12 +183,21 @@ public static class CalendarConnectEndpoints
             if (stateModel is null)
                 return Results.BadRequest("Invalid OAuth state.");
 
-            // Double-submit CSRF: the csrf in the signed state must match the cookie.
-            var cookieCsrf = context.Request.Cookies[StateCookieName];
-            if (string.IsNullOrEmpty(cookieCsrf) ||
-                !string.Equals(cookieCsrf, stateModel.Csrf, StringComparison.Ordinal))
+            // Double-submit CSRF — enforced ONLY for the web flow. The browser-initiated GET flow
+            // does both legs in the SAME browser, so the cookie round-trips and matching it to the
+            // signed state's csrf is a meaningful CSRF defense. The App flow opens the authorizeUrl
+            // in the SYSTEM browser (a different cookie jar that never saw the cookie), so requiring
+            // it would always 400; there the inforgeable signed state (it pins the user — the server
+            // can't be tricked) plus the loopback nonce the App verifies are the integrity. Mode
+            // lives INSIDE the signed blob, so it cannot be forged to downgrade a web flow to "app".
+            if (string.Equals(stateModel.Mode, ModeWeb, StringComparison.Ordinal))
             {
-                return Results.BadRequest("Invalid OAuth state.");
+                var cookieCsrf = context.Request.Cookies[StateCookieName];
+                if (string.IsNullOrEmpty(cookieCsrf) ||
+                    !string.Equals(cookieCsrf, stateModel.Csrf, StringComparison.Ordinal))
+                {
+                    return Results.BadRequest("Invalid OAuth state.");
+                }
             }
 
             var code = query["code"].ToString();
@@ -352,7 +377,7 @@ public static class CalendarConnectEndpoints
     // Returns the ids of the pairs that were disabled (already-disabled pairs are left as-is and
     // not reported again). Comparison is on the canonical accountId so a legacy-UPN endpoint and a
     // pool-accountId endpoint for the same underlying account both match.
-    private static async Task<List<string>> DisablePairsForAccountAsync(
+    internal static async Task<List<string>> DisablePairsForAccountAsync(
         string accountId, ISyncPairStore pairs, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
     {
         var all = await pairs.ListAsync(ct);
@@ -457,7 +482,8 @@ public static class CalendarConnectEndpoints
         AccountScope scope,
         int port,
         string nonce,
-        string prompt)
+        string prompt,
+        string mode)
     {
         var calendarScopes = scope == AccountScope.ReadWrite
             ? options.CalendarReadWriteScopes
@@ -471,10 +497,14 @@ public static class CalendarConnectEndpoints
             Port = port,
             Nonce = nonce,
             Csrf = csrf,
+            Mode = mode,
         };
         var state = ProtectState(dp, stateModel);
 
-        AppendCsrfCookie(context, csrf);
+        // The cookie only matters for the web flow (same-browser double submit). It is harmless on
+        // the app flow (the system browser never sends it back), but there is no reason to set it.
+        if (string.Equals(mode, ModeWeb, StringComparison.Ordinal))
+            AppendCsrfCookie(context, csrf);
 
         return BuildAuthorizeUrl(options, calendarScopes, prompt, state);
     }
@@ -568,6 +598,12 @@ public static class CalendarConnectEndpoints
 
         [System.Text.Json.Serialization.JsonPropertyName("csrf")]
         public string Csrf { get; set; } = "";
+
+        // Flow mode ("web" | "app"). Travels inside the signed blob so it cannot be forged: an
+        // attacker cannot downgrade a web flow to "app" to skip the CSRF cookie. Defaults to
+        // "web" (the strict path) so an absent/legacy value is never treated as cookie-less.
+        [System.Text.Json.Serialization.JsonPropertyName("mode")]
+        public string Mode { get; set; } = ModeWeb;
     }
 
     private sealed class OutlookComRequest

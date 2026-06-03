@@ -229,8 +229,11 @@ public class CalendarConnectEndpointsTests
     }
 
     [Fact]
-    public async Task ConnectGraphStart_sets_csrf_cookie()
+    public async Task ConnectGraphStart_does_not_set_csrf_cookie()
     {
+        // The App flow is cookie-less: the App opens the authorizeUrl in the SYSTEM browser, which
+        // never sees a server cookie, so the start endpoint must NOT set one (it would be useless
+        // and could only mislead). Integrity is the signed "app" state + the loopback nonce.
         using var factory = CreateFactory(new FakeTokenService());
         var (token, _) = IssueBearer(factory, "start-cookie", "start-cookie@test");
         var client = NoRedirectClient(factory);
@@ -240,9 +243,12 @@ public class CalendarConnectEndpointsTests
             new { scope = "read", port = 51962, nonce = "n1" }));
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
-        resp.Headers.GetValues("Set-Cookie")
+        var setCookies = resp.Headers.TryGetValues("Set-Cookie", out var values)
+            ? values
+            : Enumerable.Empty<string>();
+        setCookies
             .Any(c => c.StartsWith(CalendarStateCookieName + "=", StringComparison.Ordinal))
-            .Should().BeTrue();
+            .Should().BeFalse();
     }
 
     [Fact]
@@ -305,10 +311,12 @@ public class CalendarConnectEndpointsTests
     }
 
     [Fact]
-    public async Task ConnectGraphStart_state_drives_callback_and_creates_account()
+    public async Task ConnectGraphStart_state_drives_callback_and_creates_account_without_cookie()
     {
-        // End-to-end: the JSON state must be consumable by the shared callback exactly like the GET
-        // flow's state, creating the account under the token's user.
+        // REALISTIC App flow (the prod path): POST /start returns the authorizeUrl; the App opens it
+        // in the SYSTEM browser, which calls the callback WITHOUT ever having seen a server cookie.
+        // The "app"-mode signed state alone (plus the loopback nonce) must complete the connect, so
+        // here we drive the callback with NO Cookie header at all.
         var fake = new FakeTokenService();
         using var factory = CreateFactory(fake);
         var (token, userId) = IssueBearer(factory, "start-e2e", "start-e2e@test");
@@ -318,14 +326,13 @@ public class CalendarConnectEndpointsTests
             Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", token),
             new { scope = "readwrite", port = 51966, nonce = "e2e-nonce" }));
         start.StatusCode.Should().Be(HttpStatusCode.OK);
-        var csrfCookie = ExtractCookie(start, CalendarStateCookieName);
         using var startDoc = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
         var state = ExtractQueryValue(
             new Uri(startDoc.RootElement.GetProperty("authorizeUrl").GetString()!), "state");
 
+        // No Cookie header — the system browser never had the cookie.
         var callback = Bearer(HttpMethod.Get,
             $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
-        callback.Headers.Add("Cookie", csrfCookie);
         var cb = await client.SendAsync(callback);
         cb.StatusCode.Should().Be(HttpStatusCode.Redirect);
         cb.Headers.Location!.Port.Should().Be(51966);
@@ -450,6 +457,28 @@ public class CalendarConnectEndpointsTests
     }
 
     [Fact]
+    public async Task Web_flow_callback_without_cookie_returns_400()
+    {
+        // The browser-initiated WEB flow (GET /calendar/connect/graph, Mode==web) MUST stay strict:
+        // the same browser does both legs, so a callback that arrives WITHOUT the double-submit
+        // cookie is rejected. This guards against weakening the web flow when relaxing the App one.
+        using var factory = CreateFactory(new FakeTokenService());
+        var (token, _) = IssueBearer(factory, "cb-web-nocookie", "cb-web-nocookie@test");
+        var client = NoRedirectClient(factory);
+
+        var (state, _) = await StartConnect(client, token, "read", 51914, "wn");
+
+        // Replay the callback on a SEPARATE client (fresh cookie jar) so the start client's
+        // auto-held state cookie does NOT ride along: this models a cookie-less callback hitting
+        // a web-mode state, which must be rejected.
+        var browserlessClient = NoRedirectClient(factory);
+        var callback = Bearer(HttpMethod.Get,
+            $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
+
+        (await browserlessClient.SendAsync(callback)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task Callback_with_error_returns_html()
     {
         using var factory = CreateFactory(new FakeTokenService());
@@ -551,21 +580,21 @@ public class CalendarConnectEndpointsTests
         await ConnectOne(client, token, "read", 51940, "n");
         var id = SingleAccountId(factory, userId);
 
-        // Start the upgrade; the response carries an authorize URL with a signed state.
+        // Start the upgrade; the response carries an authorize URL with a signed state. This is an
+        // App (cookie-less) flow — the App opens the URL in the system browser — so the upgrade
+        // start sets NO CSRF cookie and the callback does not require one.
         var start = await client.SendAsync(Bearer(
             HttpMethod.Post, $"/api/calendar/accounts/{id}/upgrade-scope?port=51940&nonce=upn", token));
         start.StatusCode.Should().Be(HttpStatusCode.OK);
-        var csrfCookie = ExtractCookie(start, CalendarStateCookieName);
         using var startDoc = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
         var authorizeUrl = new Uri(startDoc.RootElement.GetProperty("authorizeUrl").GetString()!);
         var state = ExtractQueryValue(authorizeUrl, "state");
         authorizeUrl.ToString().Should().Contain("prompt=consent");
         authorizeUrl.ToString().Should().Contain("Calendars.ReadWrite");
 
-        // Drive the shared callback with the upgrade state.
+        // Drive the shared callback with the upgrade state — no cookie (system-browser path).
         var callback = Bearer(HttpMethod.Get,
             $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
-        callback.Headers.Add("Cookie", csrfCookie);
         (await client.SendAsync(callback)).StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         using var scope = factory.Services.CreateScope();

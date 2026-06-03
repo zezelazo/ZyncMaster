@@ -11,16 +11,18 @@ public static class PairEndpoints
         ArgumentNullException.ThrowIfNull(app);
 
         // Unified account-listing surface. Returns the UNION of the user's NEW per-user account
-        // pool (ICalendarAccountStore) and the LEGACY per-UPN store (IConnectedAccountStore),
-        // deduplicated. The AccountRef of every returned account is an identifier that the
-        // createPair validation AND the sync engine know how to resolve through the adapter
-        // (pool-first, legacy fallback):
+        // pool (ICalendarAccountStore) and the LEGACY per-UPN store (IConnectedAccountStore). The
+        // AccountRef of every returned account is an identifier that the createPair validation AND
+        // the sync engine know how to resolve through the adapter (pool-first, legacy fallback):
         //   * pool accounts   -> AccountRef = the pool accountId (resolves in the pool as-is),
         //   * legacy accounts -> AccountRef = the legacy UPN (resolves via its derived id), kept
         //     exactly as before so existing pairs and the legacy listing behaviour are undisturbed.
-        // Dedup is on the resolved canonical accountId, so the SAME mailbox surfaced by both stores
-        // (a legacy single-account already migrated into the pool) collapses to one entry, with the
-        // pool representation winning (it carries its real accountId + richer metadata).
+        // Dedup note: pool accounts use a RANDOM Guid as their id, while a legacy account's canonical
+        // id is UuidV5(namespace, "{userId}|{upn}"). The two never collide, so a pool account and a
+        // legacy account are NEVER collapsed here — even for the same underlying mailbox they surface
+        // as two entries (distinct accountIds). The seen-set below only guards against listing the
+        // SAME legacy ref twice (e.g. a UPN whose canonical id already came from another legacy row);
+        // it does not — and cannot, on accountId — merge a pool/legacy pair for one mailbox.
         app.MapGet("/api/accounts", async (
             ICalendarAccountStore pool,
             IConnectedAccountStore legacy,
@@ -83,36 +85,38 @@ public static class PairEndpoints
 
         app.MapDelete("/api/accounts/{accountRef}", async (
             string accountRef,
-            IConnectedAccountStore accounts,
+            ICalendarAccountStore pool,
+            IConnectedAccountStore legacy,
             ISyncPairStore pairs,
+            ILegacyConnectedAccountAdapter adapter,
             CancellationToken ct) =>
         {
-            // The account store is user-scoped, so an account that does not belong to the
-            // caller resolves to null. Return 404 (not 403) so we never leak the existence
-            // of another user's account, and never run the unlink cascade against it.
-            if (await accounts.GetAsync(accountRef, ct) is null)
+            // Resolve through the adapter (pool-first, legacy fallback) so a pool accountId
+            // (Guid) deletes just like a legacy UPN. Both adapter stores are user-scoped, so a
+            // ref that belongs to another user (or to nobody) resolves to null. Return 404 (not
+            // 403) so we never leak the existence of another user's account, and never run the
+            // unlink cascade against it.
+            if (await ResolveAccountForUserAsync(accountRef, adapter, ct) is null)
                 return Results.NotFound();
 
-            // Disable any pair referencing this account on either side so a stale pair never
-            // tries to sync against a forgotten account. Dedupe ids appearing on both sides.
-            var byDest = await pairs.ListByDestinationAccountAsync(accountRef, ct);
-            var bySrc = await pairs.ListBySourceAccountAsync(accountRef, ct);
+            // Canonicalize the ref to the stable accountId so the pair-disable cascade matches
+            // endpoints regardless of whether they carry the raw pool id or a legacy UPN.
+            var accountId = await adapter.ResolveAccountIdAsync(accountRef, ct);
 
-            var affected = byDest.Concat(bySrc)
-                .GroupBy(p => p.Id, StringComparer.Ordinal)
-                .Select(g => g.First())
-                .ToList();
+            // Disable every pair whose source or destination resolves to this canonical accountId
+            // so a removed account never leaves an active pair pointing at a forgotten account.
+            // Reuses the same canonical-id disable routine the pool-delete endpoint uses.
+            var affectedPairIds = await CalendarConnectEndpoints
+                .DisablePairsForAccountAsync(accountId, pairs, adapter, ct);
 
-            foreach (var pair in affected)
-            {
-                if (string.Equals(pair.State, "disabled", StringComparison.Ordinal))
-                    continue;
-                await pairs.UpdateAsync(pair with { State = "disabled" }, ct);
-            }
+            // Remove from whichever store actually backs the account: a real pool account by its
+            // canonical id, otherwise the legacy store by the raw UPN ref (as before).
+            if (await pool.GetAsync(accountId, ct) is not null)
+                await pool.RemoveAsync(accountId, ct);
+            else
+                await legacy.RemoveAsync(accountRef, ct);
 
-            await accounts.RemoveAsync(accountRef, ct);
-
-            return Results.Ok(new { affectedPairIds = affected.Select(p => p.Id).ToList() });
+            return Results.Ok(new { affectedPairIds });
         }).RequireCookie();
 
         app.MapGet("/api/accounts/{accountRef}/calendars", async (
