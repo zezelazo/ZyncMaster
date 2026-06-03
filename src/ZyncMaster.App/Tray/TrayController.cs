@@ -31,9 +31,6 @@ public sealed class TrayController : IDisposable
     // Raised when the user toggles "Pause auto-sync"; the bool is the new paused state.
     public event Action<bool>? PauseToggled;
 
-    // Raised when the user clicks "Open web panel" (opens the UI in a browser).
-    public event Action? OpenWebPanelRequested;
-
     public TrayController(IClassicDesktopStyleApplicationLifetime desktop, Func<MainWindow> windowFactory)
     {
         _desktop = desktop ?? throw new ArgumentNullException(nameof(desktop));

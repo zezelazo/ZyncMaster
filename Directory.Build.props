@@ -1,0 +1,21 @@
+<Project>
+
+  <!-- Solution-wide build properties. -->
+  <PropertyGroup>
+    <!--
+      MSB3277: WindowsBase version conflict (4.0.0.0 vs 5.0.0.0).
+
+      The Microsoft.Web.WebView2 package ships unused WPF/WinForms control assemblies
+      (Microsoft.Web.WebView2.Wpf.dll) that were built against an older WindowsBase
+      (4.0.0.0). We only use Microsoft.Web.WebView2.Core, so the resolved net10
+      WindowsBase (5.0.0.0) is correct and the conflict is benign. The warning surfaces
+      in the desktop App project and in any project that references it transitively
+      (the App test project). Demote it to a message solution-wide so it does not appear
+      as a build warning — without hiding any real reference conflicts elsewhere, since
+      this only affects the MSB3277 code. Do NOT "fix" it by adding a direct WindowsBase
+      reference; the unification is already correct.
+    -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+</Project>

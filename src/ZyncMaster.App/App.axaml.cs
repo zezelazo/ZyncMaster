@@ -62,7 +62,6 @@ public partial class App : Application
             }
 
             _tray = new TrayController(desktop, CreateWindow);
-            _tray.OpenWebPanelRequested += OpenWebPanelInBrowser;
             _tray.Show();
 
             // Build the engine and wire the bridge. If settings are missing/invalid the
