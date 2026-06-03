@@ -23,10 +23,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <DefineConstants>$(DefineConstants);WIN_WEBVIEW2</DefineConstants>
-    <!-- The WebView2 package ships unused WPF/WinForms controls that reference an older
-         WindowsBase; we only use Microsoft.Web.WebView2.Core, so the resolved net10
-         WindowsBase is correct and the MSB3277 conflict is benign. Demote it to a message. -->
-    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+    <!-- MSB3277 (benign WindowsBase 4.0/5.0 conflict from WebView2's unused WPF assemblies)
+         is demoted to a message solution-wide in the root Directory.Build.props. -->
   </PropertyGroup>
 
   <ItemGroup>
