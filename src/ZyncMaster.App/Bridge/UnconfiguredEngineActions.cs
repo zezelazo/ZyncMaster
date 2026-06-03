@@ -109,6 +109,14 @@ public sealed class UnconfiguredEngineActions : IEngineActions
 
     public Task SignOutAsync(CancellationToken ct = default) => Task.CompletedTask;
 
+    // Calendar-connect stubs: connecting needs the server URL + a signed-in identity, neither of
+    // which exists yet, so report the clear "configure first" failure and an empty account list.
+    public Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default)
+        => Task.FromResult(ConnectCalendarOutcome.Fail("Set the server URL in Settings before connecting a calendar."));
+
+    public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<CalendarAccountSummary>>(new List<CalendarAccountSummary>());
+
     private static InvalidOperationException NotConfigured()
         => new("Set the server URL in Settings first.");
 }

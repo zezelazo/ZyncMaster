@@ -39,6 +39,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly Func<string, Task<string?>> _saveDialog;
     private readonly string _autoStartExePath;
     private readonly IdentityLoginService _identity;
+    private readonly CalendarConnectService _calendarConnect;
     private readonly HttpClient _http;
     private readonly string _healthUrl;
 
@@ -67,6 +68,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         Func<string, Task<string?>> saveDialog,
         string autoStartExePath,
         IdentityLoginService identity,
+        CalendarConnectService calendarConnect,
         HttpClient http,
         HttpClient? ownedHttp = null)
     {
@@ -83,6 +85,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _saveDialog = saveDialog ?? throw new ArgumentNullException(nameof(saveDialog));
         _autoStartExePath = autoStartExePath ?? throw new ArgumentNullException(nameof(autoStartExePath));
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+        _calendarConnect = calendarConnect ?? throw new ArgumentNullException(nameof(calendarConnect));
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _healthUrl = $"{(_engineSettings.ServerBaseUrl ?? "").TrimEnd('/')}/health";
         _ownedHttp = ownedHttp;
@@ -357,6 +360,14 @@ public sealed class EngineActions : IEngineActions, IDisposable
     }
 
     public Task SignOutAsync(CancellationToken ct = default) => _identity.SignOutAsync(ct);
+
+    // ---------------- Calendar-account connection lifecycle ----------------
+
+    public Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default)
+        => _calendarConnect.ConnectCalendarAsync(scope, ct);
+
+    public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
+        => _calendarConnect.ListCalendarAccountsAsync(ct);
 
     private async Task<string> RequireKeyAsync(CancellationToken ct)
     {

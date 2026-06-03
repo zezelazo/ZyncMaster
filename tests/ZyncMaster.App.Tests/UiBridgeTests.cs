@@ -240,6 +240,29 @@ public class UiBridgeTests
             if (Throw != null) await Throw();
             SignOutCalls++;
         }
+
+        // Calendar-connect capture fields.
+        public string? ConnectCalendarScopeArg;
+        public int ListCalendarAccountsCalls;
+        public ConnectCalendarOutcome ConnectOutcomeToReturn = ConnectCalendarOutcome.Ok();
+        public IReadOnlyList<CalendarAccountSummary> CalendarAccountsToReturn = new List<CalendarAccountSummary>
+        {
+            new("acc-1", "Graph", "microsoft", "me@outlook.com", "ReadWrite", "active", "Personal"),
+        };
+
+        public async Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            ConnectCalendarScopeArg = scope;
+            return ConnectOutcomeToReturn;
+        }
+
+        public async Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            ListCalendarAccountsCalls++;
+            return CalendarAccountsToReturn;
+        }
     }
 
     private sealed class FakeWindowControl : IWindowControl
@@ -765,5 +788,88 @@ public class UiBridgeTests
         var reply = LastReply(transport);
         reply.GetProperty("ok").GetBoolean().Should().BeFalse();
         reply.GetProperty("error").GetString().Should().Contain("pair boom");
+    }
+
+    // ---------------- Calendar-account connection lifecycle actions ----------------
+
+    [Fact]
+    public void ConnectCalendar_object_payload_passes_scope_and_returns_outcome()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("connectCalendar", "k1", "{\"scope\":\"read\"}"));
+
+        engine.ConnectCalendarScopeArg.Should().Be("read");
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("k1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("connected").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void ConnectCalendar_missing_payload_defaults_scope_to_readwrite()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("connectCalendar", "k2"));
+
+        engine.ConnectCalendarScopeArg.Should().Be("readwrite");
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void ConnectCalendar_bare_string_payload_is_taken_as_scope()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("connectCalendar", "k3", "readwrite"));
+
+        engine.ConnectCalendarScopeArg.Should().Be("readwrite");
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void ConnectCalendar_failure_outcome_is_serialized_ok_with_error_in_payload()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            ConnectOutcomeToReturn = ConnectCalendarOutcome.Fail("Sign in before connecting a calendar account."),
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("connectCalendar", "k4", "{\"scope\":\"readwrite\"}"));
+
+        var reply = LastReply(transport);
+        // The bridge reply is still ok=true (the action ran); the business failure rides the payload.
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("connected").GetBoolean().Should().BeFalse();
+        payload.GetProperty("error").GetString().Should().Contain("Sign in");
+    }
+
+    [Fact]
+    public void ListCalendarAccounts_calls_engine_and_replies_with_account_array()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("listCalendarAccounts", "k5"));
+
+        engine.ListCalendarAccountsCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetArrayLength().Should().Be(1);
+        payload[0].GetProperty("id").GetString().Should().Be("acc-1");
+        payload[0].GetProperty("accountEmail").GetString().Should().Be("me@outlook.com");
     }
 }

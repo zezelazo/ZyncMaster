@@ -209,6 +209,18 @@ public sealed class UiBridge
                 await _engine.SignOutAsync(ct);
                 return null;
             }
+            // ---------------- Calendar-account connection lifecycle ----------------
+            case "connectCalendar":
+            {
+                var scope = ParseConnectScope(message.Payload);
+                var outcome = await _engine.ConnectCalendarAsync(scope, ct);
+                return JsonSerializer.Serialize(outcome, JsonOptions);
+            }
+            case "listCalendarAccounts":
+            {
+                var accounts = await _engine.ListCalendarAccountsAsync(ct);
+                return JsonSerializer.Serialize(accounts, JsonOptions);
+            }
             // Frameless window controls driven by the custom web title bar (fire-and-forget).
             case "windowMinimize":
                 _windowProvider?.Invoke()?.Minimize();
@@ -254,6 +266,33 @@ public sealed class UiBridge
 
         // Not an object: treat the whole payload as the provider name.
         return (UnwrapString(trimmed), null);
+    }
+
+    // Parses a {"scope":"read|readwrite"} connect payload. A bare string ("read"/"readwrite") is
+    // tolerated too. Missing/blank defaults to "readwrite" (the common case for a sync destination);
+    // the Server validates the value and likewise defaults a blank to read/write.
+    private static string ParseConnectScope(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return "readwrite";
+
+        var trimmed = payload.Trim();
+        if (trimmed[0] == '{')
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                var scope = doc.RootElement.TryGetProperty("scope", out var s) ? s.GetString() : null;
+                return string.IsNullOrWhiteSpace(scope) ? "readwrite" : scope!;
+            }
+            catch (JsonException)
+            {
+                return "readwrite";
+            }
+        }
+
+        var bare = UnwrapString(trimmed);
+        return string.IsNullOrWhiteSpace(bare) ? "readwrite" : bare;
     }
 
     // Parses a {"name":"..."} rename payload. A bare string payload is tolerated too (the whole
