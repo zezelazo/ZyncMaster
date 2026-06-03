@@ -58,4 +58,13 @@ public interface IEngineActions
     //     tab / hit Cancel) and free the loopback port so a new login() can start right away.
     Task CancelLoginAsync(CancellationToken ct = default);
     Task SignOutAsync(CancellationToken ct = default);
+
+    // Calendar-account connection lifecycle, backed by CalendarConnectService. Reuses the signed-in
+    // identity (the IdentityBearer) to connect a Microsoft Graph calendar in one click via the same
+    // system-browser + loopback pattern as sign-in.
+    //   ConnectCalendarAsync(scope) — "read" | "readwrite"; defaults to read/write server-side.
+    //     Opens the browser, awaits the loopback callback, verifies the nonce, and reports Connected.
+    //   ListCalendarAccountsAsync — the signed-in user's connected calendar accounts (IdentityBearer).
+    Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default);
+    Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default);
 }

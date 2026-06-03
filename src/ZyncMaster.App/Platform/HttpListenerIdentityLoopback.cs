@@ -14,11 +14,26 @@ namespace ZyncMaster.App.Platform;
 // caller and signed into the OAuth state so the Server knows where to redirect back.
 //
 // This is untested infrastructure (a process/OS boundary like DefaultBrowserLauncher and
-// OutlookCalendarService, per CLAUDE.md). The orchestration above it (IdentityLoginService) is
-// tested against the IIdentityLoopback interface with a fake.
+// OutlookCalendarService, per CLAUDE.md). The orchestration above it (IdentityLoginService /
+// CalendarConnectService) is tested against the IIdentityLoopback interface with a fake.
+//
+// The callback path is parameterized so the SAME implementation serves both loopback flows: the
+// identity sign-in (default /identity/callback/) and the calendar-connect flow (/calendar/callback/,
+// where the Server redirects with ?status=connected&nonce=...). Generalizing the concrete listener
+// here keeps the untested process boundary in one place instead of duplicating it per flow.
 public sealed class HttpListenerIdentityLoopback : IIdentityLoopback, IDisposable
 {
+    private readonly string _callbackPath;
+
     private HttpListener? _listener;
+
+    public HttpListenerIdentityLoopback(string callbackPath = "/identity/callback/")
+    {
+        if (string.IsNullOrWhiteSpace(callbackPath))
+            throw new ArgumentNullException(nameof(callbackPath));
+        // HttpListener prefixes must end with '/'; normalize so callers can pass either form.
+        _callbackPath = callbackPath.EndsWith('/') ? callbackPath : callbackPath + "/";
+    }
 
     public int Port { get; private set; }
 
@@ -32,7 +47,7 @@ public sealed class HttpListenerIdentityLoopback : IIdentityLoopback, IDisposabl
         probe.Stop();
 
         var listener = new HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{Port}/identity/callback/");
+        listener.Prefixes.Add($"http://127.0.0.1:{Port}{_callbackPath}");
         listener.Start();
         _listener = listener;
         return Task.CompletedTask;
@@ -64,11 +79,12 @@ public sealed class HttpListenerIdentityLoopback : IIdentityLoopback, IDisposabl
                 query[key] = context.Request.QueryString[key] ?? "";
         }
 
-        // Show the user a tiny "you can close this tab" page so the browser does not hang.
+        // Show the user a tiny "you can close this tab" page so the browser does not hang. Kept
+        // flow-neutral ("Done") since the same listener serves both sign-in and calendar-connect.
         var html =
             "<!DOCTYPE html><html><body style=\"font-family:sans-serif\">" +
-            "<h2>Signed in to Zync Master</h2>" +
-            "<p>You can close this tab and return to the app.</p>" +
+            "<h2>Done</h2>" +
+            "<p>You can close this tab and return to Zync Master.</p>" +
             "</body></html>";
         var bytes = System.Text.Encoding.UTF8.GetBytes(html);
         context.Response.ContentType = "text/html";

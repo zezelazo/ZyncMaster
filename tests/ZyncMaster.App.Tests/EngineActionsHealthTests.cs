@@ -58,6 +58,11 @@ public class EngineActionsHealthTests
             new Mock<ISystemBrowser>().Object,
             // IdentityLoginService rejects a blank base url; a placeholder is fine for these tests.
             string.IsNullOrWhiteSpace(serverBaseUrl) ? "https://placeholder.invalid" : serverBaseUrl);
+        var calendarConnect = new CalendarConnectService(
+            new Mock<ICalendarServerClient>().Object,
+            new Mock<IIdentityTokenCache>().Object,
+            () => new Mock<IIdentityLoopback>().Object,
+            new Mock<ISystemBrowser>().Object);
 
         return new EngineActions(
             keys,
@@ -73,6 +78,7 @@ public class EngineActionsHealthTests
             _ => Task.FromResult<string?>(null),
             "host.exe",
             identity,
+            calendarConnect,
             http);
     }
 

@@ -95,10 +95,21 @@ public sealed class EngineHost : IDisposable
             new Platform.DefaultSystemBrowser(),
             engineSettings.ServerBaseUrl);
 
+        // Calendar-account connect wiring: reuses the SAME identity token cache (for the
+        // IdentityBearer) and the SAME loopback technique as sign-in, but binds the listener to
+        // /calendar/callback/ and talks to the Server's /api/calendar endpoints over the bearer.
+        var calendarServer = new Platform.HttpCalendarServerClient(http, engineSettings.ServerBaseUrl);
+        var calendarConnect = new CalendarConnectService(
+            calendarServer,
+            identityCache,
+            () => new Platform.HttpListenerIdentityLoopback("/calendar/callback/"),
+            new Platform.DefaultSystemBrowser());
+
         var actions = new EngineActions(
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
             pairsClient, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
             identityLogin,
+            calendarConnect,
             http,
             ownedHttp: null);
 
