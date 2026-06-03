@@ -10,18 +10,74 @@ public static class PairEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.MapGet("/api/accounts", async (IConnectedAccountStore accounts) =>
+        // Unified account-listing surface. Returns the UNION of the user's NEW per-user account
+        // pool (ICalendarAccountStore) and the LEGACY per-UPN store (IConnectedAccountStore),
+        // deduplicated. The AccountRef of every returned account is an identifier that the
+        // createPair validation AND the sync engine know how to resolve through the adapter
+        // (pool-first, legacy fallback):
+        //   * pool accounts   -> AccountRef = the pool accountId (resolves in the pool as-is),
+        //   * legacy accounts -> AccountRef = the legacy UPN (resolves via its derived id), kept
+        //     exactly as before so existing pairs and the legacy listing behaviour are undisturbed.
+        // Dedup is on the resolved canonical accountId, so the SAME mailbox surfaced by both stores
+        // (a legacy single-account already migrated into the pool) collapses to one entry, with the
+        // pool representation winning (it carries its real accountId + richer metadata).
+        app.MapGet("/api/accounts", async (
+            ICalendarAccountStore pool,
+            IConnectedAccountStore legacy,
+            ILegacyConnectedAccountAdapter adapter,
+            CancellationToken ct) =>
         {
-            var list = await accounts.ListAsync();
-            var infos = list.Select(a => new AccountInfo
+            var pooled = await pool.ListAsync(ct);
+            var legacyAccounts = await legacy.ListAsync(ct);
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var infos = new List<AccountInfo>();
+
+            foreach (var account in pooled)
             {
-                AccountRef = a.UserPrincipalName,
-                DisplayName = string.Equals(a.UserPrincipalName, "default", StringComparison.Ordinal)
-                    ? "Connected account"
-                    : a.UserPrincipalName,
-                IsDefault = string.Equals(a.UserPrincipalName, "default", StringComparison.Ordinal)
-                    || list.Count == 1,
-            }).ToList();
+                seen.Add(account.Id);
+                infos.Add(new AccountInfo
+                {
+                    AccountRef = account.Id,
+                    DisplayName = AccountDisplayName(account),
+                    IsDefault = false,
+                });
+            }
+
+            foreach (var account in legacyAccounts)
+            {
+                // Skip a legacy account whose canonical id already came from the pool.
+                var canonicalId = await adapter.ResolveAccountIdAsync(account.UserPrincipalName, ct);
+                if (!seen.Add(canonicalId))
+                    continue;
+
+                infos.Add(new AccountInfo
+                {
+                    // Keep the legacy ref as-is (UPN / "default") so existing pairs and tests that
+                    // reference the legacy account by UPN keep resolving unchanged.
+                    AccountRef = account.UserPrincipalName,
+                    DisplayName = string.Equals(account.UserPrincipalName, "default", StringComparison.Ordinal)
+                        ? "Connected account"
+                        : account.UserPrincipalName,
+                    IsDefault = false,
+                });
+            }
+
+            // Default selection: a single account is the default; otherwise preserve the legacy
+            // convention where the literal "default" UPN account is the implied default.
+            if (infos.Count == 1)
+            {
+                infos[0] = infos[0] with { IsDefault = true };
+            }
+            else
+            {
+                for (var i = 0; i < infos.Count; i++)
+                {
+                    if (string.Equals(infos[i].AccountRef, "default", StringComparison.Ordinal))
+                        infos[i] = infos[i] with { IsDefault = true };
+                }
+            }
+
             return Results.Ok(infos);
         }).RequireCookie();
 
@@ -62,13 +118,16 @@ public static class PairEndpoints
         app.MapGet("/api/accounts/{accountRef}/calendars", async (
             string accountRef,
             ProviderRegistry registry,
-            IConnectedAccountStore accounts,
+            ILegacyConnectedAccountAdapter adapter,
             CancellationToken ct) =>
         {
-            // Only enumerate calendars for an account the caller owns. A cross-user ref
-            // resolves to null in the user-scoped store -> 404 (don't leak existence, and
-            // don't hit Graph with another user's missing token, which would 500).
-            if (await accounts.GetAsync(accountRef, ct) is null)
+            // Only enumerate calendars for an account the caller owns. Resolution goes through the
+            // adapter (pool-first, legacy fallback) so a pool accountId resolves just like a legacy
+            // UPN; both adapter stores are user-scoped, so a cross-user ref resolves to null -> 404
+            // (don't leak existence, and don't hit Graph with another user's missing token, which
+            // would 500). The resolved account's accountRef is passed to the Graph writer; its
+            // token provider resolves the same accountId pool-first to fetch the right token.
+            if (await ResolveAccountForUserAsync(accountRef, adapter, ct) is null)
                 return Results.NotFound();
 
             var endpoint = new Endpoint
@@ -91,7 +150,6 @@ public static class PairEndpoints
         app.MapPost("/api/pairs", async (
             CreatePairRequest req,
             ISyncPairStore store,
-            IConnectedAccountStore accounts,
             ILegacyConnectedAccountAdapter adapter,
             CancellationToken ct) =>
         {
@@ -100,14 +158,16 @@ public static class PairEndpoints
                 return Results.ValidationProblem(validation.ToDictionary());
 
             // Validate that any referenced connected account belongs to the current user.
-            // The account store is user-scoped, so GetAsync resolves to null for an account
-            // that does not exist or belongs to someone else. We only check Graph endpoints
-            // with an explicit AccountRef: OutlookCom endpoints have no server-side account,
-            // and a null/empty ref normalizes to the user's "default" account in the store.
-            // Returning a clean 400 here is friendlier than a later confusing token failure.
-            if (await ReferencedAccountIsMissingAsync(req.Source!, accounts, ct))
+            // Resolution goes through the adapter (pool-first, legacy fallback), so an explicit
+            // AccountRef is accepted when it resolves to EITHER a pool accountId OR a legacy UPN
+            // the user owns; both adapter stores are user-scoped, so a foreign/nonexistent ref
+            // resolves to null. We only check Graph endpoints with an explicit AccountRef:
+            // OutlookCom endpoints have no server-side account, and a null/empty ref normalizes
+            // to the user's "default" account. A clean 400 here is friendlier than a later token
+            // failure.
+            if (await ReferencedAccountIsMissingAsync(req.Source!, adapter, ct))
                 return Results.BadRequest(new { error = "unknown_source_account", message = "source.accountRef does not belong to the current user." });
-            if (await ReferencedAccountIsMissingAsync(req.Destination!, accounts, ct))
+            if (await ReferencedAccountIsMissingAsync(req.Destination!, adapter, ct))
                 return Results.BadRequest(new { error = "unknown_destination_account", message = "destination.accountRef does not belong to the current user." });
 
             // §B-4 — a pair must mirror BETWEEN two distinct calendars. Reject source == destination
@@ -284,18 +344,45 @@ public static class PairEndpoints
             message = "No sync module is registered for this pair's kind.",
         });
 
-    // True when an endpoint references a Graph connected account (explicit, non-empty
-    // AccountRef) that the current user does not own. OutlookCom endpoints and endpoints
-    // without an explicit AccountRef (which normalize to the user's "default" account) are
-    // never treated as missing here.
+    // True when an endpoint references a Graph connected account (explicit, non-empty AccountRef)
+    // that the current user does not own. Resolution goes through the adapter (pool-first, legacy
+    // fallback): a pool accountId resolves in the pool, a legacy UPN resolves via its derived id.
+    // OutlookCom endpoints and endpoints without an explicit AccountRef (which normalize to the
+    // user's "default" account) are never treated as missing here.
     private static async Task<bool> ReferencedAccountIsMissingAsync(
-        Endpoint endpoint, IConnectedAccountStore accounts, CancellationToken ct)
+        Endpoint endpoint, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
     {
         if (string.Equals(endpoint.Provider, ProviderRegistry.OutlookCom, StringComparison.Ordinal))
             return false;
         if (string.IsNullOrWhiteSpace(endpoint.AccountRef))
             return false;
-        return await accounts.GetAsync(endpoint.AccountRef, ct) is null;
+        return await ResolveAccountForUserAsync(endpoint.AccountRef, adapter, ct) is null;
+    }
+
+    // Shared account-resolution helper for the read/validation surface (list-calendars +
+    // create-pair). Resolves an endpoint's accountRef to the current user's CalendarAccount via
+    // the adapter (pool-first, legacy fallback). Returns null when the ref resolves to no account
+    // the user owns. DRY: both the calendars endpoint and the pair validation route through this so
+    // a pool accountId and a legacy UPN are treated identically everywhere.
+    private static async Task<CalendarAccount?> ResolveAccountForUserAsync(
+        string accountRef, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
+    {
+        // Canonicalize first: a legacy UPN ("" / "default" / a real UPN) becomes its derived id,
+        // a real pool accountId stays itself. ResolveAsync then looks that id up pool-first, then
+        // legacy-wrapped. Both adapter stores are user-scoped, so a foreign ref resolves to null.
+        var accountId = await adapter.ResolveAccountIdAsync(accountRef, ct).ConfigureAwait(false);
+        return await adapter.ResolveAsync(accountId, ct).ConfigureAwait(false);
+    }
+
+    // Display name for a pool account on the listing: prefer the user-facing display name, then the
+    // mailbox email, then a generic fallback so the panel never shows an empty label.
+    private static string AccountDisplayName(CalendarAccount account)
+    {
+        if (!string.IsNullOrWhiteSpace(account.DisplayName))
+            return account.DisplayName!;
+        if (!string.IsNullOrWhiteSpace(account.AccountEmail))
+            return account.AccountEmail;
+        return "Connected account";
     }
 
     // §B-4 — true when source and destination address the SAME calendar, which would make a run
