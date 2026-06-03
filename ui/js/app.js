@@ -602,6 +602,20 @@ function viewHeader(title, opts = {}) {
     el('div', { class: 'view-header__action' }, action || ''),
   );
 }
+// navRow(opts) — a clickable settings row that navigates elsewhere. label + optional sublabel
+// on the left; an optional value plus a right-pointing chevron on the right, all vertically
+// centred (flex align-items:center, see .nav-row in components.css). The chevron reuses the
+// existing chevronleft icon rotated 180°, so no new icon asset is needed. Used for the Calendar
+// and About entries in the Settings hub, fixing the previously misaligned About chevron.
+function navRow({ label, sublabel, value, onClick }) {
+  const left = el('div', { class: 'nav-row__text' },
+    el('div', { class: 'nav-row__label', text: label }),
+    sublabel ? el('div', { class: 'nav-row__sub', text: sublabel }) : null);
+  const right = el('div', { class: 'nav-row__right' },
+    value != null && value !== '' ? el('span', { class: 'nav-row__value num', text: String(value) }) : null,
+    el('span', { class: 'nav-row__chevron', html: icon('chevronleft', { size: 16, stroke: 1.8 }) }));
+  return el('button', { class: 'nav-row', type: 'button', onclick: onClick }, left, right);
+}
 function actionChip(kind) {
   const map = { created: ['chip--created', 'Created'], updated: ['chip--updated', 'Updated'], deleted: ['chip--deleted', 'Deleted'], skipped: ['chip--skipped', 'Skipped'] };
   const [cls, txt] = map[kind] || map.skipped;
@@ -1243,188 +1257,246 @@ function toggle(get, set) {
   return t;
 }
 
-function renderConfig(root) {
-  const section = (head, ...rows) => {
-    const s = el('div', { class: 'glass glass--card config-section' }, el('div', { class: 'config-section__hd', text: head }));
-    rows.forEach((r) => s.append(r));
-    return s;
-  };
-  const row = (label, hint, control) => el('div', { class: 'cfg-row' },
-    el('div', null, el('div', { class: 'cfg-row__label', text: label }), hint), control);
+// Shared section/row builders for the settings screens.
+function cfgSection(head, ...rows) {
+  const s = el('div', { class: 'glass glass--card config-section' }, el('div', { class: 'config-section__hd', text: head }));
+  rows.flat().forEach((r) => { if (r) s.append(r); });
+  return s;
+}
+function cfgRow(label, hint, control) {
+  return el('div', { class: 'cfg-row' },
+    el('div', null, el('div', { class: 'cfg-row__label', text: label }), hint || null), control);
+}
 
-  // Account (web panel only): show the signed-in identity and a sign-out affordance. The
-  // identity comes from /api/me via getStatus; we cache it on live.me at boot.
+// ensureCalendarData — lazy-load the connected accounts + their calendars once, repainting the
+// given settings view in place when each arrives. Shared by the hub's Calendar nav-row (so a value
+// can be shown) and the Calendar module (which lists them). Repaints with softRepaint() so the
+// arriving data never replays the entrance animation.
+function ensureCalendarData(view) {
+  if (!Bridge.available) return;
+  if (live.accounts === null) {
+    loadAccounts().then((list) => {
+      (list || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === view) softRepaint(); }); });
+      if (state.view === view) softRepaint();
+    });
+  } else {
+    (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === view) softRepaint(); }); });
+  }
+}
+
+// ---------------- Screen: Settings hub ----------------
+// The hub separates the three concepts the user kept conflating: IDENTITY (who signed in),
+// DEVICE (this machine), and CALENDAR ACCOUNTS (OAuth grants). Identity + device live together in
+// one "Account & device" card; everything calendar-shaped (accounts, target, schedule, tools) is
+// behind the navigable "Calendar" row that opens its own module. About sits behind a matching
+// nav-row so its chevron lines up.
+function renderConfig(root) {
+  // Web panel: keep the lean panel-appropriate hub (identity + appearance + about). It has no
+  // device and no desktop Calendar module, so it never shows those.
   if (Bridge.webPanel) {
     const email = (live.me && live.me.email) || 'Signed in';
     const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutWeb() });
-    root.append(section('Account',
-      row('Signed in as', el('div', { class: 'cfg-row__hint', text: email }), signOutBtn)));
+    root.append(cfgSection('Account',
+      cfgRow('Signed in as', el('div', { class: 'cfg-row__hint', text: email }), signOutBtn)));
+    root.append(appearanceSection());
+    root.append(aboutSection());
+    return;
   }
 
-  // Account (desktop App only): the signed-in identity from getIdentityState + a Sign out that
-  // drops back to the identity gate. displayName when present, else email; the email shows as a
-  // hint. Plan, when reported, is shown as a small chip.
+  // Account & device — identity (who) + this device (where), consolidated into one card.
+  root.append(accountAndDeviceSection());
+
+  // Calendar — navigable module. Show a live summary value (account/calendar count) when known.
+  if (Bridge.available) ensureCalendarData('config');
+  const accounts = live.accounts || [];
+  let calValue = '';
+  if (Bridge.available) {
+    if (live.accounts === null) calValue = '';
+    else if (accounts.length === 0) calValue = 'Not connected';
+    else calValue = `${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}`;
+  }
+  root.append(el('div', { class: 'glass glass--card config-section' },
+    navRow({ label: 'Calendar', sublabel: 'Accounts, target, schedule, export', value: calValue, onClick: () => navigate('calendar-settings') })));
+
+  // Appearance.
+  root.append(appearanceSection());
+
+  // About — same nav-row component so the chevron aligns.
+  root.append(aboutSection());
+}
+
+// accountAndDeviceSection — identity row + device-name row + status row, plus (desktop App only)
+// the device-only "Run at startup" app preference. Honest across transports: mock seeds demo
+// strings, the real desktop App reads identity + device live.
+function accountAndDeviceSection() {
+  const rows = [];
+
+  // Identity row: name (displayName||email) + email hint + optional plan chip + Sign out.
   if (Bridge.desktopApp && identityAuth.signedIn) {
     const me = identityAuth.me || {};
     const primary = me.displayName || me.email || 'Signed in';
-    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
     const hint = el('div', { class: 'cfg-row__hint' });
     if (me.displayName && me.email) hint.append(document.createTextNode(me.email));
     if (me.plan) hint.append(el('span', { class: 'chip chip--ok', style: 'margin-left:8px;height:18px;font-size:9.5px', text: String(me.plan) }));
-    root.append(section('Account',
-      row(primary, hint, signOutBtn)));
+    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
+    rows.push(cfgRow(primary, hint, signOutBtn));
+  } else if (!Bridge.available) {
+    // Mock-only walkthrough identity.
+    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
+    rows.push(cfgRow('Daniel López', el('div', { class: 'cfg-row__hint', text: 'daniel@outlook.com' }), signOutBtn));
   }
 
-  // Calendar — the "Target calendar" <select>. In a REAL transport (Bridge.available: the desktop
-  // App and the web panel) it must list the user's actual calendars, never demo literals. We derive
-  // them from the connected accounts (live.accounts) and their calendars (live.calendars), exactly
-  // like onlineCalendarPicker / renderAddPairLive. With no connected account or no calendars yet we
-  // show a single honest, disabled placeholder rather than inventing "Work · Calendar" entries. Only
-  // the mock file:// walkthrough keeps the demo options so the standalone ui/index.html shows
-  // something. Note: pushConfig does not currently persist a target-calendar value (AppSettings has
-  // no such field and the host's saveConfig would drop it), so the change handler stays a no-op for
-  // now — wiring it to a real host field is a separate, deliberate contract change.
-  const targetSel = el('select', { class: 'field-select' });
+  // Device name row — the REAL registered device name (getDevice / live.device) on the desktop App,
+  // a hot rename via renameDevice on change. Mock seeds a demo name.
   if (Bridge.available) {
-    const accounts = live.accounts || [];
-    const cals = accounts.flatMap((acc) => (live.calendars[acc.accountRef] || []).map((c) => ({ acc, c })));
-    if (cals.length === 0) {
-      // Honest empty state. accounts === [] with no calendars means nothing is connected yet.
-      const placeholder = accounts.length === 0 ? 'Connect an account first' : 'No calendars yet';
-      targetSel.append(el('option', { text: placeholder, value: '', disabled: true, selected: true }));
-    } else {
-      cals.forEach(({ acc, c }) => targetSel.append(
-        el('option', { value: c.id, text: `${acc.displayName || acc.accountRef} · ${c.displayName || c.id}` })));
+    const currentName = (live.device && live.device.name) || settings.deviceName || '';
+    const nameInput = el('input', { class: 'field-input', value: currentName, placeholder: 'Name this device' });
+    const feedback = el('span', { class: 'cfg-row__hint', style: 'margin-left:10px' });
+    nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
+    nameInput.addEventListener('change', () => saveDeviceName(nameInput, feedback));
+    // Lazy-load the device once, then repaint in place (no entrance replay).
+    if (live.device === null && !live.deviceLoading) {
+      live.deviceLoading = true;
+      Bridge.call('getDevice')
+        .then((d) => { live.device = d || {}; if (d && d.name) settings.deviceName = d.name; })
+        .catch(() => { live.device = {}; })
+        .finally(() => { live.deviceLoading = false; if (state.view === 'config') softRepaint(); });
     }
-    // Lazily load accounts and their calendars, then repaint Settings in place once they arrive —
-    // the same load-then-rerender pattern the rest of renderConfig and the add-pair wizard use.
-    if (live.accounts === null) {
-      loadAccounts().then((list) => {
-        (list || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === 'config') rerender(); }); });
-        if (state.view === 'config') rerender();
-      });
-    } else {
-      accounts.forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === 'config') rerender(); }); });
-    }
+    rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint' }, document.createTextNode('Visible to your other devices'), feedback), nameInput));
   } else {
-    // Mock-only demo so the standalone file:// walkthrough still shows representative options.
-    ['Work · Calendar', 'Personal · Family', '+ Create new…'].forEach((o) => targetSel.append(el('option', { text: o })));
+    if (!settings.deviceName) settings.deviceName = "Daniel's MacBook";
+    const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
+    nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
+    rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput));
   }
-  targetSel.addEventListener('change', pushConfig);
-  root.append(section('Calendar',
-    row('Target calendar', el('div', { class: 'cfg-row__hint', text: 'Where mirrored events are written' }), targetSel),
-    sliderRow('Sync window', () => settings.windowDays, (v) => { settings.windowDays = v; pushConfig(); })));
 
-  // Schedule. Run-at-startup is backed by the host's auto-start manager when bridged. It is a
-  // device-only concern (a browser can't launch on OS sign-in), so the row is hidden in the
-  // web panel; auto-sync + interval still show as plain preferences.
-  const scheduleRows = [
-    row('Auto-sync', el('div', { class: 'cfg-row__hint', text: 'Mirror changes automatically' }), toggle(() => settings.autoSync, (v) => { settings.autoSync = v; })),
-    intervalRow(() => settings.interval, (v) => { settings.interval = v; pushConfig(); rerender(); }),
-  ];
-  if (!Bridge.webPanel) {
-    // Run-at-startup is backed by the host's auto-start manager (native/loopback only).
-    const startupToggle = toggle(
-      () => (Bridge.available && live.autoStart !== null) ? live.autoStart : settings.startup,
-      (v) => {
-        settings.startup = v;
-        if (Bridge.available) {
-          live.autoStart = v;
-          Bridge.call('setAutoStart', v ? 'true' : 'false').catch(() => {});
-        }
-      });
-    if (Bridge.available && live.autoStart === null) {
-      Bridge.call('getAutoStart').then((r) => { live.autoStart = !!(r && r.enabled); if (state.view === 'config') rerender(); }).catch(() => {});
-    }
-    scheduleRows.push(row('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }), startupToggle));
+  // Status row — "Signed in" chip + "as <who>".
+  let who = null;
+  if (Bridge.available) { if (identityAuth.signedIn && identityAuth.me) who = identityAuth.me.displayName || identityAuth.me.email; }
+  else who = 'daniel@outlook.com';
+  if (who) {
+    rows.push(cfgRow('Status',
+      el('div', { class: 'cfg-row__hint' },
+        el('span', { class: 'chip chip--ok', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'),
+        el('span', { style: 'color:var(--ink-2)', text: `as ${who}` }))));
   }
-  root.append(section('Schedule', ...scheduleRows));
 
-  // Tools. The .txt export is a device-only capability (writes a local file via Outlook COM),
-  // so it is hidden in the web panel; unlinking the Microsoft account works over REST and is
-  // offered in any non-mock transport.
+  // Run at startup — a device/app preference (NOT calendar), so it lives here. Native/loopback
+  // only; backed by the host auto-start manager.
   if (Bridge.available) {
-    const toolRows = [];
-    if (!Bridge.webPanel) {
-      const txtBtn = el('button', { class: 'btn btn--ghost', onclick: () => generateBasicTxt(txtBtn) }, iconEl('folder', 13, 1.6), el('span', { text: 'Generate .txt' }));
-      toolRows.push(row('Basic .txt export', el('div', { class: 'cfg-row__hint', text: 'Save this month as a pipe-delimited text file' }), txtBtn));
+    const startupToggle = toggle(
+      () => (live.autoStart !== null) ? live.autoStart : settings.startup,
+      (v) => { settings.startup = v; live.autoStart = v; Bridge.call('setAutoStart', v ? 'true' : 'false').catch(() => {}); });
+    if (live.autoStart === null) {
+      Bridge.call('getAutoStart').then((r) => { live.autoStart = !!(r && r.enabled); if (state.view === 'config') softRepaint(); }).catch(() => {});
     }
-    const unlinkBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', onclick: () => unlinkAccount() }, el('span', { text: 'Unlink…' }));
-    toolRows.push(row('Microsoft account', el('div', { class: 'cfg-row__hint', text: 'Disconnect and disable its sync pairs' }), unlinkBtn));
-    root.append(section('Tools', ...toolRows));
+    rows.push(cfgRow('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }), startupToggle));
+  } else {
+    rows.push(cfgRow('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }),
+      toggle(() => settings.startup, (v) => { settings.startup = v; })));
   }
 
-  // This device — device identity. Device-only (a browser panel is not a paired device), so the
-  // whole section is hidden in the web panel. Manual pairing-key entry is gone: a device is now
-  // registered as part of the identity sign-in, so there is no key/"Paired" chip/"Unpair" button.
-  if (!Bridge.webPanel) {
-    if (Bridge.available) {
-      // Real desktop App. The device name is the REAL name of the registered device, read live
-      // from the server via getDevice (live.device). The input pre-fills with that name and a
-      // change (blur / Enter) renames the device IN PLACE through renameDevice — a hot rename, not
-      // just a settings.json write. settings.deviceName is still kept in step host-side as the
-      // fallback used by a future re-register. Below it, an HONEST signed-in line derived from the
-      // real identity (identityAuth.me). With no identity yet the line simply doesn't render.
-      const currentName = (live.device && live.device.name) || settings.deviceName || '';
-      const nameInput = el('input', { class: 'field-input', value: currentName, placeholder: 'Name this device' });
-      const feedback = el('span', { class: 'cfg-row__hint', style: 'margin-left:10px' });
-      nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
-      nameInput.addEventListener('change', () => saveDeviceName(nameInput, feedback));
+  return cfgSection('Account & device', ...rows);
+}
 
-      // Lazy-load the real device once, then repaint Settings in place — the same load-then-rerender
-      // pattern the rest of renderConfig (accounts/calendars, auto-start) uses.
-      if (live.device === null && !live.deviceLoading) {
-        live.deviceLoading = true;
-        Bridge.call('getDevice')
-          .then((d) => { live.device = d || {}; if (d && d.name) settings.deviceName = d.name; })
-          .catch(() => { live.device = {}; })
-          .finally(() => { live.deviceLoading = false; if (state.view === 'config') rerender(); });
-      }
-
-      const deviceRows = [
-        row('Device name', el('div', { class: 'cfg-row__hint' }, document.createTextNode('Visible to your other devices'), feedback), nameInput),
-      ];
-      if (identityAuth.signedIn && identityAuth.me) {
-        const who = identityAuth.me.displayName || identityAuth.me.email;
-        if (who) {
-          deviceRows.push(row('Status',
-            el('div', { class: 'cfg-row__hint' },
-              el('span', { class: 'chip chip--ok', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'),
-              el('span', { style: 'color:var(--ink-2)', text: `This device is signed in as ${who}` }))));
-        }
-      }
-      root.append(section('This device', ...deviceRows));
-    } else {
-      // Mock-only (file:// walkthrough): seed a demo device name and an honest "signed in" line so
-      // the standalone page shows something — but never an invented pairing key.
-      if (!settings.deviceName) settings.deviceName = "Daniel's MacBook";
-      const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
-      nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
-      root.append(section('This device',
-        row('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput),
-        row('Status',
-          el('div', { class: 'cfg-row__hint' },
-            el('span', { class: 'chip chip--ok', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'),
-            el('span', { style: 'color:var(--ink-2)', text: 'This device is signed in as daniel@outlook.com' })))));
-    }
-  }
-
-  // Appearance — Dark / Light / Auto (Auto follows the OS)
+// appearanceSection — Dark / Light / Auto segmented. The theme handler updates aria-pressed on the
+// buttons directly (no full rerender) so toggling the theme never flickers the screen.
+function appearanceSection() {
   const seg = el('div', { class: 'segmented' });
+  const buttons = [];
   ['Dark', 'Light', 'Auto'].forEach((opt) => {
     const val = opt.toLowerCase();
-    seg.append(el('button', { class: 'segmented__item', 'aria-pressed': String(storedTheme() === val), text: opt,
-      onclick: () => { applyTheme(val); pushConfig(); rerender(); } }));
+    const b = el('button', { class: 'segmented__item', 'aria-pressed': String(storedTheme() === val), text: opt,
+      onclick: () => {
+        applyTheme(val);
+        pushConfig();
+        buttons.forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.val === val)));
+      } });
+    b.dataset.val = val;
+    buttons.push(b);
+    seg.append(b);
   });
-  root.append(section('Appearance',
-    row('Theme', el('div', { class: 'cfg-row__hint', text: 'Auto follows your system' }), seg)));
+  return cfgSection('Appearance',
+    cfgRow('Theme', el('div', { class: 'cfg-row__hint', text: 'Auto follows your system' }), seg));
+}
 
-  // About entry
-  const aboutRow = el('div', { class: 'cfg-row', style: 'cursor:pointer', onclick: () => navigate('about') },
-    el('div', null, el('div', { class: 'cfg-row__label', text: 'About Zync Master' }), el('div', { class: 'cfg-row__hint', text: 'Version, credits, links' })),
-    el('span', { class: 'num', style: 'font-size:11px;color:var(--ink-3);margin-right:4px', text: VERSION }),
-    el('span', { style: 'transform:rotate(180deg);color:var(--ink-3);display:inline-flex', html: icon('chevronleft', { size: 14, stroke: 1.8 }) }));
-  root.append(el('div', { class: 'glass glass--card config-section' }, el('div', { class: 'config-section__hd', text: 'About' }), aboutRow));
+// aboutSection — the navigable About row (nav-row component, so the chevron is centred and the
+// version sits to its left).
+function aboutSection() {
+  return el('div', { class: 'glass glass--card config-section' },
+    navRow({ label: 'About Zync Master', sublabel: 'Version, credits, links', value: VERSION, onClick: () => navigate('about') }));
+}
+
+// ---------------- Screen: Calendar module ----------------
+// Desktop App only. Everything calendar-shaped lives here: connected accounts (connect / per-account
+// unlink), the target calendar, the schedule (auto-sync + interval + window) and the basic .txt
+// export tool. Reached from the hub's Calendar nav-row.
+function renderCalendarSettings(root) {
+  root.append(viewHeader('Calendar', { onBack: () => navigate('config') }));
+
+  if (!Bridge.desktopApp) {
+    // Defensive: this module is desktop-only. Any other transport bounces back to the hub.
+    navigate('config');
+    return;
+  }
+
+  ensureCalendarData('calendar-settings');
+  const accounts = live.accounts || [];
+
+  // Calendar accounts — list of connected accounts with per-account Unlink, plus Connect.
+  const accountRows = [];
+  if (live.accounts === null) {
+    accountRows.push(cfgRow('Loading…', el('div', { class: 'cfg-row__hint', text: 'Reading your connected accounts' }), el('span', { class: 'spinner' })));
+  } else if (accounts.length === 0) {
+    accountRows.push(el('div', { class: 'empty-cal' },
+      el('div', { class: 'empty-cal__title', text: 'No calendar accounts yet' }),
+      el('div', { class: 'empty-cal__sub', text: 'Connect one to choose a target calendar and start syncing.' })));
+  } else {
+    accounts.forEach((acc) => {
+      const primary = acc.displayName || acc.accountRef;
+      const hint = (acc.displayName && acc.accountRef && acc.displayName !== acc.accountRef)
+        ? el('div', { class: 'cfg-row__hint', text: acc.accountRef })
+        : el('div', { class: 'cfg-row__hint', text: acc.isDefault ? 'Default account' : 'Connected' });
+      const unlinkBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', onclick: () => unlinkAccount(acc.accountRef) }, el('span', { text: 'Unlink' }));
+      accountRows.push(cfgRow(primary, hint, unlinkBtn));
+    });
+  }
+
+  // Connect button. When the identity is Microsoft, hint that connecting reuses that account.
+  const reuseEmail = (identityAuth.me && identityAuth.me.email) || null;
+  const connectBtn = el('button', { class: 'btn btn--primary connect-cal', onclick: () => connectCalendarAccount(connectBtn) },
+    iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: 'Connect a calendar account' }));
+  const connectWrap = el('div', { class: 'connect-cal__wrap' }, connectBtn);
+  if (reuseEmail) connectWrap.append(el('div', { class: 'cfg-row__hint', style: 'margin-top:6px', text: `Reuse ${reuseEmail}` }));
+  accountRows.push(connectWrap);
+  root.append(cfgSection('Calendar accounts', ...accountRows));
+
+  // Target calendar — the real <select> moved out of the old renderConfig.
+  const targetSel = el('select', { class: 'field-select' });
+  const cals = accounts.flatMap((acc) => (live.calendars[acc.accountRef] || []).map((c) => ({ acc, c })));
+  if (cals.length === 0) {
+    const placeholder = accounts.length === 0 ? 'Connect an account first' : 'No calendars yet';
+    targetSel.append(el('option', { text: placeholder, value: '', disabled: true, selected: true }));
+  } else {
+    cals.forEach(({ acc, c }) => targetSel.append(
+      el('option', { value: c.id, text: `${acc.displayName || acc.accountRef} · ${c.displayName || c.id}` })));
+  }
+  // pushConfig does not persist a target-calendar value yet (no AppSettings field), so the change
+  // handler stays a no-op for now — wiring it to a real host field is a deliberate contract change.
+  targetSel.addEventListener('change', pushConfig);
+  root.append(cfgSection('Target calendar',
+    cfgRow('Target calendar', el('div', { class: 'cfg-row__hint', text: 'Where mirrored events are written' }), targetSel)));
+
+  // Schedule — auto-sync, interval, sync window. interval/window repaint softly (no flicker).
+  root.append(cfgSection('Schedule',
+    cfgRow('Auto-sync', el('div', { class: 'cfg-row__hint', text: 'Mirror changes automatically' }), toggle(() => settings.autoSync, (v) => { settings.autoSync = v; })),
+    intervalRow(() => settings.interval, (v) => { settings.interval = v; pushConfig(); softRepaint(); }),
+    sliderRow('Sync window', () => settings.windowDays, (v) => { settings.windowDays = v; pushConfig(); })));
+
+  // Tools — basic .txt export (device-only Outlook COM export).
+  const txtBtn = el('button', { class: 'btn btn--ghost', onclick: () => generateBasicTxt(txtBtn) }, iconEl('folder', 13, 1.6), el('span', { text: 'Generate .txt' }));
+  root.append(cfgSection('Tools',
+    cfgRow('Basic .txt export', el('div', { class: 'cfg-row__hint', text: 'Save this month as a pipe-delimited text file' }), txtBtn)));
 }
 
 // ---------------- Screen: Sign in (web panel gate) ----------------
@@ -1873,18 +1945,66 @@ function generateBasicTxt(btn) {
     .finally(() => { if (span) setTimeout(() => { span.textContent = orig || 'Generate .txt'; }, 1800); });
 }
 
-function unlinkAccount() {
+// unlinkAccount(accountRef?) — unlink a calendar account. With an explicit accountRef (the
+// Calendar module's per-account Unlink button) it targets exactly that account; with no argument
+// it falls back to the default/first connected account. Refreshes accounts + pairs and repaints
+// whichever settings screen is up.
+function unlinkAccount(accountRef) {
   if (!Bridge.available) return;
   const run = () => {
     const accounts = live.accounts || [];
-    const target = accounts.find((x) => x.isDefault) || accounts[0];
+    const target = accountRef
+      ? accounts.find((x) => x.accountRef === accountRef) || { accountRef }
+      : accounts.find((x) => x.isDefault) || accounts[0];
     if (!target) { announce('No connected account to unlink.'); return; }
     Bridge.call('unlinkAccount', target.accountRef)
       .then(() => { live.accounts = null; return loadPairs(); })
-      .then(() => { announce('Account unlinked.'); if (state.view === 'config') rerender(); })
+      .then(() => loadAccounts())
+      .then(() => {
+        announce('Account unlinked.');
+        if (state.view === 'config' || state.view === 'calendar-settings') rerender();
+      })
       .catch(() => { announce('Unlink failed.'); });
   };
-  if (live.accounts === null) loadAccounts().then(run); else run();
+  if (live.accounts === null && !accountRef) loadAccounts().then(run); else run();
+}
+
+// connectCalendarAccount(btn?) — connect a calendar OAuth grant into the per-user account pool.
+// Calls the host's connectCalendar with a read/write scope (a long-running interactive flow, so a
+// generous timeout). On {Connected:true} it drops the cached accounts and reloads them (the new
+// account now shows up via listAccounts), then repaints. {Cancelled} and {Error} surface inline
+// feedback on the button without disturbing the rest of the screen.
+function connectCalendarAccount(btn) {
+  if (!Bridge.desktopApp) return;
+  const span = btn && btn.querySelector('span.connect-cal__label');
+  const orig = span ? span.textContent : '';
+  if (span) span.textContent = 'Connecting…';
+  if (btn) btn.disabled = true;
+  Bridge.call('connectCalendar', JSON.stringify({ scope: 'readwrite' }), 210000)
+    .then((r) => {
+      if (r && r.Connected) {
+        announce('Calendar account connected.');
+        live.accounts = null;
+        return loadAccounts().then(() => {
+          (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef); });
+          if (state.view === 'calendar-settings') rerender();
+        });
+      }
+      if (r && r.Cancelled) {
+        if (span) span.textContent = 'Cancelled';
+      } else {
+        if (span) span.textContent = (r && r.Error) ? 'Failed' : 'Failed';
+        announce((r && r.Error) ? `Connect failed: ${r.Error}` : 'Connect failed.');
+      }
+    })
+    .catch(() => { if (span) span.textContent = 'Failed'; announce('Connect failed.'); })
+    .finally(() => {
+      // Only restore the button if we didn't navigate away after a successful connect.
+      if (state.view === 'calendar-settings') {
+        if (btn) btn.disabled = false;
+        if (span && span.textContent !== orig) setTimeout(() => { if (span) span.textContent = orig || 'Connect a calendar account'; }, 1800);
+      }
+    });
 }
 
 // ---------------- Native status mapping ----------------
@@ -1921,7 +2041,7 @@ const NAV = [
   { id: 'pairing', label: 'Pair',     icon: 'link' },
 ];
 // Map sub-routes back to a parent tab so the indicator follows the user.
-const TAB_MAP = { home: 'home', calendar: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', about: 'config', pairing: 'pairing' };
+const TAB_MAP = { home: 'home', calendar: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', 'calendar-settings': 'config', about: 'config', pairing: 'pairing' };
 
 // The visible tabs. "Pair" is the legacy manual pairing-by-key walkthrough; a device now
 // registers as part of the identity sign-in, so the tab is meaningless in every REAL transport
@@ -2000,6 +2120,7 @@ function rerender() {
     case 'add-pair': renderAddPair(root); break;
     case 'add-calendar': renderAddCalendar(root); break;
     case 'config': renderConfig(root); break;
+    case 'calendar-settings': renderCalendarSettings(root); break;
     case 'about': renderAbout(root); break;
     case 'pairing': renderPairing(root); break;
     default: renderHome(root);
@@ -2009,10 +2130,15 @@ function rerender() {
   root.classList.add('enter');
   renderNav();
 }
-// rerenderInPlace — update progress-driven views during the syncing tick without
-// replaying the entrance animation (so cards don't flicker each frame).
+// rerenderInPlace — repaint the current view WITHOUT replaying the entrance animation (no
+// `enter` class) and preserving scroll, so progress ticks and in-screen control changes don't
+// flicker the whole screen. Covers the dashboard views (home/calendar) used during the syncing
+// tick AND the settings views (config/calendar-settings) so toggling interval/theme/select on
+// those screens is a smooth repaint instead of a full re-entrance via rerender().
+const SOFT_REPAINT_VIEWS = { home: renderHome, calendar: renderCalendar, config: renderConfig, 'calendar-settings': renderCalendarSettings };
 function rerenderInPlace() {
-  if (state.view !== 'calendar' && state.view !== 'home') return;
+  const render = SOFT_REPAINT_VIEWS[state.view];
+  if (!render) return;
   // The sign-in gate owns the screen: a stale background repaint (e.g. a late loadPairs)
   // must never paint the dashboard over the sign-in card and leave the nav hidden.
   if (Bridge.webPanel && webAuth.resolved && !webAuth.signedIn) return;
@@ -2022,12 +2148,16 @@ function rerenderInPlace() {
   if (!root) return;
   const prevScroll = root.scrollTop;   // a tick/refresh repaint must not snap the user back to the top
   root.replaceChildren();
-  if (state.view === 'calendar') renderCalendar(root); else renderHome(root);
+  render(root);
   root.scrollTop = prevScroll;
   const nav = $('#navbar');
-  if (nav) nav.hidden = false;          // a dashboard view is up → the bottom nav must be visible
+  if (nav) nav.hidden = false;          // a real view is up → the bottom nav must be visible
   renderNav();
 }
+// softRepaint — alias used by in-screen control handlers (interval/theme/select on the settings
+// screens) to repaint without the entrance animation. Distinct name from rerenderInPlace to make
+// the intent obvious at the call site.
+function softRepaint() { rerenderInPlace(); }
 
 function navigate(view) {
   // Legacy manual pairing-by-key is retired in every real transport (the device registers via the

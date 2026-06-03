@@ -323,6 +323,48 @@
 .cfg-row__label { font-size: 13px; color: var(--ink-1); font-weight: 500; }
 .cfg-row__hint  { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
 
+/* Navigable settings row (Calendar, About). Label/sublabel left, optional value + chevron right,
+   all vertically centred. Fixes the previously misaligned About chevron. */
+.nav-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-sm);
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  transition: background var(--d-fast);
+}
+.nav-row:hover { background: var(--ctrl-fill); }
+.nav-row__text { flex: 1 1 auto; min-width: 0; }
+.nav-row__label { font-size: 13px; color: var(--ink-1); font-weight: 500; }
+.nav-row__sub   { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.nav-row__right { display: flex; align-items: center; gap: 8px; flex: none; }
+.nav-row__value { font-size: 11px; color: var(--ink-3); }
+.nav-row__chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-3);
+  transform: rotate(180deg);   /* chevronleft -> chevronright */
+}
+
+/* Empty state for the Calendar accounts list. */
+.empty-cal {
+  padding: 18px 12px;
+  text-align: center;
+}
+.empty-cal__title { font-size: 13px; font-weight: 600; color: var(--ink-1); }
+.empty-cal__sub   { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+
+/* Connect-a-calendar-account block (button + reuse hint), kept full-width and left-aligned. */
+.connect-cal__wrap { padding: 10px; }
+.connect-cal { width: 100%; justify-content: center; }
+
 .field-input, .field-select {
   height: 32px;
   background: var(--ctrl-fill);
