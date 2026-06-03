@@ -148,6 +148,7 @@ builder.Services.AddRateLimiter(rl =>
         });
     });
 });
+builder.Services.AddSingleton<DeviceNameGenerator>();
 builder.Services.AddScoped<DeviceService>();
 builder.Services.AddScoped<SyncService>();
 

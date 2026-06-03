@@ -10,18 +10,26 @@ public sealed class DeviceService
 
     private readonly IDeviceStore _store;
     private readonly ICurrentUserAccessor _currentUser;
+    private readonly IUserStore _users;
+    private readonly DeviceNameGenerator _nameGenerator;
     private readonly ServerOptions _options;
 
     public DeviceService(
         IDeviceStore store,
         ICurrentUserAccessor currentUser,
+        IUserStore users,
+        DeviceNameGenerator nameGenerator,
         IOptions<ServerOptions> options)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(currentUser);
+        ArgumentNullException.ThrowIfNull(users);
+        ArgumentNullException.ThrowIfNull(nameGenerator);
         ArgumentNullException.ThrowIfNull(options);
         _store = store;
         _currentUser = currentUser;
+        _users = users;
+        _nameGenerator = nameGenerator;
         _options = options.Value;
     }
 
@@ -96,11 +104,19 @@ public sealed class DeviceService
         var generated = ApiKeyGenerator.GenerateKey();
         var now = DateTimeOffset.UtcNow;
         var leaseUntil = now.AddMinutes(LeaseTtlMinutes);
+
+        // When the App registers without a name, mint a friendly, unique geek name derived from the
+        // user's account (email local-part / display name) so every device has a readable handle the
+        // user can later rename. Unique among the user's existing device names.
+        var name = string.IsNullOrWhiteSpace(request.Name)
+            ? await GenerateUniqueNameAsync(ct)
+            : request.Name.Trim();
+
         var device = new Device
         {
             Id = Guid.NewGuid().ToString("N"),
             UserId = _currentUser.UserId,
-            Name = string.IsNullOrWhiteSpace(request.Name) ? "Device" : request.Name.Trim(),
+            Name = name,
             ApiKeyHash = ApiKeyHasher.Hash(generated.Secret),
             KeyId = generated.KeyId,
             Platform = NormalizePlatform(request.Platform),
@@ -164,11 +180,66 @@ public sealed class DeviceService
     // Returns the device identified by the api-key principal (the caller's own device), or null if
     // it no longer exists. User-scoped through the store, so it can only ever return the caller's
     // device — used by the App to pre-load the real current name into Settings.
-    public Task<Device?> GetMeAsync(string deviceId, CancellationToken ct = default)
+    public async Task<Device?> GetMeAsync(string deviceId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(deviceId))
-            return Task.FromResult<Device?>(null);
-        return _store.GetAsync(deviceId, ct);
+            return null;
+
+        var device = await _store.GetAsync(deviceId, ct);
+        if (device is null)
+            return null;
+
+        // Self-heal legacy / nameless devices: if the device has no name yet, mint a unique geek
+        // name now and persist it, so old rows created before name generation existed get backfilled
+        // the first time the App reads itself. The generated name excludes THIS device's (empty) name
+        // from the uniqueness set, which is a no-op since it is blank.
+        if (string.IsNullOrWhiteSpace(device.Name))
+        {
+            var name = await GenerateUniqueNameAsync(ct, excludeDeviceId: device.Id);
+            var updated = device with { Name = name };
+            await _store.UpdateAsync(updated, ct);
+            return updated;
+        }
+
+        return device;
+    }
+
+    // Builds a unique geek name for a new/nameless device of the current user. Resolves the account
+    // identifier (PrimaryEmail / legacy Email / DisplayName / userId) and the set of names already
+    // taken by the user's devices, then delegates to the pure DeviceNameGenerator. excludeDeviceId
+    // lets the /me self-heal path ignore the device being renamed when building the taken-set.
+    private async Task<string> GenerateUniqueNameAsync(CancellationToken ct, string? excludeDeviceId = null)
+    {
+        var accountId = await ResolveAccountIdentifierAsync(ct);
+
+        var devices = await _store.ListAsync(ct);
+        var existing = devices
+            .Where(d => excludeDeviceId is null || d.Id != excludeDeviceId)
+            .Select(d => d.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n!)
+            .ToList();
+
+        return _nameGenerator.Generate(accountId, existing);
+    }
+
+    // Best-effort account identifier for slug derivation: prefer the canonical PrimaryEmail, then
+    // the legacy per-login Email, then the DisplayName, finally the raw userId so a slug always
+    // exists even for the seeded/default user or when the user row is missing.
+    private async Task<string> ResolveAccountIdentifierAsync(CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        var user = await _users.GetAsync(userId, ct);
+        if (user is null)
+            return userId;
+
+        if (!string.IsNullOrWhiteSpace(user.PrimaryEmail))
+            return user.PrimaryEmail;
+        if (!string.IsNullOrWhiteSpace(user.Email))
+            return user.Email!;
+        if (!string.IsNullOrWhiteSpace(user.DisplayName))
+            return user.DisplayName!;
+        return userId;
     }
 
     private static string NormalizePlatform(string? platform)
