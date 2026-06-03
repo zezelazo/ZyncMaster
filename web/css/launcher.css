@@ -130,38 +130,52 @@ button { font-family: inherit; cursor: pointer; }
   border-radius: 4px;
 }
 
+/* ---- "See how it works": frosted-glass secondary CTA, sized to match .go ----
+   Opaque fallback first; real blur where supported. */
 .ghost {
-  height: 38px;
-  padding: 0 16px;
-  border-radius: 10px;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 22px;
+  border-radius: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--ink);
-  background: transparent;
+  background: rgba(14, 18, 30, .9);
   border: 1px solid var(--stroke);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
 }
-.ghost:hover { background: rgba(255, 255, 255, .07); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .ghost {
+    background: rgba(255, 255, 255, .06);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+            backdrop-filter: blur(18px) saturate(150%);
+  }
+}
+.ghost:hover { background: rgba(255, 255, 255, .12); }
+.ghost:active { transform: scale(.98); }
 
-/* ---- header Download button: sober, matches the neutral "Open app" look ----
-   Same height/typography as .dev, neutral surface, subtle hover.
-   No azure gradient, no glow, no travelling border-light. */
-.dl {
+/* ---- header Download button: solid brand-azure primary ----
+   A real button on its own colour, same azure family as .go
+   ("Download for Windows"). White text, soft drop shadow, no border. */
+.navdl {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   height: 38px;
-  padding: 0 14px;
+  padding: 0 16px;
+  border: 0;
   border-radius: 10px;
   font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-  background: rgba(255, 255, 255, .05);
-  border: 1px solid var(--stroke);
+  font-weight: 650;
+  color: #fff;
+  background: linear-gradient(180deg, var(--azure2), var(--azure));
+  box-shadow: 0 6px 18px -10px var(--azure), inset 0 1px 0 rgba(255, 255, 255, .18);
 }
-.dl:hover { background: rgba(255, 255, 255, .09); }
-.dl:active { transform: scale(.98); }
-.dl__t { line-height: 1; }
-.dl__ic { width: 16px; height: 16px; display: block; color: var(--ink2); }
+.navdl:hover { filter: brightness(1.06); }
+.navdl:active { transform: scale(.98); }
+.navdl__t { line-height: 1; }
+.navdl__ic { width: 16px; height: 16px; display: block; color: rgba(255, 255, 255, .9); }
 
 /* ---- "Sign in with Microsoft" button (official 4-square mark) ---- */
 .ms {
@@ -296,6 +310,49 @@ h1 .g {
 .hsup__sep { width: 1px; height: 13px; background: var(--stroke); margin: 0 2px; }
 .hsup__os { color: var(--ink3); font-weight: 500; }
 
+/* ---- hero scroll indicator (interactive — links to #how) ---- */
+.scroller {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  opacity: .6;
+  transition: opacity .3s ease;
+}
+.scroller:hover { opacity: 1; }
+.scroller__mouse {
+  width: 26px;
+  height: 42px;
+  border: 2px solid var(--ink2);
+  border-radius: 14px;
+  display: flex;
+  justify-content: center;
+  padding-top: 7px;
+}
+.scroller__wheel {
+  width: 3px;
+  height: 7px;
+  border-radius: 3px;
+  background: var(--ink2);
+  animation: scrollWheel 1.8s cubic-bezier(.22, 1, .36, 1) infinite;
+}
+.scroller__chev { width: 18px; height: 18px; color: var(--ink2); animation: scrollChev 1.8s ease-in-out infinite; }
+@keyframes scrollWheel {
+  0% { transform: translateY(0); opacity: 0; }
+  25% { opacity: 1; }
+  75% { transform: translateY(12px); opacity: 0; }
+  100% { transform: translateY(12px); opacity: 0; }
+}
+@keyframes scrollChev {
+  0%, 100% { transform: translateY(0); opacity: .5; }
+  50% { transform: translateY(3px); opacity: 1; }
+}
+
 @media (max-width: 860px) {
   #net {
     -webkit-mask-image: linear-gradient(180deg, transparent 2%, #000 45%);
@@ -315,8 +372,8 @@ h1 .g {
 /* very narrow phones: trim the action pill so it can't collide with the brand */
 @media (max-width: 400px) {
   .dev { padding: 0 10px; gap: 5px; }
-  .dl { padding: 0 11px; }
-  .dl__t { display: none; }
+  .navdl { padding: 0 12px; }
+  .navdl__t { display: none; }
 }
 
 /* ---- sections ---- */
@@ -384,9 +441,31 @@ h1 .g {
 .ppt h4 { font-size: 16px; }
 .ppt p { font-size: 13px; color: var(--ink2); margin-top: 4px; line-height: 1.45; }
 
-.dl { text-align: center; padding: 64px 40px; border-radius: 24px; background: var(--glass); border: 1px solid var(--stroke); }
-.dl .cta { margin-left: auto; margin-right: auto; justify-content: center; }
-.plat { display: flex; gap: 16px; justify-content: center; margin-top: 22px; font-size: 13px; color: var(--ink3); flex-wrap: wrap; }
+/* ---- "Get started in minutes." download card ---- */
+.getstarted {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 64px 40px;
+  border-radius: 24px;
+  background: var(--glass);
+  border: 1px solid var(--stroke);
+}
+.getstarted .eyebrow { justify-content: center; }
+.getstarted .h2 { margin: 16px auto 0; max-width: none; }
+.getstarted .lead { margin: 16px auto 0; max-width: 52ch; }
+.getstarted .cta { margin: 32px auto 0; justify-content: center; max-width: none; }
+.getstarted__dev {
+  margin-top: 36px;
+  padding-top: 28px;
+  width: 100%;
+  border-top: 1px solid var(--stroke);
+  display: flex;
+  justify-content: center;
+}
+.getstarted__dev .dev { height: 40px; }
+.plat { display: flex; gap: 16px; justify-content: center; margin-top: 24px; font-size: 13px; color: var(--ink3); flex-wrap: wrap; }
 .plat span { display: inline-flex; align-items: center; gap: 7px; }
 .plat svg { width: 15px; height: 15px; }
 
@@ -417,4 +496,6 @@ h1 .g {
   .reveal { opacity: 1; transform: none; transition: none; }
   .mod::after { transition: none; }
   .go::before { animation: none; opacity: .7; }
+  .scroller__wheel, .scroller__chev { animation: none; }
+  .scroller__wheel { opacity: 1; }
 }
