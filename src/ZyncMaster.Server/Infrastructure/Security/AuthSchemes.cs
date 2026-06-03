@@ -72,4 +72,26 @@ public static class AuthSchemes
         where TBuilder : IEndpointConventionBuilder =>
         (TBuilder)builder.RequireAuthorization(
             new AuthorizeAttribute { AuthenticationSchemes = $"{Cookie},{ApiKey}" });
+
+    // Accepts EITHER the Cookie scheme OR the IdentityBearer scheme — the two HUMAN-facing
+    // schemes. The browser panel authenticates with the Cookie while the desktop App presents its
+    // signed-in user's IdentityBearer access token; both schemes set the SAME "userId" claim that
+    // HttpContextCurrentUserAccessor resolves, and every handler on these routes loads data
+    // user-scoped, so exposing a route to both is safe. The device ApiKey scheme is DELIBERATELY
+    // EXCLUDED here: the pairs/accounts management surface is human-only, so a device key must never
+    // unlock it (RequireApiKey / RequireCookieOrApiKey stay for the device-driven routes).
+    public static TBuilder RequireCookieOrIdentityBearer<TBuilder>(this TBuilder builder)
+        where TBuilder : IEndpointConventionBuilder =>
+        (TBuilder)builder.RequireAuthorization(
+            new AuthorizeAttribute { AuthenticationSchemes = $"{Cookie},{IdentityBearer}" });
+
+    // Accepts the Cookie, ApiKey OR IdentityBearer scheme. Used by /api/pairs/{id}/push, the
+    // sync DATA path (it carries COM-read events to mirror), not part of the human-only MANAGEMENT
+    // surface: the device background scheduler pushes under its ApiKey, while a human (panel cookie
+    // or App IdentityBearer) may also push. All three schemes set the same "userId" claim and the
+    // handler resolves the pair user-scoped, so admitting all three is safe.
+    public static TBuilder RequireCookieOrApiKeyOrIdentityBearer<TBuilder>(this TBuilder builder)
+        where TBuilder : IEndpointConventionBuilder =>
+        (TBuilder)builder.RequireAuthorization(
+            new AuthorizeAttribute { AuthenticationSchemes = $"{Cookie},{ApiKey},{IdentityBearer}" });
 }

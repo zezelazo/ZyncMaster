@@ -79,7 +79,7 @@ public static class PairEndpoints
             }
 
             return Results.Ok(infos);
-        }).RequireCookie();
+        }).RequireCookieOrIdentityBearer();
 
         app.MapDelete("/api/accounts/{accountRef}", async (
             string accountRef,
@@ -113,7 +113,7 @@ public static class PairEndpoints
             await accounts.RemoveAsync(accountRef, ct);
 
             return Results.Ok(new { affectedPairIds = affected.Select(p => p.Id).ToList() });
-        }).RequireCookie();
+        }).RequireCookieOrIdentityBearer();
 
         app.MapGet("/api/accounts/{accountRef}/calendars", async (
             string accountRef,
@@ -145,7 +145,7 @@ public static class PairEndpoints
                 isDefault = c.IsDefault,
                 owner = c.Owner,
             }));
-        }).RequireCookie();
+        }).RequireCookieOrIdentityBearer();
 
         app.MapPost("/api/pairs", async (
             CreatePairRequest req,
@@ -193,10 +193,10 @@ public static class PairEndpoints
             };
             await store.AddAsync(pair);
             return Results.Ok(pair);
-        }).RequireCookie();
+        }).RequireCookieOrIdentityBearer();
 
         app.MapGet("/api/pairs", async (ISyncPairStore store) =>
-            Results.Ok(await store.ListAsync())).RequireCookie();
+            Results.Ok(await store.ListAsync())).RequireCookieOrIdentityBearer();
 
         app.MapGet("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
         {
@@ -204,7 +204,7 @@ public static class PairEndpoints
             // resolves to null -> 404. Never 403: don't reveal that the id exists elsewhere.
             var pair = await store.GetAsync(id, ct);
             return pair is null ? Results.NotFound() : Results.Ok(pair);
-        }).RequireCookie();
+        }).RequireCookieOrIdentityBearer();
 
         app.MapPatch("/api/pairs/{id}", async (string id, UpdatePairRequest req, ISyncPairStore store) =>
         {
@@ -224,7 +224,7 @@ public static class PairEndpoints
             };
             await store.UpdateAsync(updated);
             return Results.Ok(updated);
-        }).RequireCookie();
+        }).RequireCookieOrIdentityBearer();
 
         app.MapDelete("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
         {
@@ -236,7 +236,7 @@ public static class PairEndpoints
 
             await store.RemoveAsync(id, ct);
             return Results.NoContent();
-        }).RequireCookie();
+        }).RequireCookieOrIdentityBearer();
 
         app.MapPost("/api/pairs/{id}/push", async (
             string id,
@@ -270,7 +270,7 @@ public static class PairEndpoints
 
             await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
             return Results.Ok(result);
-        }).RequireApiKey();
+        }).RequireCookieOrApiKeyOrIdentityBearer();
 
         app.MapPost("/api/pairs/{id}/run", async (
             string id,

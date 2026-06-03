@@ -33,6 +33,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly HttpClient? _ownedHttp;
 
     private readonly IPairsClient _pairs;
+    private readonly IIdentityTokenCache _identityCache;
     private readonly BasicTxtExporter _txtExporter;
     private readonly IAutoStartManager _autoStart;
     private readonly EngineSettings _engineSettings;
@@ -62,6 +63,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         AppSettingsResolver resolver,
         string settingsPath,
         IPairsClient pairs,
+        IIdentityTokenCache identityCache,
         BasicTxtExporter txtExporter,
         IAutoStartManager autoStart,
         EngineSettings engineSettings,
@@ -79,6 +81,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _settingsPath = settingsPath ?? throw new ArgumentNullException(nameof(settingsPath));
         _pairs = pairs ?? throw new ArgumentNullException(nameof(pairs));
+        _identityCache = identityCache ?? throw new ArgumentNullException(nameof(identityCache));
         _txtExporter = txtExporter ?? throw new ArgumentNullException(nameof(txtExporter));
         _autoStart = autoStart ?? throw new ArgumentNullException(nameof(autoStart));
         _engineSettings = engineSettings ?? throw new ArgumentNullException(nameof(engineSettings));
@@ -195,28 +198,28 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
     public async Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(CancellationToken ct = default)
     {
-        var key = await RequireKeyAsync(ct);
-        return await _pairs.ListAccountsAsync(key, ct);
+        var bearer = await RequireBearerAsync(ct);
+        return await _pairs.ListAccountsAsync(bearer, ct);
     }
 
     public async Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default)
     {
         if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
-        var key = await RequireKeyAsync(ct);
-        return await _pairs.ListCalendarsAsync(key, accountRef, ct);
+        var bearer = await RequireBearerAsync(ct);
+        return await _pairs.ListCalendarsAsync(bearer, accountRef, ct);
     }
 
     public async Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default)
     {
         if (requestJson == null) throw new ArgumentNullException(nameof(requestJson));
-        var key = await RequireKeyAsync(ct);
+        var bearer = await RequireBearerAsync(ct);
 
         var dto = Newtonsoft.Json.JsonConvert.DeserializeObject<CreatePairDto>(requestJson)
                   ?? throw new InvalidOperationException("Invalid create-pair request.");
 
         var interval = dto.IntervalMin ?? _engineSettings.IntervalMinutes;
         return await _pairs.CreatePairAsync(
-            key,
+            bearer,
             dto.Name ?? "",
             dto.Source?.ToEndpoint() ?? new Endpoint(),
             dto.Destination?.ToEndpoint() ?? new Endpoint(),
@@ -226,33 +229,35 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
     public async Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default)
     {
-        var key = await RequireKeyAsync(ct);
-        return await _pairs.ListPairsAsync(key, ct);
+        var bearer = await RequireBearerAsync(ct);
+        return await _pairs.ListPairsAsync(bearer, ct);
     }
 
     public async Task<SyncPair> UpdatePairAsync(string requestJson, CancellationToken ct = default)
     {
         if (requestJson == null) throw new ArgumentNullException(nameof(requestJson));
-        var key = await RequireKeyAsync(ct);
+        var bearer = await RequireBearerAsync(ct);
 
         var dto = Newtonsoft.Json.JsonConvert.DeserializeObject<UpdatePairDto>(requestJson)
                   ?? throw new InvalidOperationException("Invalid update-pair request.");
         if (string.IsNullOrEmpty(dto.Id))
             throw new InvalidOperationException("update-pair request is missing 'id'.");
 
-        return await _pairs.UpdatePairAsync(key, dto.Id, dto.Name, dto.IntervalMin, dto.State, ct);
+        return await _pairs.UpdatePairAsync(bearer, dto.Id, dto.Name, dto.IntervalMin, dto.State, ct);
     }
 
     public async Task DeletePairAsync(string id, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
-        var key = await RequireKeyAsync(ct);
-        await _pairs.DeletePairAsync(key, id, ct);
+        var bearer = await RequireBearerAsync(ct);
+        await _pairs.DeletePairAsync(bearer, id, ct);
     }
 
     public async Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+        // Run is dual-scheme on the server (RequireCookieOrApiKey); the device drives it under its
+        // key, so this human "Sync now" path keeps using the device api key.
         var key = await RequireKeyAsync(ct);
         return await _pairs.RunPairAsync(key, id, ct);
     }
@@ -260,8 +265,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(accountRef)) throw new ArgumentNullException(nameof(accountRef));
-        var key = await RequireKeyAsync(ct);
-        return await _pairs.UnlinkAccountAsync(key, accountRef, ct);
+        var bearer = await RequireBearerAsync(ct);
+        return await _pairs.UnlinkAccountAsync(bearer, accountRef, ct);
     }
 
     public async Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default)
@@ -375,6 +380,18 @@ public sealed class EngineActions : IEngineActions, IDisposable
         if (string.IsNullOrEmpty(key))
             throw new InvalidOperationException("This device is not paired yet. Pair it before managing sync pairs.");
         return key;
+    }
+
+    // The signed-in user's identity access token for the HUMAN-only accounts/pairs management
+    // surface (the server gates it with RequireCookieOrIdentityBearer — the device api key is NOT
+    // accepted). The App gates sign-in before showing these screens, so a missing identity here is
+    // an invariant violation; fail cleanly with a clear message rather than sending an empty bearer.
+    private async Task<string> RequireBearerAsync(CancellationToken ct)
+    {
+        var tokens = await _identityCache.LoadAsync(ct);
+        if (tokens is null || string.IsNullOrEmpty(tokens.AccessToken))
+            throw new InvalidOperationException("You must be signed in to manage accounts and sync pairs.");
+        return tokens.AccessToken;
     }
 
     // Captures the outcome of a cycle so GetStatus / PushStatus reflect it. Called by the

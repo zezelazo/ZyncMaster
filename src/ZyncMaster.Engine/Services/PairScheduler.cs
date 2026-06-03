@@ -14,6 +14,11 @@ namespace ZyncMaster.Engine;
 // ICalendarSource and pushed to the server; every other pair is mirrored entirely
 // server-side via RunPair. Per-pair failures are isolated so one bad pair never
 // stops the others, and the loop only exits on cancellation.
+//
+// Listing the pairs is HUMAN-only on the server (RequireCookieOrIdentityBearer), so the tick
+// reads the pair list with the signed-in user's IDENTITY BEARER (via IIdentityTokenProvider) —
+// NOT the device api key. The push (COM data path) and run still authenticate with the device
+// API KEY. A tick with no identity (signed out) is a clean no-op, exactly like no device key.
 public sealed class PairScheduler
 {
     private const string OutlookComProvider = "OutlookCom";
@@ -22,6 +27,7 @@ public sealed class PairScheduler
     private readonly IPairsClient _client;
     private readonly ICalendarSource _comSource;
     private readonly IDeviceKeyStore _keys;
+    private readonly IIdentityTokenProvider _identity;
     private readonly IClock _clock;
     private readonly EngineSettings _settings;
     private readonly TimeSpan _tickInterval;
@@ -33,6 +39,7 @@ public sealed class PairScheduler
         IPairsClient client,
         ICalendarSource comSource,
         IDeviceKeyStore keys,
+        IIdentityTokenProvider identity,
         IClock clock,
         EngineSettings settings,
         TimeSpan? tickInterval = null)
@@ -40,6 +47,7 @@ public sealed class PairScheduler
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _comSource = comSource ?? throw new ArgumentNullException(nameof(comSource));
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
+        _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _tickInterval = tickInterval ?? DefaultTickInterval;
@@ -71,10 +79,16 @@ public sealed class PairScheduler
         if (string.IsNullOrEmpty(apiKey))
             return;
 
+        // Listing pairs is human-only on the server; it needs the signed-in user's identity
+        // bearer, not the device key. Signed out -> nothing to schedule this tick.
+        var bearer = await _identity.LoadAccessTokenAsync(ct);
+        if (string.IsNullOrEmpty(bearer))
+            return;
+
         IReadOnlyList<SyncPair> pairs;
         try
         {
-            pairs = await _client.ListPairsAsync(apiKey, ct);
+            pairs = await _client.ListPairsAsync(bearer, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

@@ -11,8 +11,12 @@ using ZyncMaster.Core;
 
 namespace ZyncMaster.Engine;
 
-// REST client for the server's pairs/accounts surface. Every request carries the
-// device api key in X-Api-Key. Newtonsoft camelCase on the wire.
+// REST client for the server's pairs/accounts surface. Newtonsoft camelCase on the wire.
+//
+// Two auth modes, matching the server's gating:
+//   * ACCOUNTS + PAIRS management calls send the user's IDENTITY BEARER in Authorization: Bearer
+//     (the server gates them human-only with RequireCookieOrIdentityBearer);
+//   * DEVICE self-management + PushPair send the device API KEY in X-Api-Key.
 public sealed class HttpPairsClient : IPairsClient
 {
     private const string ApiKeyHeader = "X-Api-Key";
@@ -32,10 +36,10 @@ public sealed class HttpPairsClient : IPairsClient
         _baseUrl = serverBaseUrl.TrimEnd('/');
     }
 
-    public async Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(string apiKey, CancellationToken ct)
+    public async Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(string bearer, CancellationToken ct)
     {
-        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
-        var arr = await SendAsync(HttpMethod.Get, "/api/accounts", apiKey, null, ct) as JArray ?? new JArray();
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
+        var arr = await SendBearerAsync(HttpMethod.Get, "/api/accounts", bearer, null, ct) as JArray ?? new JArray();
 
         var list = new List<AccountInfo>();
         foreach (var item in arr)
@@ -48,12 +52,12 @@ public sealed class HttpPairsClient : IPairsClient
         return list;
     }
 
-    public async Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string apiKey, string accountRef, CancellationToken ct)
+    public async Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string bearer, string accountRef, CancellationToken ct)
     {
-        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
         if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
 
-        var arr = await SendAsync(HttpMethod.Get, $"/api/accounts/{Uri.EscapeDataString(accountRef)}/calendars", apiKey, null, ct) as JArray ?? new JArray();
+        var arr = await SendBearerAsync(HttpMethod.Get, $"/api/accounts/{Uri.EscapeDataString(accountRef)}/calendars", bearer, null, ct) as JArray ?? new JArray();
 
         var list = new List<CalendarInfo>();
         foreach (var item in arr)
@@ -67,9 +71,9 @@ public sealed class HttpPairsClient : IPairsClient
         return list;
     }
 
-    public async Task<SyncPair> CreatePairAsync(string apiKey, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
+    public async Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
     {
-        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
         if (name == null) throw new ArgumentNullException(nameof(name));
         if (source == null) throw new ArgumentNullException(nameof(source));
         if (destination == null) throw new ArgumentNullException(nameof(destination));
@@ -82,14 +86,14 @@ public sealed class HttpPairsClient : IPairsClient
             ["intervalMin"] = intervalMin,
         };
 
-        var root = await SendAsync(HttpMethod.Post, "/api/pairs", apiKey, body, ct) as JObject ?? new JObject();
+        var root = await SendBearerAsync(HttpMethod.Post, "/api/pairs", bearer, body, ct) as JObject ?? new JObject();
         return ParsePair(root);
     }
 
-    public async Task<IReadOnlyList<SyncPair>> ListPairsAsync(string apiKey, CancellationToken ct)
+    public async Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct)
     {
-        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
-        var arr = await SendAsync(HttpMethod.Get, "/api/pairs", apiKey, null, ct) as JArray ?? new JArray();
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
+        var arr = await SendBearerAsync(HttpMethod.Get, "/api/pairs", bearer, null, ct) as JArray ?? new JArray();
 
         var list = new List<SyncPair>();
         foreach (var item in arr)
@@ -98,9 +102,9 @@ public sealed class HttpPairsClient : IPairsClient
         return list;
     }
 
-    public async Task<SyncPair> UpdatePairAsync(string apiKey, string id, string? name, int? intervalMin, string? state, CancellationToken ct)
+    public async Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct)
     {
-        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
         if (id == null) throw new ArgumentNullException(nameof(id));
 
         var body = new JObject();
@@ -108,15 +112,15 @@ public sealed class HttpPairsClient : IPairsClient
         if (intervalMin != null) body["intervalMin"] = intervalMin.Value;
         if (state != null) body["state"] = state;
 
-        var root = await SendAsync(HttpMethod.Patch, $"/api/pairs/{id}", apiKey, body, ct) as JObject ?? new JObject();
+        var root = await SendBearerAsync(HttpMethod.Patch, $"/api/pairs/{id}", bearer, body, ct) as JObject ?? new JObject();
         return ParsePair(root);
     }
 
-    public async Task DeletePairAsync(string apiKey, string id, CancellationToken ct)
+    public async Task DeletePairAsync(string bearer, string id, CancellationToken ct)
     {
-        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
         if (id == null) throw new ArgumentNullException(nameof(id));
-        await SendAsync(HttpMethod.Delete, $"/api/pairs/{id}", apiKey, null, ct);
+        await SendBearerAsync(HttpMethod.Delete, $"/api/pairs/{id}", bearer, null, ct);
     }
 
     public async Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct)
@@ -139,12 +143,12 @@ public sealed class HttpPairsClient : IPairsClient
         return ParseMirrorResult(root);
     }
 
-    public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string apiKey, string accountRef, CancellationToken ct)
+    public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct)
     {
-        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
         if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
 
-        var root = await SendAsync(HttpMethod.Delete, $"/api/accounts/{Uri.EscapeDataString(accountRef)}", apiKey, null, ct) as JObject ?? new JObject();
+        var root = await SendBearerAsync(HttpMethod.Delete, $"/api/accounts/{Uri.EscapeDataString(accountRef)}", bearer, null, ct) as JObject ?? new JObject();
 
         var ids = new List<string>();
         if (root["affectedPairIds"] is JArray arr)
@@ -243,11 +247,23 @@ public sealed class HttpPairsClient : IPairsClient
         };
     }
 
-    private async Task<JToken?> SendAsync(HttpMethod method, string path, string apiKey, JObject? body, CancellationToken ct)
+    // Device-key transport (X-Api-Key): push + device self-management.
+    private Task<JToken?> SendAsync(HttpMethod method, string path, string apiKey, JObject? body, CancellationToken ct) =>
+        SendCoreAsync(method, path, req => req.Headers.Add(ApiKeyHeader, apiKey), body, ct);
+
+    // Identity-bearer transport (Authorization: Bearer): accounts + pairs management (human-only).
+    private Task<JToken?> SendBearerAsync(HttpMethod method, string path, string bearer, JObject? body, CancellationToken ct) =>
+        SendCoreAsync(
+            method, path,
+            req => req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer),
+            body, ct);
+
+    private async Task<JToken?> SendCoreAsync(
+        HttpMethod method, string path, Action<HttpRequestMessage> applyAuth, JObject? body, CancellationToken ct)
     {
         var url = $"{_baseUrl}{path}";
         using var request = new HttpRequestMessage(method, url);
-        request.Headers.Add(ApiKeyHeader, apiKey);
+        applyAuth(request);
         if (body != null)
             request.Content = new StringContent(body.ToString(Formatting.None), Encoding.UTF8, "application/json");
 
