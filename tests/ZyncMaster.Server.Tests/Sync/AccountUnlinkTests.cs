@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -10,6 +11,8 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using ZyncMaster.Server.Data;
+using ZyncMaster.Server.Modules.Calendar;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Sync;
@@ -145,5 +148,127 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
 
         // Cookie-gated endpoint must not accept a device api key.
         (await client.DeleteAsync("/api/accounts/alice@test")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    // ---- pool-account delete (BUG: DELETE /api/accounts/{ref} was legacy-only) --------------
+    //
+    // The unified surface returns pool accounts with AccountRef = poolAccount.Id (a random Guid).
+    // The DELETE handler must resolve that id through the adapter (pool-first) and delete from the
+    // POOL store, disabling any referencing pair on the canonical accountId. Before the fix it ran
+    // IConnectedAccountStore.GetAsync(ref) only, so a pool id 404'd and the App could not unlink a
+    // freshly connected account.
+
+    // Identity the cookie sign-in flow mints (CookieAuthHelper defaults).
+    private const string CookieSubject = "oid-123";
+    private const string CookieUpn = "user@test";
+    private const string CookieDisplay = "Test User";
+
+    // Pool-aware host: real EF pool store (so the user-scoped pool is exercised) + in-memory pairs.
+    // No legacy seed — these tests are about the POOL delete path.
+    private static WebApplicationFactory<Program> BuildPool() =>
+        new ServerTestFactory().WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IMicrosoftTokenService>();
+                services.AddSingleton<IMicrosoftTokenService>(
+                    new CookieAuthHelper.FakeIdentityTokenService { Upn = "" });
+
+                services.RemoveAll<ISyncPairStore>();
+                services.AddSingleton<ISyncPairStore, InMemorySyncPairStore>();
+            });
+        });
+
+    private static async Task<string> CookieUserIdAsync(WebApplicationFactory<Program> factory)
+    {
+        var users = factory.Services.GetRequiredService<IUserStore>();
+        var row = await users.UpsertAsync("microsoft", CookieSubject, CookieUpn, CookieDisplay);
+        return row.Id;
+    }
+
+    private static string ForeignUserId(WebApplicationFactory<Program> factory)
+    {
+        var users = factory.Services.GetRequiredService<IUserStore>();
+        return users.UpsertAsync("microsoft", "oid-other", "other@test", "Other User")
+            .GetAwaiter().GetResult().Id;
+    }
+
+    // Inserts a pool calendar account directly for an explicit user id and returns its accountId.
+    private static string SeedPoolAccount(
+        WebApplicationFactory<Program> factory, string userId, string email, string display)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        db.CalendarAccounts.Add(new CalendarAccountRow
+        {
+            Id = id,
+            UserId = userId,
+            Kind = AccountKind.Graph.ToString(),
+            Provider = "microsoft",
+            AccountEmail = email,
+            Scope = AccountScope.ReadWrite.ToString(),
+            DisplayName = display,
+            Status = "active",
+            ConnectedAt = DateTimeOffset.UtcNow,
+        });
+        db.SaveChanges();
+        return id;
+    }
+
+    [Fact]
+    public async Task Delete_pool_account_unlinks_and_disables_pairs()
+    {
+        using var factory = BuildPool();
+        var client = await AuthedClientAsync(factory);
+        var userId = await CookieUserIdAsync(factory);
+        var poolId = SeedPoolAccount(factory, userId, "pool@test", "Pool Account");
+
+        // A pair that references the pool account by its accountId as the destination.
+        var pairs = factory.Services.GetRequiredService<ISyncPairStore>();
+        await pairs.AddAsync(new SyncPair
+        {
+            Id = "p-pool",
+            Name = "p-pool",
+            Source = new Endpoint { Provider = "OutlookCom", AccountRef = "dev", CalendarId = "s" },
+            Destination = new Endpoint { Provider = "MicrosoftGraph", AccountRef = poolId, CalendarId = "d" },
+            IntervalMin = 10,
+        });
+
+        // The pool account is visible on the unified listing before the delete.
+        var before = await client.GetFromJsonAsync<JsonElement>("/api/accounts");
+        before.EnumerateArray().Select(a => a.GetProperty("accountRef").GetString())
+            .Should().Contain(poolId);
+
+        var resp = await client.DeleteAsync($"/api/accounts/{poolId}");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("affectedPairIds").EnumerateArray()
+            .Select(e => e.GetString()).Should().BeEquivalentTo(new[] { "p-pool" });
+
+        // The account is gone from the pool (so gone from the unified listing) and the pair is disabled.
+        var after = await client.GetFromJsonAsync<JsonElement>("/api/accounts");
+        after.EnumerateArray().Select(a => a.GetProperty("accountRef").GetString())
+            .Should().NotContain(poolId);
+        (await pairs.GetAsync("p-pool"))!.State.Should().Be("disabled");
+    }
+
+    [Fact]
+    public async Task Delete_other_users_pool_account_returns_404_and_keeps_it()
+    {
+        using var factory = BuildPool();
+        var client = await AuthedClientAsync(factory);
+        await CookieUserIdAsync(factory);
+        var foreign = ForeignUserId(factory);
+        var foreignPoolId = SeedPoolAccount(factory, foreign, "foreign@test", "Foreign Account");
+
+        var resp = await client.DeleteAsync($"/api/accounts/{foreignPoolId}");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        db.CalendarAccounts.Any(a => a.Id == foreignPoolId).Should().BeTrue();
     }
 }
