@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Avalonia;
 
@@ -15,6 +16,14 @@ internal static class Program
     private const string SingleInstanceMutexName = "Local\\ZyncMaster.App.SingleInstance";
     private const string ShowWindowEventName = "Local\\ZyncMaster.App.ShowWindow";
 
+    // Explicit Application User Model ID. Windows groups taskbar buttons and resolves the
+    // taskbar / Alt-Tab icon by the process AUMID; when it is left unset the shell derives a
+    // volatile one from the launching process, which under a debugger launch (and with the
+    // embedded WebView2 child window) lands on the generic shell icon instead of the window
+    // icon. Pinning a stable AUMID before any window is created makes the shell key this app's
+    // taskbar entry to its own window/exe icon consistently across launch contexts.
+    private const string AppUserModelId = "DevLabPe.ZyncMaster.App";
+
     // Signalled by a second launch to ask the running instance to bring its window forward.
     // Exposed so App can register a listener once its window/dispatcher are available.
     internal static EventWaitHandle? ShowWindowSignal { get; private set; }
@@ -22,6 +31,15 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Must run before any window is shown so the shell associates the taskbar entry with
+        // this app's icon rather than a derived generic one. Best effort: only Windows 7+ has
+        // the API, and a failure here must never block startup.
+        if (OperatingSystem.IsWindows())
+        {
+            try { SetCurrentProcessExplicitAppUserModelID(AppUserModelId); }
+            catch { /* Older shell or restricted host: fall back to shell default behaviour. */ }
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
         if (!createdNew)
         {
@@ -59,4 +77,9 @@ internal static class Program
             .UsePlatformDetect()
             .WithInterFont()
             .LogToTrace();
+
+    // shell32: pins the taskbar grouping / icon identity for this process.
+    [DllImport("shell32.dll", PreserveSig = false)]
+    private static extern void SetCurrentProcessExplicitAppUserModelID(
+        [MarshalAs(UnmanagedType.LPWStr)] string appId);
 }
