@@ -129,11 +129,45 @@ public static class DeviceEndpoints
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
 
-            var result = await service.RenameAsync(deviceId, req.Name, ct);
+            DeviceRenameResult? result;
+            try
+            {
+                result = await service.RenameAsync(deviceId, req.Name, ct);
+            }
+            catch (DeviceNameTakenException)
+            {
+                // 409 with a stable error code so the UI can show an inline "Name already used"
+                // message and keep the user on the field instead of treating it as a save success.
+                return Results.Conflict(new
+                {
+                    error = "name_taken",
+                    message = "That device name is already used by another of your devices.",
+                });
+            }
+
             if (result is null)
                 return Results.NotFound();
 
             return Results.Ok(new { deviceId = result.DeviceId, name = result.Name });
+        }).RequireApiKey();
+
+        // Live name-availability probe for the Settings "Device name" field. Authenticated by the
+        // device's api key; user-scoped through the store, and the CALLER's own device is excluded
+        // so re-typing the current name reports available. Returns { available: bool } for a valid
+        // name, or { available:false, reason:"invalid" } for a blank / over-long one.
+        app.MapGet("/api/devices/name-available", async (
+            string? name, HttpContext http, DeviceService service, CancellationToken ct) =>
+        {
+            var deviceId = http.User.FindFirst("deviceId")?.Value;
+            if (string.IsNullOrWhiteSpace(deviceId))
+                return Results.Unauthorized();
+
+            var trimmed = (name ?? string.Empty).Trim();
+            if (trimmed.Length == 0 || trimmed.Length > DeviceNameGenerator.MaxNameLength)
+                return Results.Ok(new { available = false, reason = "invalid" });
+
+            var available = await service.IsNameAvailableAsync(trimmed, excludeDeviceId: deviceId, ct);
+            return Results.Ok(new { available });
         }).RequireApiKey();
     }
 }

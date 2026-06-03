@@ -318,4 +318,85 @@ public class DeviceServiceTests
         result.Approved.Should().BeFalse();
         result.ApiKey.Should().BeNull();
     }
+
+    [Fact]
+    public async Task IsNameAvailable_true_when_free_false_when_taken_case_insensitive()
+    {
+        var (svc, store) = Build();
+        await store.AddAsync(new Device
+        {
+            Id = "d1", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Frodo",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+        });
+
+        (await svc.IsNameAvailableAsync("Gandalf", excludeDeviceId: null)).Should().BeTrue();
+        (await svc.IsNameAvailableAsync("frodo", excludeDeviceId: null)).Should().BeFalse("case-insensitive");
+        (await svc.IsNameAvailableAsync("  FRODO  ", excludeDeviceId: null)).Should().BeFalse("trim + ci");
+    }
+
+    [Fact]
+    public async Task IsNameAvailable_excludes_the_callers_own_device()
+    {
+        var (svc, store) = Build();
+        await store.AddAsync(new Device
+        {
+            Id = "self", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Keeper",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+        });
+
+        // Re-typing the device's own name is available when that device is excluded.
+        (await svc.IsNameAvailableAsync("Keeper", excludeDeviceId: "self")).Should().BeTrue();
+        (await svc.IsNameAvailableAsync("Keeper", excludeDeviceId: null)).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task IsNameAvailable_false_for_blank(string name)
+    {
+        var (svc, _) = Build();
+        (await svc.IsNameAvailableAsync(name, excludeDeviceId: null)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IsNameAvailable_false_for_too_long()
+    {
+        var (svc, _) = Build();
+        (await svc.IsNameAvailableAsync(new string('x', 101), excludeDeviceId: null)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Rename_to_name_used_by_another_device_throws_name_taken()
+    {
+        var (svc, store) = Build();
+        await store.AddAsync(new Device
+        {
+            Id = "a", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Device A",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+        });
+        await store.AddAsync(new Device
+        {
+            Id = "b", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Device B",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+        });
+
+        Func<Task> act = () => svc.RenameAsync("a", "device b");
+        await act.Should().ThrowAsync<DeviceNameTakenException>();
+    }
+
+    [Fact]
+    public async Task Rename_to_own_current_name_succeeds()
+    {
+        var (svc, store) = Build();
+        await store.AddAsync(new Device
+        {
+            Id = "a", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Mine",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+        });
+
+        var result = await svc.RenameAsync("a", "Mine");
+
+        result.Should().NotBeNull();
+        result!.Name.Should().Be("Mine");
+    }
 }

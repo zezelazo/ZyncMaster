@@ -42,4 +42,9 @@ public interface IPairsClient
     Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct);
 
     Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct);
+
+    // Live name-availability probe (GET /api/devices/name-available?name=...). The server scopes
+    // the check to the caller's user and EXCLUDES the caller's own device, so re-typing the current
+    // name reports available. Returns true when the name is free, false when taken or invalid.
+    Task<bool> CheckDeviceNameAvailableAsync(string apiKey, string name, CancellationToken ct);
 }

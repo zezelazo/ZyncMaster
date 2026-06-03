@@ -34,7 +34,9 @@ public class ApiKeyIndexedLookupTests : IClassFixture<ServerTestFactory>
             db.Devices.Add(new DeviceRow
             {
                 Id = Guid.NewGuid().ToString("N"),
-                Name = "Decoy",
+                // Globally unique: the class shares one factory/DB across its tests, so the per-user
+                // unique device-name index would reject a repeated decoy name across seed calls.
+                Name = "Decoy-" + Guid.NewGuid().ToString("N"),
                 KeyId = decoy.KeyId,
                 ApiKeyHash = ApiKeyHasher.Hash(decoy.Secret),
                 CreatedUtc = DateTimeOffset.UtcNow,
@@ -43,7 +45,7 @@ public class ApiKeyIndexedLookupTests : IClassFixture<ServerTestFactory>
         db.Devices.Add(new DeviceRow
         {
             Id = Guid.NewGuid().ToString("N"),
-            Name = "Target",
+            Name = "Target-" + Guid.NewGuid().ToString("N"),
             KeyId = generated.KeyId,
             ApiKeyHash = ApiKeyHasher.Hash(generated.Secret),
             CreatedUtc = DateTimeOffset.UtcNow,

@@ -38,6 +38,11 @@ public interface IEngineActions
     Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default);
     Task<DeviceInfo> RenameDeviceAsync(string name, CancellationToken ct = default);
 
+    // Live device-name availability check for the Settings field. Returns true when the name is
+    // free for this user (excluding the caller's own device), false when taken or invalid. Uses the
+    // device api key.
+    Task<bool> CheckDeviceNameAsync(string name, CancellationToken ct = default);
+
     // Writes a Simple-mode .txt export to a user-chosen path. Returns the saved path,
     // or null if the user cancelled the save dialog.
     Task<string?> GenerateTxtAsync(CancellationToken ct = default);

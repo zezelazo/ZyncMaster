@@ -185,6 +185,16 @@ public class UiBridgeTests
             return RenamedDeviceToReturn;
         }
 
+        public string? CheckDeviceNameArg;
+        public bool CheckDeviceNameToReturn = true;
+
+        public async Task<bool> CheckDeviceNameAsync(string name, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CheckDeviceNameArg = name;
+            return CheckDeviceNameToReturn;
+        }
+
         public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
@@ -642,6 +652,52 @@ public class UiBridgeTests
         transport.PushInbound(Message("renameDevice", "d3", "Laptop"));
 
         engine.RenameDeviceArg.Should().Be("Laptop");
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void CheckDeviceName_passes_name_and_returns_available_true()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { CheckDeviceNameToReturn = true };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("checkDeviceName", "d4", "{\"name\":\"Free Name\"}"));
+
+        engine.CheckDeviceNameArg.Should().Be("Free Name");
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("d4");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("available").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void CheckDeviceName_taken_returns_available_false()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { CheckDeviceNameToReturn = false };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("checkDeviceName", "d5", "{\"name\":\"Taken\"}"));
+
+        engine.CheckDeviceNameArg.Should().Be("Taken");
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("available").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public void CheckDeviceName_bare_string_payload_is_taken_as_name()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("checkDeviceName", "d6", "Laptop"));
+
+        engine.CheckDeviceNameArg.Should().Be("Laptop");
         LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
     }
 

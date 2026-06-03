@@ -172,6 +172,11 @@ public sealed class UiBridge
                 var device = await _engine.RenameDeviceAsync(ParseDeviceName(message.Payload), ct);
                 return JsonSerializer.Serialize(device, JsonOptions);
             }
+            case "checkDeviceName":
+            {
+                var available = await _engine.CheckDeviceNameAsync(ParseDeviceName(message.Payload), ct);
+                return JsonSerializer.Serialize(new { available }, JsonOptions);
+            }
             case "generateTxt":
             {
                 var path = await _engine.GenerateTxtAsync(ct);

@@ -58,6 +58,15 @@ public sealed class DeviceRow
     public string Id { get; set; } = "";
     public string UserId { get; set; } = "";
     public string Name { get; set; } = "";
+
+    // Lowercased copy of Name, used SOLELY as the uniqueness key. The unique index
+    // (UserId, NameLower) gives case-insensitive uniqueness on BOTH providers: SQL Server
+    // is usually CI by collation, but SQLite (tests, EnsureCreated) is binary/case-sensitive
+    // by default, so without this column 'Frodo' and 'frodo' would both insert on SQLite.
+    // The user-visible Name keeps the exact casing the user typed; NameLower is derived and
+    // never shown.
+    public string NameLower { get; set; } = "";
+
     public string ApiKeyHash { get; set; } = "";
     public string? TargetCalendarId { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }

@@ -59,6 +59,7 @@ public sealed class EfDeviceStore : IDeviceStore
         if (row is null)
             return;
         row.Name = device.Name;
+        row.NameLower = NameKey(device.Name);
         row.ApiKeyHash = device.ApiKeyHash;
         row.KeyId = device.KeyId;
         row.TargetCalendarId = device.TargetCalendarId;
@@ -141,6 +142,7 @@ public sealed class EfDeviceStore : IDeviceStore
             ? _currentUser.UserId
             : d.UserId,
         Name = d.Name,
+        NameLower = NameKey(d.Name),
         ApiKeyHash = d.ApiKeyHash,
         KeyId = d.KeyId,
         TargetCalendarId = d.TargetCalendarId,
@@ -151,6 +153,10 @@ public sealed class EfDeviceStore : IDeviceStore
         AppVersion = d.AppVersion,
         LeaseUntil = d.LeaseUntil,
     };
+
+    // The case-insensitive uniqueness key derived from the user-typed name. Trimmed + lowercased
+    // with the invariant culture so the comparison is stable across providers and cultures.
+    private static string NameKey(string? name) => (name ?? string.Empty).Trim().ToLowerInvariant();
 
     private static Device ToDomain(DeviceRow r) => new()
     {

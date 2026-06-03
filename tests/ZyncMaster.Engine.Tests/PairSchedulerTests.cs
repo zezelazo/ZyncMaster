@@ -94,6 +94,8 @@ public sealed class PairSchedulerTests
             => Task.FromResult(new DeviceInfo());
         public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct)
             => Task.FromResult(new DeviceInfo { Name = name });
+        public Task<bool> CheckDeviceNameAvailableAsync(string apiKey, string name, CancellationToken ct)
+            => Task.FromResult(true);
     }
 
     private static SyncPair Pair(string id, string state, int intervalMin, string sourceProvider)

@@ -24,7 +24,10 @@ public class ApiKeyAuthTests : IClassFixture<ServerTestFactory>
         var device = new Device
         {
             Id = Guid.NewGuid().ToString("N"),
-            Name = "Seeded",
+            // Unique per seed: the class shares one ServerTestFactory (IClassFixture) and therefore
+            // one database + the default user, so a fixed name would collide on the per-user unique
+            // device-name index across the class's tests.
+            Name = "Seeded-" + Guid.NewGuid().ToString("N"),
             ApiKeyHash = ApiKeyHasher.Hash(key),
             CreatedUtc = DateTimeOffset.UtcNow,
         };
