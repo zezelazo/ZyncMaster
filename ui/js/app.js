@@ -1982,7 +1982,7 @@ function connectCalendarAccount(btn) {
   if (btn) btn.disabled = true;
   Bridge.call('connectCalendar', JSON.stringify({ scope: 'readwrite' }), 210000)
     .then((r) => {
-      if (r && r.Connected) {
+      if (r && r.connected) {
         announce('Calendar account connected.');
         live.accounts = null;
         return loadAccounts().then(() => {
@@ -1990,11 +1990,11 @@ function connectCalendarAccount(btn) {
           if (state.view === 'calendar-settings') rerender();
         });
       }
-      if (r && r.Cancelled) {
+      if (r && r.cancelled) {
         if (span) span.textContent = 'Cancelled';
       } else {
-        if (span) span.textContent = (r && r.Error) ? 'Failed' : 'Failed';
-        announce((r && r.Error) ? `Connect failed: ${r.Error}` : 'Connect failed.');
+        if (span) span.textContent = 'Failed';
+        announce((r && r.error) ? `Connect failed: ${r.error}` : 'Connect failed.');
       }
     })
     .catch(() => { if (span) span.textContent = 'Failed'; announce('Connect failed.'); })

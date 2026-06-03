@@ -45,8 +45,10 @@ public sealed class DeviceRegisterRequestValidator : AbstractValidator<DeviceReg
     {
         // Name is OPTIONAL on registration: when blank/null the server mints a unique geek name
         // derived from the user's account (see DeviceNameGenerator). When supplied it is capped so a
-        // single field cannot blow past storage limits.
-        RuleFor(x => x.Name).MaximumLength(256);
+        // single field cannot blow past storage limits. Capped at 100 to match the rename
+        // validator and DeviceNameGenerator.MaxNameLength, so a registered name is always
+        // editable through rename without tripping a stricter limit.
+        RuleFor(x => x.Name).MaximumLength(100);
         RuleFor(x => x.AppVersion).MaximumLength(64);
     }
 }
