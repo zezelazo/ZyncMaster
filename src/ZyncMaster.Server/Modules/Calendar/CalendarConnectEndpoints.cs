@@ -1,3 +1,4 @@
+using FluentValidation;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
@@ -53,26 +54,45 @@ public static class CalendarConnectEndpoints
             if (!TryReadLoopback(context, out var port, out var nonce, out var error))
                 return Results.BadRequest(error);
 
-            var calendarScopes = scope == AccountScope.ReadWrite
-                ? options.CalendarReadWriteScopes
-                : options.CalendarReadScopes;
-
-            var csrf = ApiKeyGenerator.Generate();
-            var stateModel = new CalendarOAuthState
-            {
-                UserId = userId,
-                Scope = scope.ToString()!,
-                Port = port,
-                Nonce = nonce,
-                Csrf = csrf,
-            };
-            var state = ProtectState(dp, stateModel);
-
-            AppendCsrfCookie(context, csrf);
-
-            // prompt=select_account: let the user pick which Microsoft account to connect.
-            var authorizeUrl = BuildAuthorizeUrl(options, calendarScopes, "select_account", state);
+            // prompt=select_account: let the user pick which Microsoft account to connect. The
+            // signed state + CSRF cookie are produced by the shared helper so the GET (redirect)
+            // and the POST /start (JSON) flows can never drift apart.
+            var authorizeUrl = BuildConnectStartUrl(
+                context, dp, options, userId, scope.Value, port, nonce, "select_account");
             return Results.Redirect(authorizeUrl);
+        }).RequireIdentityBearer();
+
+        // 1b) Start a calendar OAuth connection and RETURN the authorize URL as JSON instead of a
+        //     302. The desktop App holds an IdentityBearer but no browser cookie, so it cannot
+        //     consume the redirect from (1); it calls this, then opens the returned authorizeUrl in
+        //     the system browser. Behaviour is otherwise identical to (1) — same signed state, same
+        //     CSRF cookie, same authorize URL — mirroring how upgrade-scope returns { authorizeUrl }.
+        //     REQUIRES IdentityBearer: the userId is the token's, NEVER the body's.
+        app.MapPost("/api/calendar/connect/graph/start", (
+            ConnectGraphStartRequest? request,
+            HttpContext context,
+            ICurrentUserAccessor currentUser,
+            IOptions<ServerOptions> opts,
+            IDataProtectionProvider dp) =>
+        {
+            var body = request ?? new ConnectGraphStartRequest(null, 0, null);
+
+            var validation = new ConnectGraphStartRequestValidator().Validate(body);
+            if (!validation.IsValid)
+                return Results.ValidationProblem(validation.ToDictionary());
+
+            var options = opts.Value;
+            var userId = currentUser.UserId;
+
+            // Empty/null scope defaults to read/write (the common case for a sync destination); any
+            // non-empty value must be a valid scope, which the validator already guaranteed.
+            var scope = string.IsNullOrWhiteSpace(body.Scope)
+                ? AccountScope.ReadWrite
+                : ParseScope(body.Scope)!.Value;
+
+            var authorizeUrl = BuildConnectStartUrl(
+                context, dp, options, userId, scope, body.Port, body.Nonce!, "select_account");
+            return Results.Ok(new { authorizeUrl });
         }).RequireIdentityBearer();
 
         // 5) Start an incremental-consent upgrade (read -> read/write) for an EXISTING account
@@ -425,6 +445,40 @@ public static class CalendarConnectEndpoints
         });
     }
 
+    // Shared start of a fresh (no AccountId) calendar connection: builds the signed state, sets
+    // the double-submit CSRF cookie, and returns the Microsoft authorize URL. Used by both the GET
+    // /calendar/connect/graph (302) and the POST /api/calendar/connect/graph/start (JSON) flows so
+    // the state shape, scopes and cookie can never diverge between them (DRY).
+    private static string BuildConnectStartUrl(
+        HttpContext context,
+        IDataProtectionProvider dp,
+        ServerOptions options,
+        string userId,
+        AccountScope scope,
+        int port,
+        string nonce,
+        string prompt)
+    {
+        var calendarScopes = scope == AccountScope.ReadWrite
+            ? options.CalendarReadWriteScopes
+            : options.CalendarReadScopes;
+
+        var csrf = ApiKeyGenerator.Generate();
+        var stateModel = new CalendarOAuthState
+        {
+            UserId = userId,
+            Scope = scope.ToString(),
+            Port = port,
+            Nonce = nonce,
+            Csrf = csrf,
+        };
+        var state = ProtectState(dp, stateModel);
+
+        AppendCsrfCookie(context, csrf);
+
+        return BuildAuthorizeUrl(options, calendarScopes, prompt, state);
+    }
+
     private static string BuildAuthorizeUrl(
         ServerOptions options, string scopes, string prompt, string state) =>
         $"{options.Authority.TrimEnd('/')}/authorize" +
@@ -520,5 +574,34 @@ public static class CalendarConnectEndpoints
     {
         [System.Text.Json.Serialization.JsonPropertyName("deviceId")]
         public string? DeviceId { get; set; }
+    }
+}
+
+// Body for POST /api/calendar/connect/graph/start. NOTE: there is intentionally NO userId field —
+// the owner is the identity-bearer token's user, never a value from the body. Scope is optional and
+// defaults to read/write when empty/null; a non-empty value must be 'read' or 'readwrite'.
+public sealed record ConnectGraphStartRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("scope")] string? Scope,
+    [property: System.Text.Json.Serialization.JsonPropertyName("port")] int Port,
+    [property: System.Text.Json.Serialization.JsonPropertyName("nonce")] string? Nonce);
+
+public sealed class ConnectGraphStartRequestValidator : AbstractValidator<ConnectGraphStartRequest>
+{
+    public ConnectGraphStartRequestValidator()
+    {
+        // Empty/null scope is allowed (defaults to read/write). A provided value must be valid.
+        RuleFor(x => x.Scope)
+            .Must(s => string.IsNullOrWhiteSpace(s)
+                || string.Equals(s, "read", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(s, "readwrite", StringComparison.OrdinalIgnoreCase))
+            .WithMessage("Invalid scope (expected 'read' or 'readwrite').");
+
+        RuleFor(x => x.Port)
+            .InclusiveBetween(1024, 65535)
+            .WithMessage("Invalid loopback port.");
+
+        RuleFor(x => x.Nonce)
+            .NotEmpty()
+            .WithMessage("Missing nonce.");
     }
 }

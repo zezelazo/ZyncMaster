@@ -182,6 +182,161 @@ public class CalendarConnectEndpointsTests
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // ---- connect/graph/start (JSON): the App's cookie-less entry point ----------------------
+
+    [Fact]
+    public async Task ConnectGraphStart_without_bearer_returns_401()
+    {
+        using var factory = CreateFactory(new FakeTokenService());
+        var client = NoRedirectClient(factory);
+
+        var req = WithBody(
+            Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", null),
+            new { scope = "read", port = 51960, nonce = "n1" });
+
+        (await client.SendAsync(req)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task ConnectGraphStart_returns_authorize_url_with_state_and_redirect_uri()
+    {
+        using var factory = CreateFactory(new FakeTokenService());
+        var (token, _) = IssueBearer(factory, "start-ok", "start-ok@test");
+        var client = NoRedirectClient(factory);
+
+        var resp = await client.SendAsync(WithBody(
+            Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", token),
+            new { scope = "readwrite", port = 51961, nonce = "n1" }));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var authorizeUrl = doc.RootElement.GetProperty("authorizeUrl").GetString();
+        authorizeUrl.Should().NotBeNullOrEmpty();
+
+        var uri = new Uri(authorizeUrl!);
+        // Points at the Microsoft authority's /authorize endpoint.
+        uri.Host.Should().Contain("microsoft");
+        uri.AbsolutePath.Should().EndWith("/authorize");
+        // Carries a non-empty signed state.
+        ExtractQueryValue(uri, "state").Should().NotBeNullOrEmpty();
+        // The redirect_uri mirrors the server's configured CalendarRedirectUri exactly (same URL
+        // the GET flow uses), proving the App-facing JSON entry point and the redirect entry point
+        // hand Microsoft the identical callback.
+        ExtractQueryValue(uri, "redirect_uri").Should().Be(ConfiguredCalendarRedirectUri(factory));
+        // read/write scope was requested.
+        ExtractQueryValue(uri, "scope").Should().Contain("Calendars.ReadWrite");
+    }
+
+    [Fact]
+    public async Task ConnectGraphStart_sets_csrf_cookie()
+    {
+        using var factory = CreateFactory(new FakeTokenService());
+        var (token, _) = IssueBearer(factory, "start-cookie", "start-cookie@test");
+        var client = NoRedirectClient(factory);
+
+        var resp = await client.SendAsync(WithBody(
+            Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", token),
+            new { scope = "read", port = 51962, nonce = "n1" }));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        resp.Headers.GetValues("Set-Cookie")
+            .Any(c => c.StartsWith(CalendarStateCookieName + "=", StringComparison.Ordinal))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ConnectGraphStart_empty_scope_defaults_to_readwrite()
+    {
+        using var factory = CreateFactory(new FakeTokenService());
+        var (token, _) = IssueBearer(factory, "start-default", "start-default@test");
+        var client = NoRedirectClient(factory);
+
+        var resp = await client.SendAsync(WithBody(
+            Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", token),
+            new { port = 51963, nonce = "n1" }));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var uri = new Uri(doc.RootElement.GetProperty("authorizeUrl").GetString()!);
+        ExtractQueryValue(uri, "scope").Should().Contain("Calendars.ReadWrite");
+    }
+
+    [Theory]
+    [InlineData("read", 80, "n")]        // port below 1024
+    [InlineData("read", 70000, "n")]     // port above 65535
+    [InlineData("read", 51964, "")]      // empty nonce
+    [InlineData("bogus", 51964, "n")]    // invalid scope
+    public async Task ConnectGraphStart_rejects_bad_scope_port_or_nonce(string scope, int port, string nonce)
+    {
+        using var factory = CreateFactory(new FakeTokenService());
+        var (token, _) = IssueBearer(factory, $"start-bad-{scope}-{port}-{nonce}", "start-bad@test");
+        var client = NoRedirectClient(factory);
+
+        var resp = await client.SendAsync(WithBody(
+            Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", token),
+            new { scope, port, nonce }));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ConnectGraphStart_state_user_comes_from_token_not_body()
+    {
+        // The body smuggles a foreign userId; the endpoint must ignore it and pin the TOKEN's user
+        // into the signed state. We unprotect the returned state with the host's own data protector
+        // (same trick the upgrade-foreign-account test uses) and assert the userId is the token's.
+        using var factory = CreateFactory(new FakeTokenService());
+        var (token, tokenUserId) = IssueBearer(factory, "start-pin", "start-pin@test");
+        var client = NoRedirectClient(factory);
+
+        var resp = await client.SendAsync(WithBody(
+            Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", token),
+            new { scope = "read", port = 51965, nonce = "n1", userId = "attacker-user-id" }));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var state = ExtractQueryValue(
+            new Uri(doc.RootElement.GetProperty("authorizeUrl").GetString()!), "state");
+
+        var stateUserId = UnprotectStateUserId(factory, state);
+        stateUserId.Should().Be(tokenUserId);
+        stateUserId.Should().NotBe("attacker-user-id");
+    }
+
+    [Fact]
+    public async Task ConnectGraphStart_state_drives_callback_and_creates_account()
+    {
+        // End-to-end: the JSON state must be consumable by the shared callback exactly like the GET
+        // flow's state, creating the account under the token's user.
+        var fake = new FakeTokenService();
+        using var factory = CreateFactory(fake);
+        var (token, userId) = IssueBearer(factory, "start-e2e", "start-e2e@test");
+        var client = NoRedirectClient(factory);
+
+        var start = await client.SendAsync(WithBody(
+            Bearer(HttpMethod.Post, "/api/calendar/connect/graph/start", token),
+            new { scope = "readwrite", port = 51966, nonce = "e2e-nonce" }));
+        start.StatusCode.Should().Be(HttpStatusCode.OK);
+        var csrfCookie = ExtractCookie(start, CalendarStateCookieName);
+        using var startDoc = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
+        var state = ExtractQueryValue(
+            new Uri(startDoc.RootElement.GetProperty("authorizeUrl").GetString()!), "state");
+
+        var callback = Bearer(HttpMethod.Get,
+            $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
+        callback.Headers.Add("Cookie", csrfCookie);
+        var cb = await client.SendAsync(callback);
+        cb.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        cb.Headers.Location!.Port.Should().Be(51966);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        var row = db.CalendarAccounts.Single(a => a.UserId == userId);
+        row.Scope.Should().Be(AccountScope.ReadWrite.ToString());
+        row.Kind.Should().Be(AccountKind.Graph.ToString());
+    }
+
     // ---- callback: creates the account under the state's user ------------------------------
 
     private static async Task<(string state, string csrfCookie)> StartConnect(
@@ -587,5 +742,30 @@ public class CalendarConnectEndpointsTests
     {
         req.Content = JsonContent.Create(body);
         return req;
+    }
+
+    // The server's configured CalendarRedirectUri (read from the live host options) so a test can
+    // assert the authorize URL hands Microsoft the exact callback the server expects.
+    private static string ConfiguredCalendarRedirectUri(WebApplicationFactory<Program> factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var opts = scope.ServiceProvider
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>();
+        return opts.Value.CalendarRedirectUri;
+    }
+
+    // Unprotects a signed calendar state blob with the host's own data protector and returns its
+    // userId, so a test can prove the userId was pinned from the token (not the request body).
+    private static string UnprotectStateUserId(WebApplicationFactory<Program> factory, string state)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dp = scope.ServiceProvider
+            .GetRequiredService<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>();
+        var protector = dp.CreateProtector("ZyncMaster.CalendarOAuthState");
+        var s = state.Replace('-', '+').Replace('_', '/');
+        s += (s.Length % 4) switch { 2 => "==", 3 => "=", _ => "" };
+        var json = protector.Unprotect(Convert.FromBase64String(s));
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("userId").GetString()!;
     }
 }
