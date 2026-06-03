@@ -1306,17 +1306,19 @@ function renderConfig(root) {
   // Account & device — identity (who) + this device (where), consolidated into one card.
   root.append(accountAndDeviceSection());
 
-  // Calendar — navigable module. Show a live summary value (account/calendar count) when known.
-  if (Bridge.available) ensureCalendarData('config');
-  const accounts = live.accounts || [];
-  let calValue = '';
-  if (Bridge.available) {
+  // Calendar — navigable module. Desktop App only: renderCalendarSettings bounces back to the hub
+  // unless Bridge.desktopApp, so showing the row in mock/web would be a dead-end (a flash that
+  // navigates and immediately returns). Show a live summary value (account count) when known.
+  if (Bridge.desktopApp) {
+    ensureCalendarData('config');
+    const accounts = live.accounts || [];
+    let calValue = '';
     if (live.accounts === null) calValue = '';
     else if (accounts.length === 0) calValue = 'Not connected';
     else calValue = `${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}`;
+    root.append(el('div', { class: 'glass glass--card config-section' },
+      navRow({ label: 'Calendar', sublabel: 'Accounts, target, schedule, export', value: calValue, onClick: () => navigate('calendar-settings') })));
   }
-  root.append(el('div', { class: 'glass glass--card config-section' },
-    navRow({ label: 'Calendar', sublabel: 'Accounts, target, schedule, export', value: calValue, onClick: () => navigate('calendar-settings') })));
 
   // Appearance.
   root.append(appearanceSection());
@@ -1962,7 +1964,7 @@ function unlinkAccount(accountRef) {
       .then(() => loadAccounts())
       .then(() => {
         announce('Account unlinked.');
-        if (state.view === 'config' || state.view === 'calendar-settings') rerender();
+        if (state.view === 'config' || state.view === 'calendar-settings') softRepaint();
       })
       .catch(() => { announce('Unlink failed.'); });
   };
@@ -1987,7 +1989,7 @@ function connectCalendarAccount(btn) {
         live.accounts = null;
         return loadAccounts().then(() => {
           (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef); });
-          if (state.view === 'calendar-settings') rerender();
+          if (state.view === 'calendar-settings') softRepaint();
         });
       }
       if (r && r.Cancelled) {
