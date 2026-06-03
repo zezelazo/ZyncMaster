@@ -87,6 +87,11 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<DeviceInfo> RenameDeviceAsync(string name, CancellationToken ct = default)
         => throw NotConfigured();
 
+    // No engine yet → there is no device to check against, so report "not available" rather than
+    // throwing: the UI's live check degrades to a quiet ✗ instead of a noisy error.
+    public Task<bool> CheckDeviceNameAsync(string name, CancellationToken ct = default)
+        => Task.FromResult(false);
+
     // The basic .txt export does not need the server, but it does need a configured
     // CalExport path; without a valid engine config we cannot run it, so report cancelled.
     public Task<string?> GenerateTxtAsync(CancellationToken ct = default)

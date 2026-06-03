@@ -1,12 +1,27 @@
 ﻿using System.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace ZyncMaster.Server;
+
+// Thrown when a rename/register would land on a device name already taken by ANOTHER device of the
+// same user (case-insensitive). The endpoint maps this to a 409 with error code "name_taken" so the
+// UI can show an inline "Name already used" message rather than an opaque 500.
+public sealed class DeviceNameTakenException : Exception
+{
+    public DeviceNameTakenException(string name)
+        : base($"The device name '{name}' is already used by another device.") { }
+}
 
 public sealed class DeviceService
 {
     private const string CodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     private const int CodeLength = 6;
+
+    // A few register retries are enough to step past a same-user collision on the generated name: a
+    // single user racing several nameless registrations at once is rare, and each retry regenerates
+    // from the freshly re-read taken-set so it picks the next free character/suffix.
+    private const int RegisterCollisionRetries = 5;
 
     private readonly IDeviceStore _store;
     private readonly ICurrentUserAccessor _currentUser;
@@ -105,35 +120,58 @@ public sealed class DeviceService
         var now = DateTimeOffset.UtcNow;
         var leaseUntil = now.AddMinutes(LeaseTtlMinutes);
 
-        // When the App registers without a name, mint a friendly, unique geek name derived from the
-        // user's account (email local-part / display name) so every device has a readable handle the
-        // user can later rename. Unique among the user's existing device names.
-        var name = string.IsNullOrWhiteSpace(request.Name)
-            ? await GenerateUniqueNameAsync(ct)
-            : request.Name.Trim();
+        var explicitName = string.IsNullOrWhiteSpace(request.Name) ? null : request.Name.Trim();
 
-        var device = new Device
+        // Insert with a retry loop so a same-user collision on the unique (UserId, NameLower) index
+        // cannot fail the registration. For a generated (nameless) request we regenerate from the
+        // freshly re-read taken-set each attempt (it picks the next free character/suffix); for an
+        // explicit name we surface a clean "name_taken" instead of looping (the user must choose).
+        for (var attempt = 0; ; attempt++)
         {
-            Id = Guid.NewGuid().ToString("N"),
-            UserId = _currentUser.UserId,
-            Name = name,
-            ApiKeyHash = ApiKeyHasher.Hash(generated.Secret),
-            KeyId = generated.KeyId,
-            Platform = NormalizePlatform(request.Platform),
-            HasOutlookCom = request.HasOutlookCom,
-            AppVersion = string.IsNullOrWhiteSpace(request.AppVersion) ? null : request.AppVersion.Trim(),
-            CreatedUtc = now,
-            LastSeenUtc = now,
-            LeaseUntil = leaseUntil,
-        };
-        await _store.AddAsync(device, ct);
+            // When the App registers without a name, mint a friendly, unique geek name derived from
+            // the user's account (email local-part / display name) so every device has a readable
+            // handle the user can later rename. Unique among the user's existing device names.
+            var name = explicitName ?? await GenerateUniqueNameAsync(ct);
 
-        return new DeviceRegisterResult
-        {
-            DeviceId = device.Id,
-            ApiKey = generated.ApiKey,
-            LeaseUntil = leaseUntil,
-        };
+            var device = new Device
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                UserId = _currentUser.UserId,
+                Name = name,
+                ApiKeyHash = ApiKeyHasher.Hash(generated.Secret),
+                KeyId = generated.KeyId,
+                Platform = NormalizePlatform(request.Platform),
+                HasOutlookCom = request.HasOutlookCom,
+                AppVersion = string.IsNullOrWhiteSpace(request.AppVersion) ? null : request.AppVersion.Trim(),
+                CreatedUtc = now,
+                LastSeenUtc = now,
+                LeaseUntil = leaseUntil,
+            };
+
+            try
+            {
+                await _store.AddAsync(device, ct);
+            }
+            catch (DbUpdateException ex) when (IsNameConflict(ex))
+            {
+                // An explicit name collided: nothing to regenerate, so report it to the caller.
+                if (explicitName is not null)
+                    throw new DeviceNameTakenException(explicitName);
+
+                // A generated name raced another registration of the same user. Regenerate and retry
+                // a bounded number of times; if even that is exhausted, rethrow the underlying error.
+                if (attempt >= RegisterCollisionRetries)
+                    throw;
+                continue;
+            }
+
+            return new DeviceRegisterResult
+            {
+                DeviceId = device.Id,
+                ApiKey = generated.ApiKey,
+                LeaseUntil = leaseUntil,
+            };
+        }
     }
 
     // Renews the lease for the device identified by the api-key principal. Returns null when the
@@ -172,9 +210,50 @@ public sealed class DeviceService
             return null;
 
         var trimmed = name.Trim();
-        await _store.UpdateAsync(device with { Name = trimmed }, ct);
+
+        // Reject a name already used by ANOTHER device of the same user (case-insensitive); keeping
+        // the device's own current name is always fine (no self-collision). This is the explicit
+        // pre-check; the unique index is the backstop against the concurrent race, surfaced below as
+        // the same name_taken error.
+        if (!await IsNameAvailableAsync(trimmed, excludeDeviceId: device.Id, ct))
+            throw new DeviceNameTakenException(trimmed);
+
+        try
+        {
+            await _store.UpdateAsync(device with { Name = trimmed }, ct);
+        }
+        catch (DbUpdateException ex) when (IsNameConflict(ex))
+        {
+            throw new DeviceNameTakenException(trimmed);
+        }
 
         return new DeviceRenameResult { DeviceId = device.Id, Name = trimmed };
+    }
+
+    // True when `name` (trimmed) is free for the current user's device pool, case-insensitive,
+    // EXCLUDING excludeDeviceId (the caller's own device) — so re-typing the device's current name
+    // reports available. A blank or over-long name is NOT available (the caller treats it as
+    // invalid). Used by the live availability endpoint and as the rename pre-check.
+    public async Task<bool> IsNameAvailableAsync(string name, string? excludeDeviceId, CancellationToken ct = default)
+    {
+        var trimmed = (name ?? string.Empty).Trim();
+        if (trimmed.Length == 0 || trimmed.Length > DeviceNameGenerator.MaxNameLength)
+            return false;
+
+        var key = trimmed.ToLowerInvariant();
+        var devices = await _store.ListAsync(ct);
+        return !devices.Any(d =>
+            (excludeDeviceId is null || d.Id != excludeDeviceId)
+            && string.Equals((d.Name ?? string.Empty).Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // True when a DbUpdateException is the unique-constraint violation on the per-user device-name
+    // index. Matched on the column / index names so it works on BOTH SQLite (tests) and SQL Server.
+    private static bool IsNameConflict(DbUpdateException ex)
+    {
+        var message = ((Exception?)ex.InnerException ?? ex).Message;
+        return message.Contains("NameLower", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("IX_Devices_UserId_NameLower", StringComparison.OrdinalIgnoreCase);
     }
 
     // Returns the device identified by the api-key principal (the caller's own device), or null if

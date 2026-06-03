@@ -386,6 +386,36 @@
 }
 .field-input.is-invalid { border-color: var(--err); }
 
+/* Device-name field with a live ✓/✗ availability indicator (email-signup style). The wrapper
+   positions the glyph over the right edge of the input; the input reserves room for it. */
+.name-field { position: relative; display: inline-flex; align-items: center; }
+.name-field .field-input { padding-right: 30px; }
+.name-check {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  pointer-events: none;
+}
+.name-check--ok { color: var(--ok); }
+.name-check--err { color: var(--err); }
+.name-check--busy { color: var(--ink-2); }
+.name-check__dot {
+  width: 7px; height: 7px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+  opacity: 0.45;
+  animation: name-check-pulse 0.9s ease-in-out infinite;
+}
+@keyframes name-check-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.7; }
+}
+
 .toggle {
   position: relative;
   width: 38px; height: 22px;

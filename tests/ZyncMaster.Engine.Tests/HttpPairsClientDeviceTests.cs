@@ -110,4 +110,43 @@ public sealed class HttpPairsClientDeviceTests
         Func<Task> act = () => client.RenameDeviceAsync(null!, "x", CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
+
+    [Fact]
+    public async Task CheckDeviceNameAvailable_GetsWithKeyAndQueryAndParsesAvailableTrue()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK, @"{ ""available"": true }");
+
+        var available = await client.CheckDeviceNameAvailableAsync(Key, "Office Laptop", CancellationToken.None);
+
+        stub.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        // The name is percent-escaped on the wire; RequestUri.ToString() shows the decoded form.
+        stub.LastRequest!.RequestUri!.AbsolutePath.Should().Be("/api/devices/name-available");
+        stub.LastRequest!.RequestUri!.Query.Should().Be("?name=Office%20Laptop");
+        stub.LastApiKey.Should().Be(Key);
+        available.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CheckDeviceNameAvailable_ParsesAvailableFalse()
+    {
+        var (client, _) = Make(HttpStatusCode.OK, @"{ ""available"": false }");
+
+        (await client.CheckDeviceNameAvailableAsync(Key, "Taken", CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CheckDeviceNameAvailable_InvalidReasonReportsFalse()
+    {
+        var (client, _) = Make(HttpStatusCode.OK, @"{ ""available"": false, ""reason"": ""invalid"" }");
+
+        (await client.CheckDeviceNameAvailableAsync(Key, "   ", CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CheckDeviceNameAvailable_NullKey_Throws()
+    {
+        var (client, _) = Make(HttpStatusCode.OK, "{}");
+        Func<Task> act = () => client.CheckDeviceNameAvailableAsync(null!, "x", CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
 }

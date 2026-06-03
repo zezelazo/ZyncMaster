@@ -1354,8 +1354,16 @@ function accountAndDeviceSection() {
     const currentName = (live.device && live.device.name) || settings.deviceName || '';
     const nameInput = el('input', { class: 'field-input', value: currentName, placeholder: 'Name this device' });
     const feedback = el('span', { class: 'cfg-row__hint', style: 'margin-left:10px' });
-    nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
-    nameInput.addEventListener('change', () => saveDeviceName(nameInput, feedback));
+    // Live ✓/✗ availability indicator, like an email-signup "this name is taken" hint. Sits inside
+    // the input wrapper so the glyph overlays the right edge of the field.
+    const indicator = el('span', { class: 'name-check' });
+    const inputWrap = el('div', { class: 'name-field' }, nameInput, indicator);
+
+    nameInput.addEventListener('input', () => {
+      settings.deviceName = nameInput.value;
+      scheduleDeviceNameCheck(nameInput, indicator, feedback);
+    });
+    nameInput.addEventListener('change', () => saveDeviceName(nameInput, feedback, indicator));
     // Lazy-load the device once, then repaint in place (no entrance replay).
     if (live.device === null && !live.deviceLoading) {
       live.deviceLoading = true;
@@ -1364,7 +1372,7 @@ function accountAndDeviceSection() {
         .catch(() => { live.device = {}; })
         .finally(() => { live.deviceLoading = false; if (state.view === 'config') softRepaint(); });
     }
-    rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint' }, document.createTextNode('Visible to your other devices'), feedback), nameInput));
+    rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint' }, document.createTextNode('Visible to your other devices'), feedback), inputWrap));
   } else {
     if (!settings.deviceName) settings.deviceName = "Daniel's MacBook";
     const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
@@ -2174,17 +2182,107 @@ function togglePair(id) {
   rerender();
 }
 
+// ---------------- Device-name live availability (✓/✗) ----------------
+// Tracks the latest known availability so saveDeviceName can refuse a name we already know is
+// taken without a round-trip. { name, state } where state is 'available' | 'taken' | 'invalid'.
+const deviceNameCheck = { name: null, state: null };
+let deviceNameCheckTimer = null;
+let deviceNameCheckSeq = 0;
+
+const DEVICE_NAME_DEBOUNCE_MS = 400;
+const DEVICE_NAME_MAX = 100;
+
+// Paints the indicator span: ✓ (available, aqua/ok), ✗ (taken/invalid, err), a subtle dot while
+// checking, or nothing when the field is empty / unchanged. `hint` (the row hint span) carries a
+// short message for the taken/invalid states.
+function renderNameCheck(indicator, hint, st) {
+  if (!indicator) return;
+  indicator.innerHTML = '';
+  indicator.className = 'name-check';
+  const setHint = (text, color) => { if (hint) { hint.textContent = text; hint.style.color = color || ''; } };
+
+  if (st === 'available') {
+    indicator.classList.add('name-check--ok');
+    indicator.innerHTML = icon('check', { size: 15, stroke: 2.4 });
+    setHint('', '');
+  } else if (st === 'taken') {
+    indicator.classList.add('name-check--err');
+    indicator.innerHTML = icon('close', { size: 15, stroke: 2.4 });
+    setHint('Name already used', 'var(--err)');
+  } else if (st === 'invalid') {
+    indicator.classList.add('name-check--err');
+    indicator.innerHTML = icon('close', { size: 15, stroke: 2.4 });
+    setHint(`Use 1–${DEVICE_NAME_MAX} characters`, 'var(--err)');
+  } else if (st === 'checking') {
+    indicator.classList.add('name-check--busy');
+    indicator.innerHTML = '<span class="name-check__dot"></span>';
+    setHint('', '');
+  } else {
+    setHint('', '');
+  }
+}
+
+// Debounced live check as the user types: ~400ms after the last keystroke, ask the host whether
+// the trimmed name is free (excluding this device). Mock has no bridge, so the caller never wires
+// this in mock mode. Empty / unchanged names clear the indicator; over-long names flag invalid
+// without a round-trip.
+function scheduleDeviceNameCheck(input, indicator, hint) {
+  if (!Bridge.available || !input) return;
+  const name = (input.value || '').trim();
+
+  if (deviceNameCheckTimer) { clearTimeout(deviceNameCheckTimer); deviceNameCheckTimer = null; }
+
+  // Empty, or unchanged from the device's current name → no indicator (nothing to validate).
+  if (!name || (live.device && live.device.name === name)) {
+    deviceNameCheck.name = name; deviceNameCheck.state = null;
+    renderNameCheck(indicator, hint, null);
+    return;
+  }
+  if (name.length > DEVICE_NAME_MAX) {
+    deviceNameCheck.name = name; deviceNameCheck.state = 'invalid';
+    renderNameCheck(indicator, hint, 'invalid');
+    return;
+  }
+
+  renderNameCheck(indicator, hint, 'checking');
+  const seq = ++deviceNameCheckSeq;
+  deviceNameCheckTimer = setTimeout(() => {
+    Bridge.call('checkDeviceName', JSON.stringify({ name }))
+      .then((r) => {
+        if (seq !== deviceNameCheckSeq) return; // a newer keystroke superseded this check
+        const st = (r && r.available) ? 'available' : 'taken';
+        deviceNameCheck.name = name; deviceNameCheck.state = st;
+        renderNameCheck(indicator, hint, st);
+      })
+      .catch(() => {
+        if (seq !== deviceNameCheckSeq) return;
+        deviceNameCheck.name = name; deviceNameCheck.state = null;
+        renderNameCheck(indicator, hint, null); // a transient failure: clear, don't block save
+      });
+  }, DEVICE_NAME_DEBOUNCE_MS);
+}
+
 // ---------------- Config push to host ----------------
 // Renames the current device in place (hot rename) through the host. Shows inline feedback next
 // to the input: "Saving…", then "Saved" or an error. A no-op when the name is unchanged or blank.
-// On success live.device is updated so a later render keeps showing the real name.
-function saveDeviceName(input, feedback) {
+// On success live.device is updated so a later render keeps showing the real name. If the name is
+// known-taken (or the server returns name_taken) the rename is refused with an inline ✗.
+function saveDeviceName(input, feedback, indicator) {
   if (!Bridge.available || !input) return;
   const name = (input.value || '').trim();
   const setMsg = (text, color) => { if (feedback) { feedback.textContent = text; feedback.style.color = color || ''; } };
 
   if (!name) { setMsg('Name cannot be empty', 'var(--err)'); return; }
   if (live.device && live.device.name === name) { setMsg(''); return; }
+  if (name.length > DEVICE_NAME_MAX) {
+    renderNameCheck(indicator, feedback, 'invalid');
+    return;
+  }
+  // Already known to be taken (from the live check): don't even try to rename.
+  if (deviceNameCheck.name === name && deviceNameCheck.state === 'taken') {
+    renderNameCheck(indicator, feedback, 'taken');
+    return;
+  }
 
   setMsg('Saving…', 'var(--ink-2)');
   Bridge.call('renameDevice', JSON.stringify({ name }))
@@ -2193,10 +2291,22 @@ function saveDeviceName(input, feedback) {
       live.device = Object.assign({}, live.device, { name: saved });
       settings.deviceName = saved;
       input.value = saved;
+      deviceNameCheck.name = saved; deviceNameCheck.state = null;
+      renderNameCheck(indicator, feedback, null);
       setMsg('Saved', 'var(--ok)');
       setTimeout(() => { if (feedback) feedback.textContent = ''; }, 2000);
     })
-    .catch((err) => setMsg((err && err.message) ? err.message : 'Could not rename', 'var(--err)'));
+    .catch((err) => {
+      const msg = (err && err.message) ? err.message : '';
+      // The server rejects a duplicate with a 409 carrying "name_taken"; show the inline ✗ instead
+      // of a generic error so it reads like the live indicator.
+      if (/name_taken/i.test(msg)) {
+        deviceNameCheck.name = name; deviceNameCheck.state = 'taken';
+        renderNameCheck(indicator, feedback, 'taken');
+        return;
+      }
+      setMsg(msg || 'Could not rename', 'var(--err)');
+    });
 }
 
 function pushConfig() {

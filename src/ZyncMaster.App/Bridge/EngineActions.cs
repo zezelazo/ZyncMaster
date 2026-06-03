@@ -302,6 +302,17 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return info;
     }
 
+    public async Task<bool> CheckDeviceNameAsync(string name, CancellationToken ct = default)
+    {
+        if (name == null) throw new ArgumentNullException(nameof(name));
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        var key = await RequireKeyAsync(ct);
+        return await _pairs.CheckDeviceNameAvailableAsync(key, trimmed, ct);
+    }
+
     public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
     {
         var now = DateTime.Now;

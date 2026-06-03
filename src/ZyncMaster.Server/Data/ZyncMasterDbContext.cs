@@ -1,3 +1,6 @@
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,6 +14,31 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
 {
     public ZyncMasterDbContext(DbContextOptions<ZyncMasterDbContext> options) : base(options)
     {
+    }
+
+    // Keep DeviceRow.NameLower (the uniqueness key behind the unique (UserId, NameLower) index) in
+    // lock-step with Name on every write, no matter who writes the row — the store, a seeder, or a
+    // test that adds a DeviceRow directly. Deriving it here means the column can never drift out of
+    // sync with the user-visible Name and callers never have to remember to set it.
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        SyncDeviceNameLower();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken ct = default)
+    {
+        SyncDeviceNameLower();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, ct);
+    }
+
+    private void SyncDeviceNameLower()
+    {
+        foreach (var entry in ChangeTracker.Entries<DeviceRow>())
+        {
+            if (entry.State is EntityState.Added or EntityState.Modified)
+                entry.Entity.NameLower = (entry.Entity.Name ?? string.Empty).Trim().ToLowerInvariant();
+        }
     }
 
     public DbSet<UserRow> Users => Set<UserRow>();
@@ -101,6 +129,9 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.Id).HasMaxLength(64);
             e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
             e.Property(x => x.Name).HasMaxLength(256).IsRequired();
+            // Derived lowercase uniqueness key. Capped to match Name; never null (stores write
+            // the lowercased Name).
+            e.Property(x => x.NameLower).HasMaxLength(256).IsRequired();
             e.Property(x => x.ApiKeyHash).IsRequired();
             e.Property(x => x.TargetCalendarId).HasMaxLength(256);
             e.Property(x => x.KeyId).HasMaxLength(64);
@@ -112,6 +143,10 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             // Filtered to non-null so legacy keyless rows do not bloat the index (SQL Server
             // honours the filter; SQLite ignores it harmlessly).
             e.HasIndex(x => x.KeyId).HasFilter("[KeyId] IS NOT NULL");
+            // Per-user device-name uniqueness, case-insensitive on BOTH providers via the derived
+            // NameLower column. EnsureCreated (SQLite tests) and Migrate (SQL Server prod) both pick
+            // this up; the matching migration applies it to existing prod databases.
+            e.HasIndex(x => new { x.UserId, x.NameLower }).IsUnique();
         });
 
         b.Entity<PendingPairingRow>(e =>

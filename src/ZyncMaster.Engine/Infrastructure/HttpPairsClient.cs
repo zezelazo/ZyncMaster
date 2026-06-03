@@ -176,6 +176,18 @@ public sealed class HttpPairsClient : IPairsClient
         return ParseDeviceInfo(root);
     }
 
+    public async Task<bool> CheckDeviceNameAvailableAsync(string apiKey, string name, CancellationToken ct)
+    {
+        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+        if (name == null) throw new ArgumentNullException(nameof(name));
+
+        // GET with the name in the query string; the server scopes to the caller's device and
+        // returns { available: bool } (or { available:false, reason:"invalid" } for a bad name).
+        var path = $"/api/devices/name-available?name={Uri.EscapeDataString(name)}";
+        var root = await SendAsync(HttpMethod.Get, path, apiKey, null, ct) as JObject ?? new JObject();
+        return root["available"]?.Value<bool>() ?? false;
+    }
+
     private static DeviceInfo ParseDeviceInfo(JObject obj) => new()
     {
         DeviceId = obj["deviceId"]?.Value<string>() ?? "",
