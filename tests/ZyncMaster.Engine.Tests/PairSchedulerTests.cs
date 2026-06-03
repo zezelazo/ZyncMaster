@@ -27,6 +27,13 @@ public sealed class PairSchedulerTests
         public Task ClearAsync(CancellationToken ct) { _key = null; return Task.CompletedTask; }
     }
 
+    private sealed class FakeIdentityTokenProvider : IIdentityTokenProvider
+    {
+        private readonly string? _token;
+        public FakeIdentityTokenProvider(string? token) => _token = token;
+        public Task<string?> LoadAccessTokenAsync(CancellationToken ct = default) => Task.FromResult(_token);
+    }
+
     private sealed class FakeSource : ICalendarSource
     {
         public int ReadCount;
@@ -45,38 +52,43 @@ public sealed class PairSchedulerTests
     private sealed class FakePairsClient : IPairsClient
     {
         public List<SyncPair> Pairs = new();
-        public string? LastApiKey;
+        // ListPairs is authenticated with the identity BEARER; push/run with the device API KEY.
+        public string? LastListBearer;
+        public string? LastPushApiKey;
+        public string? LastRunApiKey;
         public List<string> PushedPairIds = new();
         public List<string> RanPairIds = new();
         public HashSet<string> ThrowOnRunPairIds = new();
 
-        public Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(string apiKey, CancellationToken ct)
+        public Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(string bearer, CancellationToken ct)
             => Task.FromResult((IReadOnlyList<AccountInfo>)Array.Empty<AccountInfo>());
-        public Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string apiKey, string accountRef, CancellationToken ct)
+        public Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string bearer, string accountRef, CancellationToken ct)
             => Task.FromResult((IReadOnlyList<CalendarInfo>)Array.Empty<CalendarInfo>());
-        public Task<SyncPair> CreatePairAsync(string apiKey, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
+        public Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
             => Task.FromResult(new SyncPair());
-        public Task<IReadOnlyList<SyncPair>> ListPairsAsync(string apiKey, CancellationToken ct)
+        public Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct)
         {
-            LastApiKey = apiKey;
+            LastListBearer = bearer;
             return Task.FromResult((IReadOnlyList<SyncPair>)Pairs.ToList());
         }
-        public Task<SyncPair> UpdatePairAsync(string apiKey, string id, string? name, int? intervalMin, string? state, CancellationToken ct)
+        public Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct)
             => Task.FromResult(new SyncPair());
-        public Task DeletePairAsync(string apiKey, string id, CancellationToken ct) => Task.CompletedTask;
+        public Task DeletePairAsync(string bearer, string id, CancellationToken ct) => Task.CompletedTask;
         public Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct)
         {
+            LastPushApiKey = apiKey;
             PushedPairIds.Add(id);
             return Task.FromResult(new MirrorResult { Created = 1 });
         }
         public Task<MirrorResult> RunPairAsync(string apiKey, string id, CancellationToken ct)
         {
+            LastRunApiKey = apiKey;
             RanPairIds.Add(id);
             if (ThrowOnRunPairIds.Contains(id))
                 throw new InvalidOperationException("boom " + id);
             return Task.FromResult(new MirrorResult { Updated = 1 });
         }
-        public Task<IReadOnlyList<string>> UnlinkAccountAsync(string apiKey, string accountRef, CancellationToken ct)
+        public Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct)
             => Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
         public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
             => Task.FromResult(new DeviceInfo());
@@ -101,20 +113,29 @@ public sealed class PairSchedulerTests
         SyncWindowDays = 14,
     };
 
+    // Default fakes carry a device key "k" and an identity bearer "b" so the tick reaches the
+    // pair list (bearer) and then pushes/runs (key).
     private static PairScheduler Make(FakePairsClient client, FakeSource source, MutableClock clock, FakeKeyStore keys)
-        => new PairScheduler(client, source, keys, clock, Settings());
+        => new PairScheduler(client, source, keys, new FakeIdentityTokenProvider("b"), clock, Settings());
 
     [Fact]
     public void Ctor_NullClient_Throws()
     {
-        Action act = () => new PairScheduler(null!, new FakeSource(), new FakeKeyStore("k"), new MutableClock(), Settings());
+        Action act = () => new PairScheduler(null!, new FakeSource(), new FakeKeyStore("k"), new FakeIdentityTokenProvider("b"), new MutableClock(), Settings());
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Ctor_NullIdentity_Throws()
+    {
+        Action act = () => new PairScheduler(new FakePairsClient(), new FakeSource(), new FakeKeyStore("k"), null!, new MutableClock(), Settings());
         act.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Ctor_NullSettings_Throws()
     {
-        Action act = () => new PairScheduler(new FakePairsClient(), new FakeSource(), new FakeKeyStore("k"), new MutableClock(), null!);
+        Action act = () => new PairScheduler(new FakePairsClient(), new FakeSource(), new FakeKeyStore("k"), new FakeIdentityTokenProvider("b"), new MutableClock(), null!);
         act.Should().Throw<ArgumentNullException>();
     }
 
@@ -128,7 +149,9 @@ public sealed class PairSchedulerTests
 
         await sched.TickAsync(CancellationToken.None);
 
-        client.LastApiKey.Should().Be("k");
+        // List used the identity bearer; the COM push used the device api key.
+        client.LastListBearer.Should().Be("b");
+        client.LastPushApiKey.Should().Be("k");
         source.ReadCount.Should().Be(1);
         source.LastFrom.Should().Be(clock.UtcNow);
         source.LastTo.Should().Be(clock.UtcNow.AddDays(14));
@@ -149,6 +172,9 @@ public sealed class PairSchedulerTests
         client.RanPairIds.Should().ContainSingle().Which.Should().Be("p1");
         client.PushedPairIds.Should().BeEmpty();
         source.ReadCount.Should().Be(0);
+        // Listing used the bearer; the run used the device api key.
+        client.LastListBearer.Should().Be("b");
+        client.LastRunApiKey.Should().Be("k");
     }
 
     [Fact]
@@ -233,8 +259,25 @@ public sealed class PairSchedulerTests
 
         await sched.TickAsync(CancellationToken.None);
 
-        client.LastApiKey.Should().BeNull();
+        client.LastListBearer.Should().BeNull();
         client.RanPairIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Tick_NoBearer_DoesNothing()
+    {
+        // Paired device but signed out: listing pairs needs the human identity bearer, so a tick
+        // is a clean no-op (no list, no run).
+        var client = new FakePairsClient { Pairs = { Pair("p1", "active", 10, "MicrosoftGraph") } };
+        var sched = new PairScheduler(
+            client, new FakeSource(), new FakeKeyStore("k"), new FakeIdentityTokenProvider(null),
+            new MutableClock(), Settings());
+
+        await sched.TickAsync(CancellationToken.None);
+
+        client.LastListBearer.Should().BeNull();
+        client.RanPairIds.Should().BeEmpty();
+        client.PushedPairIds.Should().BeEmpty();
     }
 
     [Fact]
@@ -259,7 +302,7 @@ public sealed class PairSchedulerTests
     public async Task RunAsync_StopsCleanlyOnCancellation()
     {
         var client = new FakePairsClient { Pairs = { Pair("p1", "active", 10, "MicrosoftGraph") } };
-        var sched = new PairScheduler(client, new FakeSource(), new FakeKeyStore("k"), new MutableClock(), Settings(),
+        var sched = new PairScheduler(client, new FakeSource(), new FakeKeyStore("k"), new FakeIdentityTokenProvider("b"), new MutableClock(), Settings(),
             tickInterval: TimeSpan.FromMilliseconds(5));
         using var cts = new CancellationTokenSource();
 

@@ -107,15 +107,19 @@ public sealed class EngineHost : IDisposable
 
         var actions = new EngineActions(
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
-            pairsClient, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
+            pairsClient, identityCache, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
             identityLogin,
             calendarConnect,
             http,
             ownedHttp: null);
 
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
-        // pairs are read locally and pushed; the rest are mirrored server-side.
-        var scheduler = new PairScheduler(pairsClient, calendarSource, keyStore, clock, engineSettings);
+        // pairs are read locally and pushed; the rest are mirrored server-side. It lists the pairs
+        // with the signed-in user's identity bearer (human-only surface) and pushes/runs under the
+        // device api key, so it is given an IIdentityTokenProvider over the same identity cache.
+        var identityTokenProvider = new IdentityTokenCacheProvider(identityCache);
+        var scheduler = new PairScheduler(
+            pairsClient, calendarSource, keyStore, identityTokenProvider, clock, engineSettings);
 
         return new EngineHost(actions, syncEngine, scheduler, engineSettings, http);
     }

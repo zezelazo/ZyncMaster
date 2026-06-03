@@ -21,6 +21,7 @@ public sealed class HttpPairsClientTests
         public HttpRequestMessage? LastRequest { get; private set; }
         public string? LastBody { get; private set; }
         public string? LastApiKey { get; private set; }
+        public string? LastBearer { get; private set; }
 
         public StubHandler(HttpStatusCode status, string responseBody)
         {
@@ -33,6 +34,8 @@ public sealed class HttpPairsClientTests
             LastRequest = request;
             if (request.Headers.TryGetValues("X-Api-Key", out var values))
                 foreach (var v in values) LastApiKey = v;
+            if (request.Headers.Authorization is { Scheme: "Bearer" } auth)
+                LastBearer = auth.Parameter;
             if (request.Content != null)
                 LastBody = await request.Content.ReadAsStringAsync(cancellationToken);
 
@@ -44,6 +47,7 @@ public sealed class HttpPairsClientTests
     }
 
     private const string Key = "the-api-key";
+    private const string Bearerr = "the-identity-bearer";
 
     private static (HttpPairsClient client, StubHandler stub) Make(HttpStatusCode status, string body)
     {
@@ -77,17 +81,19 @@ public sealed class HttpPairsClientTests
     }
 
     [Fact]
-    public async Task ListAccounts_GetsAndParsesAndSendsKey()
+    public async Task ListAccounts_GetsAndParsesAndSendsBearer()
     {
         var (client, stub) = Make(HttpStatusCode.OK,
             @"[ { ""accountRef"": ""a1"", ""displayName"": ""Work"", ""isDefault"": true },
                 { ""accountRef"": ""a2"", ""displayName"": ""Home"", ""isDefault"": false } ]");
 
-        var result = await client.ListAccountsAsync(Key, CancellationToken.None);
+        var result = await client.ListAccountsAsync(Bearerr, CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Get);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/accounts");
-        stub.LastApiKey.Should().Be(Key);
+        // Human-only management surface: identity bearer, NOT the device api key.
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
         result.Should().HaveCount(2);
         result[0].AccountRef.Should().Be("a1");
         result[0].DisplayName.Should().Be("Work");
@@ -101,11 +107,12 @@ public sealed class HttpPairsClientTests
         var (client, stub) = Make(HttpStatusCode.OK,
             @"[ { ""id"": ""c1"", ""displayName"": ""Calendar"", ""isDefault"": true, ""owner"": ""me@x"" } ]");
 
-        var result = await client.ListCalendarsAsync(Key, "a1", CancellationToken.None);
+        var result = await client.ListCalendarsAsync(Bearerr, "a1", CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Get);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/accounts/a1/calendars");
-        stub.LastApiKey.Should().Be(Key);
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
         result.Should().ContainSingle();
         result[0].Id.Should().Be("c1");
         result[0].DisplayName.Should().Be("Calendar");
@@ -124,11 +131,12 @@ public sealed class HttpPairsClientTests
         var source = new Endpoint { Provider = "OutlookCom", CalendarId = "s", CalendarName = "Src" };
         var dest = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "a2", CalendarId = "d", CalendarName = "Dst" };
 
-        var result = await client.CreatePairAsync(Key, "Mirror", source, dest, 15, CancellationToken.None);
+        var result = await client.CreatePairAsync(Bearerr, "Mirror", source, dest, 15, CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Post);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/pairs");
-        stub.LastApiKey.Should().Be(Key);
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
 
         var body = JObject.Parse(stub.LastBody!);
         body["name"]!.Value<string>().Should().Be("Mirror");
@@ -153,10 +161,12 @@ public sealed class HttpPairsClientTests
                  ""lastRunUtc"": ""2025-05-10T09:00:00+00:00"",
                  ""lastResult"": { ""created"": 1, ""updated"": 2, ""deleted"": 0, ""skipped"": 4, ""failures"": [""x""] } } ]");
 
-        var result = await client.ListPairsAsync(Key, CancellationToken.None);
+        var result = await client.ListPairsAsync(Bearerr, CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Get);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/pairs");
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
         result.Should().ContainSingle();
         result[0].Id.Should().Be("p1");
         result[0].IntervalMin.Should().Be(10);
@@ -174,11 +184,12 @@ public sealed class HttpPairsClientTests
                 ""source"": { ""provider"": ""OutlookCom"", ""calendarId"": ""s"", ""calendarName"": ""S"" },
                 ""destination"": { ""provider"": ""MicrosoftGraph"", ""calendarId"": ""d"", ""calendarName"": ""D"" } }");
 
-        var result = await client.UpdatePairAsync(Key, "p1", name: null, intervalMin: 20, state: "paused", CancellationToken.None);
+        var result = await client.UpdatePairAsync(Bearerr, "p1", name: null, intervalMin: 20, state: "paused", CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Patch);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/pairs/p1");
-        stub.LastApiKey.Should().Be(Key);
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
 
         var body = JObject.Parse(stub.LastBody!);
         body.ContainsKey("name").Should().BeFalse();
@@ -194,11 +205,12 @@ public sealed class HttpPairsClientTests
     {
         var (client, stub) = Make(HttpStatusCode.NoContent, "");
 
-        await client.DeletePairAsync(Key, "p1", CancellationToken.None);
+        await client.DeletePairAsync(Bearerr, "p1", CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Delete);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/pairs/p1");
-        stub.LastApiKey.Should().Be(Key);
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
     }
 
     [Fact]
@@ -246,11 +258,12 @@ public sealed class HttpPairsClientTests
         var (client, stub) = Make(HttpStatusCode.OK,
             @"{ ""affectedPairIds"": [ ""p1"", ""p2"" ] }");
 
-        var result = await client.UnlinkAccountAsync(Key, "a1", CancellationToken.None);
+        var result = await client.UnlinkAccountAsync(Bearerr, "a1", CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Delete);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/accounts/a1");
-        stub.LastApiKey.Should().Be(Key);
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
         result.Should().BeEquivalentTo(new[] { "p1", "p2" });
     }
 

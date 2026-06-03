@@ -72,6 +72,7 @@ public class EngineActionsHealthTests
             new AppSettingsResolver(),
             "settings.json",
             new Mock<IPairsClient>().Object,
+            new Mock<IIdentityTokenCache>().Object,
             new BasicTxtExporter(new Mock<ICalExportRunner>().Object),
             new Mock<IAutoStartManager>().Object,
             settings,
