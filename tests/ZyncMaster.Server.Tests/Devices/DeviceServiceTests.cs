@@ -10,12 +10,14 @@ namespace ZyncMaster.Server.Tests.Devices;
 public class DeviceServiceTests
 {
     private static (DeviceService svc, InMemoryDeviceStore store) Build(
-        ICurrentUserAccessor? user = null, ServerOptions? options = null)
+        ICurrentUserAccessor? user = null, ServerOptions? options = null, IUserStore? users = null)
     {
         var store = new InMemoryDeviceStore();
         var svc = new DeviceService(
             store,
             user ?? new DefaultCurrentUserAccessor(),
+            users ?? new StubUserStore(),
+            new DeviceNameGenerator(),
             Options.Create(options ?? new ServerOptions()));
         return (svc, store);
     }
@@ -26,10 +28,42 @@ public class DeviceServiceTests
         public string UserId { get; }
     }
 
+    // Minimal IUserStore double for name generation. Returns no user (so the generator falls back to
+    // the userId as the account identifier) unless a row was seeded by id.
+    private sealed class StubUserStore : IUserStore
+    {
+        private readonly System.Collections.Generic.Dictionary<string, ZyncMaster.Server.Data.UserRow> _byId = new();
+
+        public StubUserStore(params ZyncMaster.Server.Data.UserRow[] users)
+        {
+            foreach (var u in users)
+                _byId[u.Id] = u;
+        }
+
+        public Task<ZyncMaster.Server.Data.UserRow?> GetAsync(string id, System.Threading.CancellationToken ct = default)
+            => Task.FromResult(_byId.TryGetValue(id, out var row) ? row : null);
+
+        public Task<ZyncMaster.Server.Data.UserRow> UpsertAsync(
+            string provider, string subject, string email, string displayName, System.Threading.CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<ZyncMaster.Server.Data.UserRow> UpsertByLoginAsync(
+            string provider, string providerSubject, string email, bool emailVerified, string displayName,
+            System.Threading.CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<ZyncMaster.Server.Data.UserRow?> TryLinkByEmailAsync(
+            string provider, string providerSubject, string email, bool emailVerified, string displayName,
+            System.Threading.CancellationToken ct = default)
+            => throw new NotSupportedException();
+    }
+
     [Fact]
     public void Ctor_null_store_throws()
     {
-        Action act = () => new DeviceService(null!, new DefaultCurrentUserAccessor(), Options.Create(new ServerOptions()));
+        Action act = () => new DeviceService(
+            null!, new DefaultCurrentUserAccessor(), new StubUserStore(), new DeviceNameGenerator(),
+            Options.Create(new ServerOptions()));
         act.Should().Throw<ArgumentNullException>();
     }
 
@@ -130,6 +164,84 @@ public class DeviceServiceTests
         ApiKeyGenerator.TryParse(result.ApiKey, out var keyId, out var secret).Should().BeTrue();
         device.KeyId.Should().Be(keyId);
         ApiKeyHasher.Verify(secret, device.ApiKeyHash).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Register_with_blank_name_generates_geek_name_from_account_email()
+    {
+        var users = new StubUserStore(new ZyncMaster.Server.Data.UserRow
+        {
+            Id = "u-gen", PrimaryEmail = "zezelazo@msn.com",
+        });
+        var (svc, store) = Build(user: new FixedUser("u-gen"), users: users);
+
+        await svc.RegisterAsync(new DeviceRegisterRequest(Name: ""));
+
+        var device = (await store.ListAsync()).Single();
+        device.Name.Should().NotBeNullOrWhiteSpace();
+        device.Name.Should().NotBe("Device");
+        device.Name.Should().EndWith("-zezelazo");
+    }
+
+    [Fact]
+    public async Task Register_twice_without_name_yields_distinct_names_for_same_user()
+    {
+        var users = new StubUserStore(new ZyncMaster.Server.Data.UserRow
+        {
+            Id = "u-two", PrimaryEmail = "dupe@example.com",
+        });
+        var (svc, store) = Build(user: new FixedUser("u-two"), users: users);
+
+        await svc.RegisterAsync(new DeviceRegisterRequest(Name: null!));
+        await svc.RegisterAsync(new DeviceRegisterRequest(Name: "   "));
+
+        var names = (await store.ListAsync()).Select(d => d.Name).ToList();
+        names.Should().HaveCount(2);
+        names.Distinct(StringComparer.OrdinalIgnoreCase).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GetMe_backfills_name_for_nameless_device_and_persists()
+    {
+        var users = new StubUserStore(new ZyncMaster.Server.Data.UserRow
+        {
+            Id = "u-heal", PrimaryEmail = "healme@example.com",
+        });
+        var (svc, store) = Build(user: new FixedUser("u-heal"), users: users);
+
+        // Seed a legacy device with a blank name directly in the store.
+        var legacy = new Device
+        {
+            Id = "legacy-1", UserId = "u-heal", Name = "", ApiKeyHash = "h",
+            CreatedUtc = DateTimeOffset.UtcNow,
+        };
+        await store.AddAsync(legacy);
+
+        var result = await svc.GetMeAsync("legacy-1");
+
+        result.Should().NotBeNull();
+        result!.Name.Should().NotBeNullOrWhiteSpace();
+        result.Name.Should().EndWith("-healme");
+
+        // Persisted, not just returned.
+        var stored = await store.GetAsync("legacy-1");
+        stored!.Name.Should().Be(result.Name);
+    }
+
+    [Fact]
+    public async Task GetMe_leaves_existing_name_untouched()
+    {
+        var (svc, store) = Build();
+        var device = new Device
+        {
+            Id = "named-1", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Keep Me",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+        };
+        await store.AddAsync(device);
+
+        var result = await svc.GetMeAsync("named-1");
+
+        result!.Name.Should().Be("Keep Me");
     }
 
     [Fact]
