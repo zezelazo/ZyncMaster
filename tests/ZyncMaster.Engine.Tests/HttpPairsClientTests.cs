@@ -121,6 +121,37 @@ public sealed class HttpPairsClientTests
     }
 
     [Fact]
+    public async Task CreateCalendar_PostsNameToAccountScopedUrlAndParses()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK,
+            @"{ ""id"": ""new-1"", ""displayName"": ""Travel"", ""isDefault"": false, ""owner"": ""me@x"" }");
+
+        var result = await client.CreateCalendarAsync(Bearerr, "a1", "Travel", CancellationToken.None);
+
+        stub.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/accounts/a1/calendars");
+        // Human-only management surface: identity bearer, NOT the device api key.
+        stub.LastBearer.Should().Be(Bearerr);
+        stub.LastApiKey.Should().BeNull();
+        JObject.Parse(stub.LastBody!)["name"]!.Value<string>().Should().Be("Travel");
+
+        result.Id.Should().Be("new-1");
+        result.DisplayName.Should().Be("Travel");
+        result.IsDefault.Should().BeFalse();
+        result.Owner.Should().Be("me@x");
+    }
+
+    [Fact]
+    public async Task CreateCalendar_NullName_Throws()
+    {
+        var (client, _) = Make(HttpStatusCode.OK, "{}");
+
+        Func<Task> act = () => client.CreateCalendarAsync(Bearerr, "a1", null!, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
     public async Task CreatePair_PostsBodyAndParsesResult()
     {
         var (client, stub) = Make(HttpStatusCode.OK,

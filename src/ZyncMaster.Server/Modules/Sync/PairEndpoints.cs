@@ -151,6 +151,41 @@ public static class PairEndpoints
             }));
         }).RequireCookieOrIdentityBearer();
 
+        // Create a new calendar in one of the caller's connected accounts. Mirrors the GET
+        // above: resolve the account (pool-first, legacy fallback) so a cross-user / unknown
+        // ref yields 404 (no existence leak, no Graph call with a foreign token), then delegate
+        // to the same Graph writer. The destination of a sync can then be a fresh calendar.
+        app.MapPost("/api/accounts/{accountRef}/calendars", async (
+            string accountRef,
+            CreateCalendarRequest req,
+            ProviderRegistry registry,
+            ILegacyConnectedAccountAdapter adapter,
+            CancellationToken ct) =>
+        {
+            var validation = new CreateCalendarRequestValidator().Validate(req);
+            if (!validation.IsValid)
+                return Results.ValidationProblem(validation.ToDictionary());
+
+            if (await ResolveAccountForUserAsync(accountRef, adapter, ct) is null)
+                return Results.NotFound();
+
+            var endpoint = new Endpoint
+            {
+                Provider = ProviderRegistry.MicrosoftGraph,
+                AccountRef = accountRef,
+                CalendarId = "",
+            };
+            var writer = registry.ResolveWriter(endpoint);
+            var created = await writer.CreateCalendarAsync(req.Name!, ct);
+            return Results.Ok(new
+            {
+                id = created.Id,
+                displayName = created.DisplayName,
+                isDefault = created.IsDefault,
+                owner = created.Owner,
+            });
+        }).RequireCookieOrIdentityBearer();
+
         app.MapPost("/api/pairs", async (
             CreatePairRequest req,
             ISyncPairStore store,

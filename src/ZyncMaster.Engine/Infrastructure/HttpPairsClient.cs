@@ -71,6 +71,27 @@ public sealed class HttpPairsClient : IPairsClient
         return list;
     }
 
+    public async Task<CalendarInfo> CreateCalendarAsync(string bearer, string accountRef, string name, CancellationToken ct)
+    {
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
+        if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
+        if (name == null) throw new ArgumentNullException(nameof(name));
+
+        var body = new JObject { ["name"] = name };
+        var obj = await SendBearerAsync(
+            HttpMethod.Post,
+            $"/api/accounts/{Uri.EscapeDataString(accountRef)}/calendars",
+            bearer, body, ct) as JObject ?? new JObject();
+
+        return new CalendarInfo
+        {
+            Id = obj["id"]?.Value<string>() ?? "",
+            DisplayName = obj["displayName"]?.Value<string>() ?? "",
+            IsDefault = obj["isDefault"]?.Value<bool>() ?? false,
+            Owner = obj["owner"]?.Value<string>(),
+        };
+    }
+
     public async Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
     {
         if (bearer == null) throw new ArgumentNullException(nameof(bearer));

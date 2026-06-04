@@ -32,7 +32,7 @@ public sealed class CalExportRunner : ICalExportRunner
 
         try
         {
-            var config = BuildConfig(year, month, "complete", calendarNames, outputPath: null);
+            var config = BuildConfig(year, month, "complete", calendarNames, includeCancelled: true, outputPath: null);
             await File.WriteAllTextAsync(configPath, config.ToString(Formatting.Indented), ct);
 
             await RunProcessAsync(configPath, tempDir, ct);
@@ -53,7 +53,7 @@ public sealed class CalExportRunner : ICalExportRunner
         }
     }
 
-    public async Task ExportSimpleAsync(int year, int month, IReadOnlyList<string>? calendarNames, string outputFilePath, CancellationToken ct)
+    public async Task ExportSimpleAsync(int year, int month, IReadOnlyList<string>? calendarNames, bool includeCancelled, string outputFilePath, CancellationToken ct)
     {
         if (outputFilePath == null) throw new ArgumentNullException(nameof(outputFilePath));
 
@@ -66,7 +66,7 @@ public sealed class CalExportRunner : ICalExportRunner
             // CalExport ignores the config outputPath as a file target — it always writes an
             // auto-named file into the -o directory. So we run into the temp dir, then move
             // the produced .txt to the caller's requested path.
-            var config = BuildConfig(year, month, "simple", calendarNames, outputPath: null);
+            var config = BuildConfig(year, month, "simple", calendarNames, includeCancelled, outputPath: null);
             await File.WriteAllTextAsync(configPath, config.ToString(Formatting.Indented), ct);
 
             await RunProcessAsync(configPath, tempDir, ct);
@@ -87,7 +87,7 @@ public sealed class CalExportRunner : ICalExportRunner
         }
     }
 
-    private static JObject BuildConfig(int year, int month, string mode, IReadOnlyList<string>? calendarNames, string? outputPath)
+    private static JObject BuildConfig(int year, int month, string mode, IReadOnlyList<string>? calendarNames, bool includeCancelled, string? outputPath)
     {
         JToken calendars = calendarNames is { Count: > 0 }
             ? new JArray(calendarNames.Cast<object>().ToArray())
@@ -98,7 +98,7 @@ public sealed class CalExportRunner : ICalExportRunner
             ["year"] = year,
             ["month"] = month,
             ["mode"] = mode,
-            ["includeCancelled"] = true,
+            ["includeCancelled"] = includeCancelled,
             ["calendars"] = calendars,
             ["outputPath"] = outputPath == null ? JValue.CreateNull() : new JValue(outputPath),
         };

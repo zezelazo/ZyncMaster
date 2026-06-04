@@ -22,6 +22,11 @@ public sealed record PushRequest
     public List<ZyncMaster.Core.AppointmentRecord> Events { get; init; } = new();
 }
 
+public sealed record CreateCalendarRequest
+{
+    public string? Name { get; init; }
+}
+
 public sealed class CreatePairRequestValidator : AbstractValidator<CreatePairRequest>
 {
     private static readonly string[] ValidProviders = { "OutlookCom", "MicrosoftGraph" };
@@ -49,6 +54,14 @@ public sealed class CreatePairRequestValidator : AbstractValidator<CreatePairReq
                 .WithMessage("Provider must be OutlookCom or MicrosoftGraph.");
             RuleFor(r => r.Destination!.CalendarId).NotEmpty().WithName("destination.calendarId");
         });
+    }
+}
+
+public sealed class CreateCalendarRequestValidator : AbstractValidator<CreateCalendarRequest>
+{
+    public CreateCalendarRequestValidator()
+    {
+        RuleFor(r => r.Name).NotEmpty();
     }
 }
 

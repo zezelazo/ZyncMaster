@@ -124,6 +124,18 @@ public class UiBridgeTests
             return CalendarsToReturn;
         }
 
+        public string? CreateCalendarAccountRefArg;
+        public string? CreateCalendarNameArg;
+        public CalendarInfo CreatedCalendarToReturn = new() { Id = "new-cal", DisplayName = "Created", IsDefault = false };
+
+        public async Task<CalendarInfo> CreateCalendarAsync(string accountRef, string name, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CreateCalendarAccountRefArg = accountRef;
+            CreateCalendarNameArg = name;
+            return CreatedCalendarToReturn;
+        }
+
         public async Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
@@ -195,10 +207,12 @@ public class UiBridgeTests
             return CheckDeviceNameToReturn;
         }
 
-        public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
+        public string? GenerateTxtArg;
+        public async Task<string?> GenerateTxtAsync(string requestJson, CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
             GenerateTxtCalls++;
+            GenerateTxtArg = requestJson;
             return GenerateTxtPathToReturn;
         }
 
@@ -533,6 +547,39 @@ public class UiBridgeTests
     }
 
     [Fact]
+    public void CreateCalendar_passes_accountRef_and_name_and_returns_created_calendar()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("createCalendar", "cc1", "{\"accountRef\":\"ref-9\",\"name\":\"Travel\"}"));
+
+        engine.CreateCalendarAccountRefArg.Should().Be("ref-9");
+        engine.CreateCalendarNameArg.Should().Be("Travel");
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("cc1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("id").GetString().Should().Be("new-cal");
+        payload.GetProperty("displayName").GetString().Should().Be("Created");
+    }
+
+    [Fact]
+    public void CreateCalendar_missing_payload_passes_empty_args()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("createCalendar", "cc2"));
+
+        engine.CreateCalendarAccountRefArg.Should().Be("");
+        engine.CreateCalendarNameArg.Should().Be("");
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
     public void ListPairs_calls_engine_and_replies_with_pair_array()
     {
         var transport = new FakeTransport();
@@ -708,9 +755,11 @@ public class UiBridgeTests
         var engine = new FakeEngineActions();
         _ = new UiBridge(transport, engine);
 
-        transport.PushInbound(Message("generateTxt", "a9"));
+        var json = "{\"year\":2025,\"month\":5,\"includeCancelled\":false}";
+        transport.PushInbound(Message("generateTxt", "a9", json));
 
         engine.GenerateTxtCalls.Should().Be(1);
+        engine.GenerateTxtArg.Should().Be(json);
         var reply = LastReply(transport);
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
         var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);

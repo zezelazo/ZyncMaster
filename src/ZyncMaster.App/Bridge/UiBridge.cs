@@ -137,6 +137,12 @@ public sealed class UiBridge
                 var pair = await _engine.CreatePairAsync(message.Payload ?? "", ct);
                 return JsonSerializer.Serialize(pair, JsonOptions);
             }
+            case "createCalendar":
+            {
+                var (accountRef, name) = ParseCreateCalendarPayload(message.Payload);
+                var calendar = await _engine.CreateCalendarAsync(accountRef, name, ct);
+                return JsonSerializer.Serialize(calendar, JsonOptions);
+            }
             case "listPairs":
             {
                 var pairs = await _engine.ListPairsAsync(ct);
@@ -179,7 +185,9 @@ public sealed class UiBridge
             }
             case "generateTxt":
             {
-                var path = await _engine.GenerateTxtAsync(ct);
+                // The UI sends the export params {year, month, includeCancelled, calendarNames?};
+                // a missing payload falls back to the current month (handled in the engine).
+                var path = await _engine.GenerateTxtAsync(message.Payload ?? "", ct);
                 return JsonSerializer.Serialize(new { cancelled = path == null, path }, JsonOptions);
             }
             case "getAutoStart":
@@ -323,6 +331,33 @@ public sealed class UiBridge
         }
 
         return UnwrapString(trimmed);
+    }
+
+    // Parses a {"accountRef":"...","name":"..."} create-calendar payload. Missing fields yield
+    // "" so the engine surfaces a clear validation error rather than the bridge throwing.
+    private static (string accountRef, string name) ParseCreateCalendarPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return ("", "");
+
+        var trimmed = payload.Trim();
+        if (trimmed[0] == '{')
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                var root = doc.RootElement;
+                var accountRef = root.TryGetProperty("accountRef", out var a) ? a.GetString() ?? "" : "";
+                var name = root.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                return (accountRef, name);
+            }
+            catch (JsonException)
+            {
+                return ("", "");
+            }
+        }
+
+        return ("", "");
     }
 
     private static bool ParseBool(string? payload)

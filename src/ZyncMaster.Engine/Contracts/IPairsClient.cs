@@ -21,6 +21,10 @@ public interface IPairsClient
 
     Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string bearer, string accountRef, CancellationToken ct);
 
+    // Creates a new calendar in the given account and returns it. Human-only management
+    // surface: authenticated with the identity bearer, like the other accounts/pairs calls.
+    Task<CalendarInfo> CreateCalendarAsync(string bearer, string accountRef, string name, CancellationToken ct);
+
     Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct);
 
     Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct);

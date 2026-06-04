@@ -40,6 +40,9 @@ public sealed class CronSyncRunnerEntitlementGateTests
         public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<CalendarOption>>(Array.Empty<CalendarOption>());
 
+        public Task<CalendarOption> CreateCalendarAsync(string name, CancellationToken ct = default) =>
+            Task.FromResult(new CalendarOption { Id = "new", DisplayName = name });
+
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
             DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)

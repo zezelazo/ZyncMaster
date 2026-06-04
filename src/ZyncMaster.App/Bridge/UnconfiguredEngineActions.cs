@@ -61,6 +61,9 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default)
         => throw NotConfigured();
 
+    public Task<CalendarInfo> CreateCalendarAsync(string accountRef, string name, CancellationToken ct = default)
+        => throw NotConfigured();
+
     public Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default)
         => throw NotConfigured();
 
@@ -94,7 +97,7 @@ public sealed class UnconfiguredEngineActions : IEngineActions
 
     // The basic .txt export does not need the server, but it does need a configured
     // CalExport path; without a valid engine config we cannot run it, so report cancelled.
-    public Task<string?> GenerateTxtAsync(CancellationToken ct = default)
+    public Task<string?> GenerateTxtAsync(string requestJson, CancellationToken ct = default)
         => Task.FromResult<string?>(null);
 
     public Task<bool> GetAutoStartAsync(CancellationToken ct = default) => Task.FromResult(false);

@@ -64,6 +64,8 @@ public sealed class PairSchedulerTests
             => Task.FromResult((IReadOnlyList<AccountInfo>)Array.Empty<AccountInfo>());
         public Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string bearer, string accountRef, CancellationToken ct)
             => Task.FromResult((IReadOnlyList<CalendarInfo>)Array.Empty<CalendarInfo>());
+        public Task<CalendarInfo> CreateCalendarAsync(string bearer, string accountRef, string name, CancellationToken ct)
+            => Task.FromResult(new CalendarInfo());
         public Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
             => Task.FromResult(new SyncPair());
         public Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct)

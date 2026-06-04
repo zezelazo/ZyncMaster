@@ -209,6 +209,18 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return await _pairs.ListCalendarsAsync(bearer, accountRef, ct);
     }
 
+    public async Task<CalendarInfo> CreateCalendarAsync(string accountRef, string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(accountRef)) throw new ArgumentNullException(nameof(accountRef));
+        if (name == null) throw new ArgumentNullException(nameof(name));
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0)
+            throw new InvalidOperationException("Calendar name is required.");
+
+        var bearer = await RequireBearerAsync(ct);
+        return await _pairs.CreateCalendarAsync(bearer, accountRef, trimmed, ct);
+    }
+
     public async Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default)
     {
         if (requestJson == null) throw new ArgumentNullException(nameof(requestJson));
@@ -313,16 +325,53 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return await _pairs.CheckDeviceNameAvailableAsync(key, trimmed, ct);
     }
 
-    public async Task<string?> GenerateTxtAsync(CancellationToken ct = default)
+    public async Task<string?> GenerateTxtAsync(string requestJson, CancellationToken ct = default)
     {
-        var now = DateTime.Now;
-        var suggested = $"ZyncMaster-{now:yyyy-MM}.txt";
+        if (requestJson == null) throw new ArgumentNullException(nameof(requestJson));
 
+        // The UI sends the export parameters CalExport Simple mode supports. A blank/empty
+        // payload falls back to the current month with cancelled included (the pre-params
+        // behaviour) so an unparameterised call still works.
+        var now = DateTime.Now;
+        GenerateTxtDto dto;
+        if (string.IsNullOrWhiteSpace(requestJson))
+        {
+            dto = new GenerateTxtDto();
+        }
+        else
+        {
+            // A malformed payload degrades to the current-month/year fallback rather than
+            // throwing, mirroring UiBridge.ParseCreateCalendarPayload's defensive parsing.
+            try
+            {
+                dto = Newtonsoft.Json.JsonConvert.DeserializeObject<GenerateTxtDto>(requestJson) ?? new GenerateTxtDto();
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                dto = new GenerateTxtDto();
+            }
+        }
+
+        var year = dto.Year ?? now.Year;
+        var month = dto.Month ?? now.Month;
+        if (month is < 1 or > 12)
+            throw new InvalidOperationException("Month must be between 1 and 12.");
+        if (year is < 1 or > 9999)
+            throw new InvalidOperationException("Year is out of range.");
+
+        var includeCancelled = dto.IncludeCancelled ?? true;
+
+        // CalExport reads LOCAL Outlook Classic calendars only (no Graph path), filtered by
+        // display name. When the UI supplies calendar names use them, otherwise fall back to the
+        // device's configured names (null/empty → "all calendars").
+        var calendarNames = dto.CalendarNames is { Count: > 0 } ? dto.CalendarNames : _engineSettings.CalendarNames;
+
+        var suggested = $"ZyncMaster-{year:D4}-{month:D2}.txt";
         var path = await _saveDialog(suggested);
         if (string.IsNullOrEmpty(path))
             return null; // user cancelled
 
-        await _txtExporter.ExportAsync(now.Year, now.Month, _engineSettings.CalendarNames, path, ct);
+        await _txtExporter.ExportAsync(year, month, calendarNames, includeCancelled, path, ct);
         return path;
     }
 
@@ -452,6 +501,14 @@ public sealed class EngineActions : IEngineActions, IDisposable
         [Newtonsoft.Json.JsonProperty("name")] public string? Name { get; set; }
         [Newtonsoft.Json.JsonProperty("intervalMin")] public int? IntervalMin { get; set; }
         [Newtonsoft.Json.JsonProperty("state")] public string? State { get; set; }
+    }
+
+    private sealed class GenerateTxtDto
+    {
+        [Newtonsoft.Json.JsonProperty("year")] public int? Year { get; set; }
+        [Newtonsoft.Json.JsonProperty("month")] public int? Month { get; set; }
+        [Newtonsoft.Json.JsonProperty("includeCancelled")] public bool? IncludeCancelled { get; set; }
+        [Newtonsoft.Json.JsonProperty("calendarNames")] public System.Collections.Generic.List<string>? CalendarNames { get; set; }
     }
 
     private sealed class EndpointDto

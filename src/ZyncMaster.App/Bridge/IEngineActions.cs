@@ -25,6 +25,11 @@ public interface IEngineActions
     // Sync-pair lifecycle (WS3). Each maps to one server REST call through IPairsClient.
     Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default);
+
+    // Creates a new calendar in a connected account (POST /api/accounts/{accountRef}/calendars)
+    // and returns it. Used by the wizard's per-account "+ New calendar" action.
+    Task<CalendarInfo> CreateCalendarAsync(string accountRef, string name, CancellationToken ct = default);
+
     Task<SyncPair> CreatePairAsync(string requestJson, CancellationToken ct = default);
     Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default);
     Task<SyncPair> UpdatePairAsync(string requestJson, CancellationToken ct = default);
@@ -44,8 +49,12 @@ public interface IEngineActions
     Task<bool> CheckDeviceNameAsync(string name, CancellationToken ct = default);
 
     // Writes a Simple-mode .txt export to a user-chosen path. Returns the saved path,
-    // or null if the user cancelled the save dialog.
-    Task<string?> GenerateTxtAsync(CancellationToken ct = default);
+    // or null if the user cancelled the save dialog. The request JSON carries the export
+    // parameters CalExport Simple mode supports: {year, month, includeCancelled, calendarNames?}.
+    // The exported calendar is always a LOCAL Outlook Classic (COM) calendar — CalExport has no
+    // Graph read path — so this only makes sense for syncs whose source is OutlookCom; the
+    // optional calendarNames filters which COM calendar(s) by display name.
+    Task<string?> GenerateTxtAsync(string requestJson, CancellationToken ct = default);
 
     // Login auto-start toggle, backed by IAutoStartManager.
     Task<bool> GetAutoStartAsync(CancellationToken ct = default);

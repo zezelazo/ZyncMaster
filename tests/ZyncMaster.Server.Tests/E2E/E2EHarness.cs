@@ -223,6 +223,9 @@ internal sealed class E2EHarness : IDisposable
                 new CalendarOption { Id = "dst-cal", DisplayName = "Destination", IsDefault = true },
             });
 
+        public Task<CalendarOption> CreateCalendarAsync(string name, CancellationToken ct = default) =>
+            Task.FromResult(new CalendarOption { Id = "new", DisplayName = name });
+
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
             DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)

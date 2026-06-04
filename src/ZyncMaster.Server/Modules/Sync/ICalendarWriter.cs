@@ -9,6 +9,10 @@ public interface ICalendarWriter
 {
     Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default);
 
+    // Creates a new calendar in the account and returns the created calendar. Used by the
+    // per-account "+ New calendar" surface so a sync destination can be a fresh calendar.
+    Task<CalendarOption> CreateCalendarAsync(string name, CancellationToken ct = default);
+
     Task<MirrorResult> MirrorAsync(
         string calendarId,
         IReadOnlyList<AppointmentRecord> records,

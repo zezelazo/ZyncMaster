@@ -17,9 +17,9 @@ public sealed class BasicTxtExporter
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
     }
 
-    public Task ExportAsync(int year, int month, IReadOnlyList<string>? calendarNames, string outputFilePath, CancellationToken ct)
+    public Task ExportAsync(int year, int month, IReadOnlyList<string>? calendarNames, bool includeCancelled, string outputFilePath, CancellationToken ct)
     {
         if (outputFilePath == null) throw new ArgumentNullException(nameof(outputFilePath));
-        return _runner.ExportSimpleAsync(year, month, calendarNames, outputFilePath, ct);
+        return _runner.ExportSimpleAsync(year, month, calendarNames, includeCancelled, outputFilePath, ct);
     }
 }

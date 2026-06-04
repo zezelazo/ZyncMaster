@@ -39,6 +39,18 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
         }).ToList();
     }
 
+    public async Task<CalendarOption> CreateCalendarAsync(string name, CancellationToken ct = default)
+    {
+        var created = await _target.CreateCalendarAsync(name, ct).ConfigureAwait(false);
+        return new CalendarOption
+        {
+            Id = created.Id,
+            DisplayName = created.DisplayName,
+            IsDefault = created.IsDefault,
+            Owner = created.Owner,
+        };
+    }
+
     public async Task<MirrorResult> MirrorAsync(
         string calendarId,
         IReadOnlyList<AppointmentRecord> records,

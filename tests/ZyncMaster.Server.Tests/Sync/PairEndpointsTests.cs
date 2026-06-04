@@ -289,4 +289,54 @@ public class PairEndpointsTests : IClassFixture<ServerTestFactory>
         cals[0].GetProperty("id").GetString().Should().Be("cal1");
         cals[0].GetProperty("isDefault").GetBoolean().Should().BeTrue();
     }
+
+    [Fact]
+    public async Task CreateCalendar_creates_and_returns_the_calendar()
+    {
+        var factory = Build();
+        var client = await AuthedClientAsync(factory);
+
+        var resp = await client.PostAsJsonAsync("/api/accounts/default/calendars", new { name = "Travel" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var created = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        // FakeTarget echoes the name as the display name and assigns "n" as the id.
+        created.RootElement.GetProperty("id").GetString().Should().Be("n");
+        created.RootElement.GetProperty("displayName").GetString().Should().Be("Travel");
+    }
+
+    [Fact]
+    public async Task CreateCalendar_with_empty_name_returns_400()
+    {
+        var factory = Build();
+        var client = await AuthedClientAsync(factory);
+
+        var resp = await client.PostAsJsonAsync("/api/accounts/default/calendars", new { name = "" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task CreateCalendar_for_unknown_account_returns_404()
+    {
+        var factory = Build();
+        var client = await AuthedClientAsync(factory);
+
+        // The seeded store only owns "default"; a foreign ref must 404 (no existence leak),
+        // never hit Graph with another user's missing token.
+        var resp = await client.PostAsJsonAsync("/api/accounts/someone-else@test/calendars", new { name = "X" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task CreateCalendar_requires_cookie()
+    {
+        var factory = Build();
+        var client = factory.CreateClient();
+
+        var resp = await client.PostAsJsonAsync("/api/accounts/default/calendars", new { name = "X" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
 }
