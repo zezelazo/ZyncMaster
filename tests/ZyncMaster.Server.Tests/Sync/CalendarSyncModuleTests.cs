@@ -19,6 +19,7 @@ public sealed class CalendarSyncModuleTests
     private sealed class RecordingWriter : ICalendarWriter
     {
         public List<(string calendarId, IReadOnlyList<AppointmentRecord> records, int reminder, DateTimeOffset from, DateTimeOffset to)> Calls { get; } = new();
+        public List<string> PairIds { get; } = new();
         public MirrorResult Next { get; set; } = new();
 
         public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default) =>
@@ -29,9 +30,10 @@ public sealed class CalendarSyncModuleTests
 
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "")
         {
             Calls.Add((calendarId, records, reminderMinutes, fromUtc, toUtc));
+            PairIds.Add(pairId);
             return Task.FromResult(Next);
         }
     }
@@ -109,6 +111,9 @@ public sealed class CalendarSyncModuleTests
         writer.Calls[0].reminder.Should().Be(30);
         writer.Calls[0].from.Should().Be(from);
         writer.Calls[0].to.Should().Be(to);
+        // The pair id is forwarded so the writer stamps each created event with CalImportPairId,
+        // making a later destination cleanup able to target exactly this pair's events.
+        writer.PairIds.Should().ContainSingle().Which.Should().Be("p1");
     }
 
     [Fact]

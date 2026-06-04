@@ -32,6 +32,32 @@ public sealed record ExportSourceTxtRequest
     public bool IncludeCancelled { get; init; } = true;
 }
 
+// Body for POST /api/pairs/{id}/cleanup-destination: the PREVIOUS destination to clean (the one
+// the pair pointed at before it was re-targeted). The server deletes from it ONLY the events this
+// pair created (CalImportPairId == pair.Id). The destination must belong to the caller and must NOT
+// be the pair's CURRENT destination (so the cleanup can never delete what was just written).
+public sealed record CleanupDestinationRequest
+{
+    public Endpoint? Destination { get; init; }
+}
+
+public sealed class CleanupDestinationRequestValidator : AbstractValidator<CleanupDestinationRequest>
+{
+    private static readonly string[] ValidProviders = { "OutlookCom", "MicrosoftGraph" };
+
+    public CleanupDestinationRequestValidator()
+    {
+        RuleFor(r => r.Destination).NotNull();
+        When(r => r.Destination is not null, () =>
+        {
+            RuleFor(r => r.Destination!.Provider).Must(p => ValidProviders.Contains(p))
+                .WithName("destination.provider")
+                .WithMessage("Provider must be OutlookCom or MicrosoftGraph.");
+            RuleFor(r => r.Destination!.CalendarId).NotEmpty().WithName("destination.calendarId");
+        });
+    }
+}
+
 public sealed record PushRequest
 {
     public List<ZyncMaster.Core.AppointmentRecord> Events { get; init; } = new();

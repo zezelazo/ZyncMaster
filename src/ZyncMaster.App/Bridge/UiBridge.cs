@@ -158,6 +158,22 @@ public sealed class UiBridge
                 await _engine.DeletePairAsync(UnwrapString(message.Payload), ct);
                 return null;
             }
+            case "cleanupOldDestination":
+            {
+                // {pairId, destination:{provider, accountRef?, calendarId, calendarName?}} — delete
+                // from the OLD destination only the events this pair created. Returns {deleted, failures}.
+                var (pairId, destination) = ParsePairDestinationPayload(message.Payload);
+                var result = await _engine.CleanupOldDestinationAsync(pairId, destination, ct);
+                return JsonSerializer.Serialize(new { deleted = result.Deleted, failures = result.Failures }, JsonOptions);
+            }
+            case "countManagedInDestination":
+            {
+                // {pairId, destination:{...}} — count (no delete) the events this pair created in the
+                // destination, for the wizard's cleanup confirm. Returns {count}.
+                var (pairId, destination) = ParsePairDestinationPayload(message.Payload);
+                var count = await _engine.CountManagedInDestinationAsync(pairId, destination, ct);
+                return JsonSerializer.Serialize(new { count }, JsonOptions);
+            }
             case "runPairNow":
             {
                 var result = await _engine.RunPairNowAsync(UnwrapString(message.Payload), ct);
@@ -233,6 +249,13 @@ public sealed class UiBridge
             case "signOut":
             {
                 await _engine.SignOutAsync(ct);
+                return null;
+            }
+            case "openLicenses":
+            {
+                // Open the bundled open-source notices in the system's default viewer. Fire-and-forget
+                // from the UI's perspective; the engine swallows any open failure.
+                await _engine.OpenLicensesAsync(ct);
                 return null;
             }
             // ---------------- Calendar-account connection lifecycle ----------------
@@ -376,6 +399,50 @@ public sealed class UiBridge
         }
 
         return ("", "");
+    }
+
+    // Parses a {"pairId":"...","destination":{provider, accountRef?, calendarId, calendarName?}}
+    // payload for the destination-cleanup actions. Missing pairId yields "" so the engine surfaces a
+    // clear "missing pairId" error; a missing/blank destination yields an empty Endpoint so the
+    // server's validation (provider/calendarId required) returns a clean 400 rather than the bridge
+    // throwing. Defensive parse, like the other object payloads.
+    private static (string pairId, ZyncMaster.Engine.Endpoint destination) ParsePairDestinationPayload(string? payload)
+    {
+        var empty = new ZyncMaster.Engine.Endpoint();
+        if (string.IsNullOrWhiteSpace(payload))
+            return ("", empty);
+
+        var trimmed = payload.Trim();
+        if (trimmed[0] != '{')
+            return ("", empty);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            var root = doc.RootElement;
+            var pairId = root.TryGetProperty("pairId", out var p) ? p.GetString() ?? "" : "";
+
+            if (!root.TryGetProperty("destination", out var d) || d.ValueKind != JsonValueKind.Object)
+                return (pairId, empty);
+
+            string? Str(string name) => d.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()
+                : null;
+
+            var accountRef = Str("accountRef");
+            var destination = new ZyncMaster.Engine.Endpoint
+            {
+                Provider = Str("provider") ?? "",
+                AccountRef = string.IsNullOrWhiteSpace(accountRef) ? null : accountRef,
+                CalendarId = Str("calendarId") ?? "",
+                CalendarName = Str("calendarName") ?? "",
+            };
+            return (pairId, destination);
+        }
+        catch (JsonException)
+        {
+            return ("", empty);
+        }
     }
 
     private static bool ParseBool(string? payload)

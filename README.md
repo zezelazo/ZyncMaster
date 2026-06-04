@@ -505,18 +505,12 @@ dotnet test
 
 ### Test coverage
 
-The test suite contains **203 unit tests** across the three projects (`ZyncMaster.Core.Tests`, `ZyncMaster.CalExport.Tests`, `ZyncMaster.CalImport.Tests`) covering all Core services, configuration, CLI parsing, export formatting, import planning and HTML body merge. Infrastructure wrappers around external systems (`OutlookCalendarService`, `PhysicalFileSystem`, `GraphAuthenticator`, `GraphCalendarTarget`) are excluded from unit tests by design — these require Outlook COM, the local filesystem, MSAL, or live Microsoft Graph, respectively.
+The test suite contains **1340 unit tests** across seven projects (`ZyncMaster.Core.Tests` 67, `ZyncMaster.Graph.Tests` 111, `ZyncMaster.Engine.Tests` 106, `ZyncMaster.CalExport.Tests` 183, `ZyncMaster.CalImport.Tests` 104, `ZyncMaster.App.Tests` 145, `ZyncMaster.Server.Tests` 624) covering Core services, configuration, CLI parsing, export formatting, import planning, HTML body merge, the sync engine, the desktop app bridge and the server endpoints. Infrastructure wrappers around external systems (`OutlookCalendarService`, `PhysicalFileSystem`, `GraphAuthenticator`, `GraphCalendarTarget`) are excluded from unit tests by design — these require Outlook COM, the local filesystem, MSAL, or live Microsoft Graph, respectively.
 
-To generate an HTML coverage report:
-
-```
-dotnet test --collect:"XPlat Code Coverage"
-```
-
-Or with the coverlet MSBuild integration (targets 80%+ line coverage):
+To generate a coverage report, run the tests with the coverlet collector (configured centrally in `Directory.Build.props` and `coverage.runsettings`); it writes one `coverage.cobertura.xml` per test project under `./coverage/<guid>/` (targets 80%+ line coverage):
 
 ```
-dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=lcov /p:CoverletOutput=./coverage/
+dotnet test --settings coverage.runsettings --results-directory ./coverage
 ```
 
 ---
@@ -538,4 +532,4 @@ CalImport:
 | `Microsoft.Identity.Client.Extensions.Msal` | 4.66.2 | DPAPI-encrypted token cache |
 | `Newtonsoft.Json` | 13.0.3 | JSON serialization |
 
-Test dependencies: xUnit 2.9, Moq 4.20, FluentAssertions 6.12, coverlet.msbuild 6.0.
+Test dependencies: xUnit 2.9, Moq 4.20, FluentAssertions 6.12, coverlet.collector 6.0.2.

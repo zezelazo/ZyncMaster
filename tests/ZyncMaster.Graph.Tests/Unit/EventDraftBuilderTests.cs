@@ -53,6 +53,22 @@ public sealed class EventDraftBuilderTests
     }
 
     [Fact]
+    public void BuildForCreate_carries_pairId_when_supplied_and_empty_otherwise()
+    {
+        var rec = MakeRecord();
+
+        _sut.BuildForCreate(rec, 30, pairId: "pair-7").PairId.Should().Be("pair-7");
+        _sut.BuildForCreate(rec, 30).PairId.Should().Be("");
+    }
+
+    [Fact]
+    public void BuildForUpdate_carries_pairId_when_supplied()
+    {
+        var rec = MakeRecord();
+        _sut.BuildForUpdate(rec, 30, existingBodyHtml: "<p>x</p>", pairId: "pair-9").PairId.Should().Be("pair-9");
+    }
+
+    [Fact]
     public void BuildForCreate_EmptyTimeZone_FallsBackToUtc()
     {
         var rec = MakeRecord(tz: "");

@@ -348,10 +348,10 @@ public static class PairEndpoints
             if (req.Year is < 1 or > 9999)
                 return Results.BadRequest(new { error = "invalid_year", message = "Year is out of range." });
 
-            // TODO (Plan 5 / multi-user): once pairs are user-scoped, GetAsync(id) MUST 404 for a
-            // pair the caller does not own, so the export never reads another user's source via
-            // Graph. The store already filters by current user for the other pair endpoints; keep
-            // this one on the same user-scoped store when the multi-user model lands.
+            // The pair is user-scoped: GetAsync filters by the current user, so a pair the caller
+            // does not own (or an unknown id) resolves to null -> 404, and the export never reads
+            // another user's source calendar via Graph. CrossUserIsolationTests proves this end to
+            // end (a signed-in user B exporting user A's pair id gets 404 and triggers no read).
             var pair = await store.GetAsync(id, ct);
             if (pair is null)
                 return Results.NotFound();
@@ -404,6 +404,131 @@ public static class PairEndpoints
             return Results.Text(txt, "text/plain");
         }).RequireCookieOrIdentityBearer();
 
+        // §F2-cleanup — count the events THIS pair created in a candidate destination, without
+        // deleting anything. Drives the edit wizard's "Also remove the N events already copied to
+        // the previous destination" confirm. User-scoped (404 for a pair the caller does not own);
+        // the destination must belong to the caller too. A non-Graph destination has no managed
+        // events the server can enumerate, so it reports 0.
+        app.MapGet("/api/pairs/{id}/managed-count", async (
+            string id,
+            string? provider,
+            string? accountRef,
+            string? calendarId,
+            ISyncPairStore store,
+            ProviderRegistry registry,
+            ILegacyConnectedAccountAdapter adapter,
+            CancellationToken ct) =>
+        {
+            var pair = await store.GetAsync(id, ct);
+            if (pair is null)
+                return Results.NotFound();
+
+            if (string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(calendarId))
+                return Results.BadRequest(new { error = "invalid_destination", message = "provider and calendarId are required." });
+
+            var destination = new Endpoint
+            {
+                Provider = provider!,
+                AccountRef = string.IsNullOrWhiteSpace(accountRef) ? null : accountRef,
+                CalendarId = calendarId!,
+            };
+
+            // The destination must belong to the caller — never enumerate a foreign account.
+            if (await ReferencedAccountIsMissingAsync(destination, adapter, ct))
+                return Results.BadRequest(new { error = "unknown_destination_account", message = "destination.accountRef does not belong to the current user." });
+
+            // OutlookCom destinations have no server-side managed-event enumeration.
+            if (!string.Equals(destination.Provider, ProviderRegistry.MicrosoftGraph, StringComparison.Ordinal))
+                return Results.Ok(new { count = 0 });
+
+            var writer = registry.ResolveWriter(destination);
+            int count;
+            try
+            {
+                count = await writer.CountManagedAsync(destination.CalendarId, pair.Id, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsTransientReadFailure(ex))
+            {
+                return Results.Json(
+                    new { error = "transient_read_failure", message = "The calendar could not be read right now; try again shortly." },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Ok(new { count });
+        }).RequireCookieOrIdentityBearer();
+
+        // §F2-cleanup — delete from the PREVIOUS destination ONLY the events this pair created
+        // (CalImportPairId == pair.Id). Opt-in, called by the App AFTER a successful PATCH that
+        // re-targeted the pair, so a failed re-target never triggers a destructive cleanup.
+        //
+        // Safety invariants enforced here:
+        //   1) user-scoped: GetAsync(id) 404s for a pair the caller does not own;
+        //   2) the destination to clean must belong to the caller (ReferencedAccountIsMissingAsync);
+        //   3) it must NOT be the pair's CURRENT destination (never delete what was just written);
+        //   4) the per-pair run-lock is held so cleanup never races a concurrent sync of the pair;
+        //   5) only events carrying CalImportPairId == pair.Id are enumerated/deleted — the user's
+        //      own events and other pairs' events are never touched (guaranteed in the Graph layer).
+        app.MapPost("/api/pairs/{id}/cleanup-destination", async (
+            string id,
+            CleanupDestinationRequest req,
+            ISyncPairStore store,
+            ISyncRunLock runLock,
+            ProviderRegistry registry,
+            ILegacyConnectedAccountAdapter adapter,
+            Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
+            CancellationToken ct) =>
+        {
+            ArgumentNullException.ThrowIfNull(req);
+
+            var validation = new CleanupDestinationRequestValidator().Validate(req);
+            if (!validation.IsValid)
+                return Results.ValidationProblem(validation.ToDictionary());
+
+            var pair = await store.GetAsync(id, ct);
+            if (pair is null)
+                return Results.NotFound();
+
+            var destination = req.Destination!;
+
+            if (await ReferencedAccountIsMissingAsync(destination, adapter, ct))
+                return Results.BadRequest(new { error = "unknown_destination_account", message = "destination.accountRef does not belong to the current user." });
+
+            // Refuse to clean the pair's CURRENT destination: that would delete the events the most
+            // recent (or in-flight) sync just wrote. Cleanup is for the OLD destination only.
+            // Canonicalize both account refs (legacy UPN vs pool accountId, plus the cross-rep mailbox
+            // net) so the SAME mailbox referenced two different ways is never mistaken for a different
+            // destination — a raw Ordinal AccountRef compare would let the current destination through.
+            if (await EndpointsAddressSameCalendarAsync(destination, pair.Destination, adapter, ct))
+                return Results.BadRequest(new { error = "destination_is_current", message = "Refusing to clean the pair's current destination." });
+
+            // A non-Graph (OutlookCom) destination has no server-side managed events to remove.
+            if (!string.Equals(destination.Provider, ProviderRegistry.MicrosoftGraph, StringComparison.Ordinal))
+                return Results.Ok(new { deleted = 0, failures = Array.Empty<string>() });
+
+            // Hold the per-pair run-lock so the destructive cleanup never overlaps a sync of the
+            // same pair (which could be writing to the new destination at the same time).
+            await using var handle = await runLock
+                .TryAcquireAsync(id, LockTtl(opts.Value), owner: "cleanup", ct)
+                .ConfigureAwait(false);
+            if (handle is null)
+                return RunLockBusy();
+
+            var writer = registry.ResolveWriter(destination);
+            CleanupResult result;
+            try
+            {
+                result = await writer.CleanupManagedAsync(destination.CalendarId, pair.Id, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsTransientReadFailure(ex))
+            {
+                return Results.Json(
+                    new { error = "transient_read_failure", message = "The calendar could not be read right now; try again shortly." },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Ok(new { deleted = result.Deleted, failures = result.Failures });
+        }).RequireCookieOrIdentityBearer();
+
         app.MapDelete("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
         {
             // Confirm ownership before deleting: a cross-user (or absent) id resolves to null
@@ -443,7 +568,7 @@ public static class PairEndpoints
             var writer = registry.ResolveWriter(pair.Destination);
             var (from, to) = Window(opts.Value);
             var result = await writer
-                .MirrorAsync(pair.Destination.CalendarId, req.Events, ReminderMinutes, from, to, ct)
+                .MirrorAsync(pair.Destination.CalendarId, req.Events, ReminderMinutes, from, to, ct, pair.Id)
                 .ConfigureAwait(false);
 
             await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
@@ -588,7 +713,22 @@ public static class PairEndpoints
     // TODO (Track B): once the pair model carries a pinnedDeviceId for COM endpoints, compare on
     // deviceId + calendar here. The COM-pin/lease itself is Track B; this method only enforces
     // origin != destination today.
-    internal static async Task<bool> IsSameSourceAndDestinationAsync(
+    internal static Task<bool> IsSameSourceAndDestinationAsync(
+        Endpoint source, Endpoint destination, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
+        => EndpointsAddressSameCalendarAsync(source, destination, adapter, ct);
+
+    // Canonical endpoint-sameness: true when two endpoints address the SAME calendar after
+    // canonicalizing the account reference. This is the shared core behind BOTH the §B-4 self-mirror
+    // check (source vs destination) AND the §F2 destination_is_current cleanup guard (the destination
+    // to clean vs the pair's CURRENT destination). It MUST be used wherever a raw AccountRef Ordinal
+    // comparison would be wrong, because a single Microsoft mailbox can be referenced as a legacy UPN
+    // OR as a fresh pool accountId — those strings differ but address the same calendar.
+    //
+    // For Graph endpoints the account is collapsed onto the canonical accountId; when those still
+    // differ (legacy-UPN account vs pool account for one mailbox), the canonical mailbox email is the
+    // extra cross-representation net. For two OutlookCom (COM) endpoints there is no server account,
+    // so the device reference (AccountRef) identifies the device-side calendar.
+    internal static async Task<bool> EndpointsAddressSameCalendarAsync(
         Endpoint source, Endpoint destination, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
     {
         // Different providers can never address the same calendar (a device-side OutlookCom

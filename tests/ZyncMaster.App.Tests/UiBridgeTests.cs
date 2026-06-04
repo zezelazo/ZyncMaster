@@ -163,6 +163,30 @@ public class UiBridgeTests
             DeletePairArg = id;
         }
 
+        // Destination-cleanup capture.
+        public string? CleanupPairIdArg;
+        public Endpoint? CleanupDestinationArg;
+        public CleanupResult CleanupResultToReturn = new() { Deleted = 4 };
+        public string? CountManagedPairIdArg;
+        public Endpoint? CountManagedDestinationArg;
+        public int CountManagedToReturn = 7;
+
+        public async Task<CleanupResult> CleanupOldDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CleanupPairIdArg = pairId;
+            CleanupDestinationArg = oldDestination;
+            return CleanupResultToReturn;
+        }
+
+        public async Task<int> CountManagedInDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CountManagedPairIdArg = pairId;
+            CountManagedDestinationArg = oldDestination;
+            return CountManagedToReturn;
+        }
+
         public async Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
@@ -313,6 +337,13 @@ public class UiBridgeTests
         {
             if (Throw != null) await Throw();
             CancelConnectCalls++;
+        }
+
+        public int OpenLicensesCalls;
+        public async Task OpenLicensesAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            OpenLicensesCalls++;
         }
     }
 
@@ -956,6 +987,47 @@ public class UiBridgeTests
     }
 
     [Fact]
+    public void CancelLogin_calls_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("cancelLogin", "i5"));
+
+        engine.CancelLoginCalls.Should().Be(1);
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void OpenLicenses_calls_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("openLicenses", "i6"));
+
+        engine.OpenLicensesCalls.Should().Be(1);
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void OpenLicenses_that_throws_replies_not_ok()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            Throw = () => throw new InvalidOperationException("notices boom"),
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("openLicenses", "i7"));
+
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
     public void New_pair_action_that_throws_replies_not_ok()
     {
         var transport = new FakeTransport();
@@ -1066,5 +1138,70 @@ public class UiBridgeTests
 
         engine.CancelConnectCalls.Should().Be(1);
         LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    // ---------------- Destination-cleanup actions (F2 re-target) ----------------
+
+    [Fact]
+    public void CountManagedInDestination_passes_pairId_and_destination_and_returns_count()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { CountManagedToReturn = 7 };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("countManagedInDestination", "cm1",
+            "{\"pairId\":\"p1\",\"destination\":{\"provider\":\"MicrosoftGraph\",\"accountRef\":\"ref-1\",\"calendarId\":\"old-cal\",\"calendarName\":\"Old\"}}"));
+
+        engine.CountManagedPairIdArg.Should().Be("p1");
+        engine.CountManagedDestinationArg.Should().NotBeNull();
+        engine.CountManagedDestinationArg!.CalendarId.Should().Be("old-cal");
+        engine.CountManagedDestinationArg.AccountRef.Should().Be("ref-1");
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("count").GetInt32().Should().Be(7);
+    }
+
+    [Fact]
+    public void CleanupOldDestination_passes_pairId_and_destination_and_returns_deleted_and_failures()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            CleanupResultToReturn = new CleanupResult { Deleted = 4, Failures = new() { "one failed" } },
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("cleanupOldDestination", "cl1",
+            "{\"pairId\":\"p9\",\"destination\":{\"provider\":\"MicrosoftGraph\",\"calendarId\":\"old-cal\"}}"));
+
+        engine.CleanupPairIdArg.Should().Be("p9");
+        engine.CleanupDestinationArg.Should().NotBeNull();
+        engine.CleanupDestinationArg!.CalendarId.Should().Be("old-cal");
+        // No accountRef in the payload -> normalized to null on the parsed Endpoint.
+        engine.CleanupDestinationArg.AccountRef.Should().BeNull();
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("deleted").GetInt32().Should().Be(4);
+        payload.GetProperty("failures").GetArrayLength().Should().Be(1);
+    }
+
+    [Fact]
+    public void CleanupOldDestination_engine_throwing_replies_not_ok()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            Throw = () => throw new InvalidOperationException("cleanup boom"),
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("cleanupOldDestination", "cl2",
+            "{\"pairId\":\"p9\",\"destination\":{\"provider\":\"MicrosoftGraph\",\"calendarId\":\"old-cal\"}}"));
+
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeFalse();
+        reply.GetProperty("error").GetString().Should().Contain("cleanup boom");
     }
 }

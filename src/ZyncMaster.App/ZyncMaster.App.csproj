@@ -42,6 +42,10 @@
          into the project so there is a single source of truth (no drift). -->
     <Content Include="..\..\ui\**\*" Link="Assets\ui\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
 
+    <!-- Open-source notices, bundled next to the exe so the "Open-source notices" row in the
+         About screen can open it with the system's default viewer (AppContext.BaseDirectory). -->
+    <Content Include="..\..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
+
     <!-- Local dev convenience: a developer settings.json copied next to the exe so F5 from
          Visual Studio works out of the box (pointing at the production server) without the
          "Set the server URL" prompt. It is .gitignored (each dev keeps their own; can point

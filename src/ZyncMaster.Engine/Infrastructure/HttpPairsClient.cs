@@ -157,6 +157,43 @@ public sealed class HttpPairsClient : IPairsClient
         return await SendBearerRawAsync(HttpMethod.Post, $"/api/pairs/{id}/export-source-txt", bearer, body, ct);
     }
 
+    public async Task<CleanupResult> CleanupDestinationAsync(string bearer, string id, Endpoint oldDestination, CancellationToken ct)
+    {
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
+        if (id == null) throw new ArgumentNullException(nameof(id));
+        if (oldDestination == null) throw new ArgumentNullException(nameof(oldDestination));
+
+        var body = new JObject { ["destination"] = EndpointToJson(oldDestination) };
+        var root = await SendBearerAsync(HttpMethod.Post, $"/api/pairs/{id}/cleanup-destination", bearer, body, ct) as JObject ?? new JObject();
+
+        var failures = new List<string>();
+        if (root["failures"] is JArray arr)
+            foreach (var f in arr)
+                failures.Add(f.Value<string>() ?? "");
+
+        return new CleanupResult
+        {
+            Deleted = root["deleted"]?.Value<int>() ?? 0,
+            Failures = failures,
+        };
+    }
+
+    public async Task<int> CountManagedAsync(string bearer, string id, Endpoint destination, CancellationToken ct)
+    {
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
+        if (id == null) throw new ArgumentNullException(nameof(id));
+        if (destination == null) throw new ArgumentNullException(nameof(destination));
+
+        var query =
+            $"?provider={Uri.EscapeDataString(destination.Provider ?? "")}" +
+            $"&calendarId={Uri.EscapeDataString(destination.CalendarId ?? "")}";
+        if (!string.IsNullOrEmpty(destination.AccountRef))
+            query += $"&accountRef={Uri.EscapeDataString(destination.AccountRef)}";
+
+        var root = await SendBearerAsync(HttpMethod.Get, $"/api/pairs/{id}/managed-count{query}", bearer, null, ct) as JObject ?? new JObject();
+        return root["count"]?.Value<int>() ?? 0;
+    }
+
     public async Task DeletePairAsync(string bearer, string id, CancellationToken ct)
     {
         if (bearer == null) throw new ArgumentNullException(nameof(bearer));

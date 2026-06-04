@@ -19,6 +19,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
     private readonly HttpClient                  _http;
     private readonly IGraphTokenProvider         _auth;
     private readonly string                      _extendedPropertyId;
+    private readonly string                      _pairPropertyId;
 
     // Per-run cache of bodies already re-fetched from /me/events/{id}?$select=body.
     // The combined $select=body + $expand on extended properties intermittently returns
@@ -49,8 +50,14 @@ public sealed class GraphCalendarTarget : ICalendarTarget
 
         // Single-value extended property identifier shape used by Graph:
         //   String {GUID} Name CalImportSourceId
-        _extendedPropertyId =
-            $"String {{{extendedPropertyGuid.ToString("D").ToUpperInvariant()}}} Name CalImportSourceId";
+        var guid = extendedPropertyGuid.ToString("D").ToUpperInvariant();
+        _extendedPropertyId = $"String {{{guid}}} Name CalImportSourceId";
+
+        // Second managed property: the id of the sync PAIR that created the event. Same GUID,
+        // distinct Name, so the two properties never collide. Written on Create alongside the
+        // per-event CalImportSourceId; the destination cleanup enumerates and deletes EXACTLY the
+        // events of one pair by filtering on this property's value == pairId (windowless).
+        _pairPropertyId = $"String {{{guid}}} Name CalImportPairId";
     }
 
     public async Task<IReadOnlyList<CalendarTargetInfo>> ListCalendarsAsync(CancellationToken ct = default)
@@ -253,8 +260,119 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         return result;
     }
 
+    // Lists every event in the calendar that carries the CalImportPairId managed property whose
+    // value equals pairId — i.e. exactly the events THIS pair created — across the WHOLE calendar
+    // (no window), following @odata.nextLink. Used by the destination-cleanup path when a pair is
+    // re-targeted: the OLD destination's pair-owned events are enumerated here and deleted.
+    //
+    // SAFETY: the $filter matches ONLY events whose CalImportPairId == pairId, so an event without
+    // the property (the user's own events, or another pair's events) is never returned, and thus
+    // never deleted. SourceId on the returned ref is best-effort (for logging); EventId is what the
+    // caller deletes.
+    public async Task<IReadOnlyList<ManagedEventRef>> ListManagedByPairAsync(
+        string calendarId, string pairId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(calendarId)) throw new ArgumentException("calendarId required.", nameof(calendarId));
+        if (string.IsNullOrWhiteSpace(pairId))     throw new ArgumentException("pairId required.", nameof(pairId));
+
+        var filter =
+            $"singleValueExtendedProperties/Any(ep:ep/id eq '{EscapeOData(_pairPropertyId)}' " +
+            $"and ep/value eq '{EscapeOData(pairId)}')";
+
+        // Expand BOTH managed properties so the source id can be surfaced on the ref (the pair id
+        // is the filter key; the source id is informational).
+        var expand =
+            $"singleValueExtendedProperties($filter=id eq '{EscapeOData(_extendedPropertyId)}' " +
+            $"or id eq '{EscapeOData(_pairPropertyId)}')";
+
+        var url =
+            $"me/calendars/{Uri.EscapeDataString(calendarId)}/events" +
+            $"?$filter={Uri.EscapeDataString(filter)}" +
+            $"&$select=id" +
+            $"&$expand={Uri.EscapeDataString(expand)}" +
+            $"&$top=50";
+
+        var result = new List<ManagedEventRef>();
+
+        while (!string.IsNullOrEmpty(url))
+        {
+            var json = await SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
+            var arr  = RequireCollection(json, url);
+
+            foreach (var ev in arr)
+            {
+                var eventId = ev["id"]?.Value<string>() ?? "";
+                if (eventId.Length == 0) continue;
+
+                // DESTRUCTIVE-DELETE CLIENT-SIDE GUARD: the caller deletes every event returned
+                // here, so we never trust the server $filter alone. We REQUIRE the expanded
+                // singleValueExtendedProperties block to carry the pair property (id == _pairPropertyId)
+                // with value == pairId (Ordinal). If Graph honored the $filter incompletely, returned
+                // an event without the expanded properties, or returned a property with a different
+                // value, the event is DISCARDED here and never reaches the delete loop. This makes a
+                // mis-honored filter a no-op instead of an erroneous deletion.
+                var props = ev["singleValueExtendedProperties"] as JArray;
+                if (props == null)
+                    continue; // not expanded -> cannot prove ownership -> never delete.
+
+                var pairValueMatches = false;
+                var sourceId = "";
+                foreach (var p in props)
+                {
+                    var id    = p["id"]?.Value<string>() ?? "";
+                    var value = p["value"]?.Value<string>() ?? "";
+
+                    if (string.Equals(id, _pairPropertyId, StringComparison.Ordinal)
+                        && string.Equals(value, pairId, StringComparison.Ordinal))
+                    {
+                        pairValueMatches = true;
+                    }
+                    else if (string.Equals(id, _extendedPropertyId, StringComparison.Ordinal) && value.Length > 0)
+                    {
+                        // Informational only (surfaced on the ref for logging); cleanup uses EventId.
+                        sourceId = value;
+                    }
+                }
+
+                // No proven pair ownership -> discard. Never add to the result that gets deleted.
+                if (!pairValueMatches)
+                    continue;
+
+                if (sourceId.Length == 0)
+                    sourceId = pairId;
+
+                result.Add(new ManagedEventRef { SourceId = sourceId, EventId = eventId });
+            }
+
+            url = json["@odata.nextLink"]?.Value<string>() ?? "";
+        }
+
+        return result;
+    }
+
     private JObject BuildEventJson(EventDraft draft)
     {
+        // Managed properties written on every Create: the per-event source id (always) and, when
+        // the writer is pair-scoped, the pair id (so a later destination cleanup can target exactly
+        // this pair's events). The pair property is omitted when PairId is empty, keeping the
+        // account-less /sync push path (which has no pair) unchanged.
+        var managedProps = new JArray
+        {
+            new JObject
+            {
+                ["id"]    = _extendedPropertyId,
+                ["value"] = draft.ExternalId,
+            },
+        };
+        if (!string.IsNullOrEmpty(draft.PairId))
+        {
+            managedProps.Add(new JObject
+            {
+                ["id"]    = _pairPropertyId,
+                ["value"] = draft.PairId,
+            });
+        }
+
         string startDateTime, endDateTime, timeZone;
         if (draft.IsAllDay)
         {
@@ -307,14 +425,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
             ["isAllDay"]                   = draft.IsAllDay,
             ["isReminderOn"]               = true,
             ["reminderMinutesBeforeStart"] = draft.ReminderMinutesBeforeStart,
-            ["singleValueExtendedProperties"] = new JArray
-            {
-                new JObject
-                {
-                    ["id"]    = _extendedPropertyId,
-                    ["value"] = draft.ExternalId,
-                }
-            },
+            ["singleValueExtendedProperties"] = managedProps,
         };
     }
 

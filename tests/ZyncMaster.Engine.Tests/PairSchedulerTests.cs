@@ -77,6 +77,10 @@ public sealed class PairSchedulerTests
             => Task.FromResult(new SyncPair());
         public Task<string> ExportSourceTxtAsync(string bearer, string id, int year, int month, bool includeCancelled, CancellationToken ct)
             => Task.FromResult("");
+        public Task<CleanupResult> CleanupDestinationAsync(string bearer, string id, Endpoint oldDestination, CancellationToken ct)
+            => Task.FromResult(new CleanupResult());
+        public Task<int> CountManagedAsync(string bearer, string id, Endpoint destination, CancellationToken ct)
+            => Task.FromResult(0);
         public Task DeletePairAsync(string bearer, string id, CancellationToken ct) => Task.CompletedTask;
         public Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct)
         {

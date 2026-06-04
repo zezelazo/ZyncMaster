@@ -34,6 +34,14 @@ public interface IEngineActions
     Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default);
     Task<SyncPair> UpdatePairAsync(string requestJson, CancellationToken ct = default);
     Task DeletePairAsync(string id, CancellationToken ct = default);
+
+    // Optional cleanup of the OLD destination after a pair is re-targeted. CleanupOldDestinationAsync
+    // deletes from oldDestination ONLY the events this pair created (the server enforces that, and
+    // refuses to clean the pair's current destination). CountManagedInDestinationAsync returns how
+    // many such events exist, so the wizard can show "remove the N events already copied" before the
+    // user opts in. Both go through the identity bearer like the rest of pair management.
+    Task<ZyncMaster.Engine.CleanupResult> CleanupOldDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default);
+    Task<int> CountManagedInDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default);
     Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default);
 
@@ -93,6 +101,12 @@ public interface IEngineActions
     //   ListCalendarAccountsAsync — the signed-in user's connected calendar accounts (IdentityBearer).
     Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default);
     Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default);
+
+    // Opens the bundled THIRD-PARTY-NOTICES file (the open-source license notices) in the system's
+    // default viewer via the shell — the same "open externally" behaviour the WebView host applies to
+    // http/https links. Config-independent: the file ships next to the exe, so this works even when the
+    // engine is unconfigured. Best-effort: a missing file / no viewer must not surface as an error.
+    Task OpenLicensesAsync(CancellationToken ct = default);
     //   CancelConnectAsync — abort the calendar-connect attempt currently in flight (user closed the
     //     browser tab / hit Cancel) and free the loopback port so a new connectCalendar() can start
     //     right away. Mirrors CancelLoginAsync.

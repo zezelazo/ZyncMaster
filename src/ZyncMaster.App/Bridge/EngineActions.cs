@@ -270,6 +270,22 @@ public sealed class EngineActions : IEngineActions, IDisposable
         await _pairs.DeletePairAsync(bearer, id, ct);
     }
 
+    public async Task<CleanupResult> CleanupOldDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(pairId)) throw new ArgumentNullException(nameof(pairId));
+        if (oldDestination == null) throw new ArgumentNullException(nameof(oldDestination));
+        var bearer = await RequireBearerAsync(ct);
+        return await _pairs.CleanupDestinationAsync(bearer, pairId, oldDestination, ct);
+    }
+
+    public async Task<int> CountManagedInDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(pairId)) throw new ArgumentNullException(nameof(pairId));
+        if (oldDestination == null) throw new ArgumentNullException(nameof(oldDestination));
+        var bearer = await RequireBearerAsync(ct);
+        return await _pairs.CountManagedAsync(bearer, pairId, oldDestination, ct);
+    }
+
     public async Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
@@ -491,6 +507,22 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public Task CancelConnectAsync(CancellationToken ct = default)
     {
         _calendarConnect.CancelConnect();
+        return Task.CompletedTask;
+    }
+
+    // Opens the bundled open-source notices in the OS default viewer (Notepad for .txt) via the shell,
+    // mirroring the WebView host's external-link handling. Best-effort: a missing file or no viewer is
+    // swallowed so it never bubbles into a bridge error. The file is copied next to the exe by the
+    // App csproj, so AppContext.BaseDirectory always points at it for a published build.
+    public Task OpenLicensesAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "THIRD-PARTY-NOTICES.txt");
+            if (File.Exists(path))
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch { /* no viewer / blocked: swallow, opening notices must never crash the bridge */ }
         return Task.CompletedTask;
     }
 

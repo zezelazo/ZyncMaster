@@ -35,7 +35,7 @@ public class PairRunPushTests : IClassFixture<ServerTestFactory>
 
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "")
         {
             Calls.Add((calendarId, records, reminderMinutes, fromUtc, toUtc));
             return Task.FromResult(new MirrorResult { Created = records.Count });

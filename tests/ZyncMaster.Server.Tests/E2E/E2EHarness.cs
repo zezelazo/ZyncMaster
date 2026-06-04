@@ -228,7 +228,7 @@ internal sealed class E2EHarness : IDisposable
 
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "")
         {
             _batches.Add(records);
             return Task.FromResult(new MirrorResult { Created = records.Count });

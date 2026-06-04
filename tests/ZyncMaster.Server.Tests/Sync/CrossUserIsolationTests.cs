@@ -85,7 +85,7 @@ public class CrossUserIsolationTests
 
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default) =>
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "") =>
             Task.FromResult(new MirrorResult { Created = records.Count });
     }
 
@@ -388,6 +388,62 @@ public class CrossUserIsolationTests
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
         h.PairReaderAccountRefs.Should().BeEmpty();
+        h.PairWriterAccountRefs.Should().BeEmpty();
+    }
+
+    // ---- export-source-txt is user-scoped: B cannot export A's source via Graph --------
+
+    [Fact]
+    public async Task UserB_cannot_export_source_txt_of_UserAs_pair()
+    {
+        using var h = new Harness();
+
+        // A owns a Graph-sourced pair (so it HAS a server reader; without scoping B could read it).
+        var aClient = await h.SignInAsync("oid-a", "alice@test", "Alice", "rt-a");
+        var aPairId = await CreatePairAsync(aClient, PairBody("A pair", "alice@test", sourceProvider: "MicrosoftGraph"));
+
+        // B signs in (cookie) and posts export-source-txt against A's pair id. The user-scoped store
+        // resolves null -> 404, so the endpoint never resolves a reader and never touches A's source
+        // calendar via Graph.
+        var bClient = await h.SignInAsync("oid-b", "bob@test", "Bob", "rt-b");
+        var bResp = await bClient.PostAsJsonAsync($"/api/pairs/{aPairId}/export-source-txt",
+            new { year = 2026, month = 6, includeCancelled = true });
+
+        bResp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        h.PairReaderAccountRefs.Should().BeEmpty();
+
+        // A's own device key also cannot export A's pair via this human-only surface (it requires a
+        // cookie or identity bearer), AND A's owner can still export it under the cookie.
+        var aResp = await aClient.PostAsJsonAsync($"/api/pairs/{aPairId}/export-source-txt",
+            new { year = 2026, month = 6, includeCancelled = true });
+        aResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        // A's export resolved the reader with A's account ref — proving scoping let the OWNER through.
+        h.PairReaderAccountRefs.Should().ContainSingle().Which.Should().Be("alice@test");
+    }
+
+    // ---- destination cleanup is user-scoped: B cannot clean A's pair -------------------
+
+    [Fact]
+    public async Task UserB_cannot_cleanup_or_count_destination_of_UserAs_pair()
+    {
+        using var h = new Harness();
+
+        var aClient = await h.SignInAsync("oid-a", "alice@test", "Alice", "rt-a");
+        var aPairId = await CreatePairAsync(aClient, PairBody("A pair", "alice@test", sourceProvider: "MicrosoftGraph"));
+
+        var bClient = await h.SignInAsync("oid-b", "bob@test", "Bob", "rt-b");
+        var oldDestination = new { provider = "MicrosoftGraph", accountRef = "bob@test", calendarId = "old-cal", calendarName = "Old" };
+
+        // B posting cleanup against A's pair id -> user-scoped store resolves null -> 404. The writer
+        // factory is never invoked (no destructive enumeration of any calendar).
+        var cleanup = await bClient.PostAsJsonAsync($"/api/pairs/{aPairId}/cleanup-destination",
+            new { destination = oldDestination });
+        cleanup.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        var count = await bClient.GetAsync(
+            $"/api/pairs/{aPairId}/managed-count?provider=MicrosoftGraph&accountRef=bob@test&calendarId=old-cal");
+        count.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
         h.PairWriterAccountRefs.Should().BeEmpty();
     }
 

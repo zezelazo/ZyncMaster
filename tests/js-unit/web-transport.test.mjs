@@ -69,6 +69,32 @@ test('path params are URL-encoded', () => {
   assert.equal(webRequestFor('runPairNow', 'a/b c').path, '/api/pairs/a%2Fb%20c/run');
 });
 
+test('cleanupOldDestination -> POST /api/pairs/{id}/cleanup-destination with {destination}', () => {
+  const destination = { provider: 'MicrosoftGraph', accountRef: 'me@test', calendarId: 'cal-old', calendarName: 'Old' };
+  const r = webRequestFor('cleanupOldDestination', { pairId: 'p1', destination });
+  assert.equal(r.method, 'POST');
+  assert.equal(r.path, '/api/pairs/p1/cleanup-destination');
+  assert.deepEqual(r.body, { destination });
+});
+
+test('countManagedInDestination -> GET /api/pairs/{id}/managed-count with destination query', () => {
+  const destination = { provider: 'MicrosoftGraph', accountRef: 'me@test', calendarId: 'cal-old' };
+  const r = webRequestFor('countManagedInDestination', { pairId: 'p1', destination });
+  assert.equal(r.method, 'GET');
+  assert.equal(r.path, '/api/pairs/p1/managed-count?provider=MicrosoftGraph&accountRef=me%40test&calendarId=cal-old');
+});
+
+test('countManagedInDestination omits blank query params', () => {
+  const destination = { provider: 'MicrosoftGraph', calendarId: 'cal-old' };
+  const r = webRequestFor('countManagedInDestination', { pairId: 'p1', destination });
+  assert.equal(r.path, '/api/pairs/p1/managed-count?provider=MicrosoftGraph&calendarId=cal-old');
+});
+
+test('openLicenses is inert in the web panel', () => {
+  assert.equal(isInertAction('openLicenses'), true);
+  assert.equal(webRequestFor('openLicenses'), null);
+});
+
 test('getStatus is composite (null mapping)', () => {
   assert.equal(webRequestFor('getStatus'), null);
 });

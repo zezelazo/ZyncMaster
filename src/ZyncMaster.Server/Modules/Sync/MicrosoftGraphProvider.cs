@@ -57,11 +57,12 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
         int reminderMinutes,
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string pairId = "")
     {
         var mirror = new CalendarMirror(_target, new ImportPlanBuilder(), new EventDraftBuilder(new ParticipantBodyRenderer()));
         var outcome = await mirror
-            .MirrorAsync(calendarId, records, reminderMinutes, fromUtc, toUtc, ct)
+            .MirrorAsync(calendarId, records, reminderMinutes, fromUtc, toUtc, ct, pairId)
             .ConfigureAwait(false);
 
         return new MirrorResult
@@ -73,6 +74,51 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
             Failures = outcome.Failures.Select(f => f.ToString()).ToList(),
             Partial = outcome.Partial,
         };
+    }
+
+    public async Task<CleanupResult> CleanupManagedAsync(
+        string calendarId,
+        string pairId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(calendarId)) throw new ArgumentException("calendarId required.", nameof(calendarId));
+        if (string.IsNullOrWhiteSpace(pairId))     throw new ArgumentException("pairId required.", nameof(pairId));
+
+        // Enumerate ONLY the events this pair created in the (old) destination. Events without the
+        // CalImportPairId == pairId property are never returned, so the cleanup can never touch the
+        // user's own events nor another pair's events that happen to share the destination.
+        var managed = await _target.ListManagedByPairAsync(calendarId, pairId, ct).ConfigureAwait(false);
+
+        var deleted  = 0;
+        var failures = new List<string>();
+        foreach (var ev in managed)
+        {
+            try
+            {
+                await _target.DeleteEventAsync(ev.EventId, ct).ConfigureAwait(false);
+                deleted++;
+            }
+            catch (Exception ex)
+            {
+                // Best-effort: a single failed delete must not abort the whole cleanup. The event
+                // still carries the property, so a retry re-enumerates and re-deletes it.
+                failures.Add($"Cleanup delete failed for event '{ev.EventId}' (source '{ev.SourceId}'): {ex.Message}");
+            }
+        }
+
+        return new CleanupResult { Deleted = deleted, Failures = failures };
+    }
+
+    public async Task<int> CountManagedAsync(
+        string calendarId,
+        string pairId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(calendarId)) throw new ArgumentException("calendarId required.", nameof(calendarId));
+        if (string.IsNullOrWhiteSpace(pairId))     throw new ArgumentException("pairId required.", nameof(pairId));
+
+        var managed = await _target.ListManagedByPairAsync(calendarId, pairId, ct).ConfigureAwait(false);
+        return managed.Count;
     }
 
     public async Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(

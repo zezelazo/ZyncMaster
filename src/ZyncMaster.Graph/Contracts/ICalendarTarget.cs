@@ -31,4 +31,18 @@ public interface ICalendarTarget
         DateTimeOffset    fromUtc,
         DateTimeOffset    toUtc,
         CancellationToken ct = default);
+
+    // Lists every event in the calendar — across the WHOLE calendar, no window — that carries the
+    // CalImportPairId managed property equal to pairId, i.e. exactly the events the given sync pair
+    // created. Used by the destination-cleanup path when a pair is re-targeted, to remove the pair's
+    // orphaned events from its PREVIOUS destination. Events without the property (the user's own, or
+    // another pair's) are never matched, so cleanup can never touch them.
+    //
+    // A default empty result is provided so the many target test doubles that never exercise the
+    // pair cleanup do not have to implement it; GraphCalendarTarget overrides it with the real query.
+    Task<IReadOnlyList<ManagedEventRef>> ListManagedByPairAsync(
+        string            calendarId,
+        string            pairId,
+        CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ManagedEventRef>>(Array.Empty<ManagedEventRef>());
 }

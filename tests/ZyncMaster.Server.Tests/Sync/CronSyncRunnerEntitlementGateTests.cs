@@ -46,7 +46,7 @@ public sealed class CronSyncRunnerEntitlementGateTests
 
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "")
         {
             lock (Mirrored) Mirrored.Add(calendarId);
             return Task.FromResult(new MirrorResult { Created = 1 });

@@ -60,7 +60,7 @@ public class PairExportAndEndpointEditTests : IClassFixture<ServerTestFactory>
             Task.FromResult(new CalendarOption { Id = "n", DisplayName = name });
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default) =>
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "") =>
             Task.FromResult(new MirrorResult());
     }
 

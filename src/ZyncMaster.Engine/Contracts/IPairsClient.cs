@@ -36,6 +36,15 @@ public interface IPairsClient
     // raw text/plain — the exact .txt — not JSON, so it is returned as the crude string.
     Task<string> ExportSourceTxtAsync(string bearer, string id, int year, int month, bool includeCancelled, CancellationToken ct);
 
+    // Deletes from the pair's PREVIOUS destination only the events this pair created
+    // (POST /api/pairs/{id}/cleanup-destination). Human-only management surface (identity bearer).
+    // The server refuses to clean the pair's current destination and is user-scoped (404 cross-user).
+    Task<CleanupResult> CleanupDestinationAsync(string bearer, string id, Endpoint oldDestination, CancellationToken ct);
+
+    // Counts (without deleting) the events the pair created in the given destination
+    // (GET /api/pairs/{id}/managed-count). Drives the wizard's cleanup-confirm count.
+    Task<int> CountManagedAsync(string bearer, string id, Endpoint destination, CancellationToken ct);
+
     Task DeletePairAsync(string bearer, string id, CancellationToken ct);
 
     Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct);

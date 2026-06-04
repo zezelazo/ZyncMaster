@@ -808,19 +808,13 @@ dotnet test -v normal
 
 ### Coverage
 
-Generate an LCOV coverage report (processed by most CI tools):
+Coverage is collected by the **coverlet data collector** (the `coverlet.collector` package), configured centrally in `Directory.Build.props` for every `*.Tests` project plus `coverage.runsettings`. Run:
 
 ```
-dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=lcov /p:CoverletOutput=./coverage/
+dotnet test --settings coverage.runsettings --results-directory ./coverage
 ```
 
-Generate a Cobertura report (for Azure DevOps or GitHub Actions coverage reports):
-
-```
-dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=./coverage/
-```
-
-The `coverlet.msbuild` package is already included in `ZyncMaster.CalExport.Tests.csproj`. The target coverage for business logic classes is 80%+ line coverage.
+This writes one `coverage.cobertura.xml` per test project under `./coverage/<guid>/` — a Cobertura report consumed by Azure DevOps, GitHub Actions and most CI coverage tools. The target coverage for business-logic classes is 80%+ line coverage.
 
 ### Key Test Classes and What They Cover
 

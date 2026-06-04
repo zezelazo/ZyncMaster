@@ -42,7 +42,7 @@ public sealed class PairRunLockEndpointTests
 
         public async Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "")
         {
             Interlocked.Increment(ref Calls);
             _entered.TrySetResult();
@@ -60,7 +60,7 @@ public sealed class PairRunLockEndpointTests
             Task.FromResult(new CalendarOption { Id = "new", DisplayName = name });
         public Task<MirrorResult> MirrorAsync(
             string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "")
         {
             Interlocked.Increment(ref Calls);
             return Task.FromResult(new MirrorResult { Created = records.Count });

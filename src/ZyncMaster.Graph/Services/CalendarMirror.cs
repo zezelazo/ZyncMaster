@@ -37,7 +37,8 @@ public sealed class CalendarMirror
         int                              reminderMinutes,
         DateTimeOffset                   fromUtc,
         DateTimeOffset                   toUtc,
-        CancellationToken                ct = default)
+        CancellationToken                ct = default,
+        string                           pairId = "")
     {
         if (string.IsNullOrWhiteSpace(calendarId)) throw new ArgumentException("calendarId required.", nameof(calendarId));
         if (records == null) throw new ArgumentNullException(nameof(records));
@@ -63,7 +64,7 @@ public sealed class CalendarMirror
                     case ImportAction.Create:
                         await _target.CreateEventAsync(
                             calendarId,
-                            _draftBuilder.BuildForCreate(item.Record, reminderMinutes),
+                            _draftBuilder.BuildForCreate(item.Record, reminderMinutes, pairId),
                             ct).ConfigureAwait(false);
                         created++;
                         break;
@@ -71,7 +72,7 @@ public sealed class CalendarMirror
                     case ImportAction.Update:
                         await _target.UpdateEventAsync(
                             item.ExistingEventId!,
-                            _draftBuilder.BuildForUpdate(item.Record, reminderMinutes, item.ExistingBodyHtml ?? ""),
+                            _draftBuilder.BuildForUpdate(item.Record, reminderMinutes, item.ExistingBodyHtml ?? "", pairId),
                             ct).ConfigureAwait(false);
                         updated++;
                         break;

@@ -76,6 +76,16 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task DeletePairAsync(string id, CancellationToken ct = default)
         => throw NotConfigured();
 
+    // Destination cleanup needs a configured + paired engine; surface the clear "configure first"
+    // error so the wizard's cleanup step degrades visibly rather than failing opaquely.
+    public Task<CleanupResult> CleanupOldDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    // No engine yet → nothing to count; report 0 so the wizard's confirm shows "0 events" rather
+    // than throwing (mirrors CheckDeviceNameAsync degrading quietly).
+    public Task<int> CountManagedInDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default)
+        => Task.FromResult(0);
+
     public Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
         => throw NotConfigured();
 
@@ -138,6 +148,20 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     // No connect can be in flight without a configured engine, so cancelling is a quiet no-op
     // (mirrors CancelLoginAsync).
     public Task CancelConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    // Opening the open-source notices is config-independent (the file ships next to the exe), so it
+    // works even before the server URL is set. Best-effort, like the live engine's implementation.
+    public Task OpenLicensesAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "THIRD-PARTY-NOTICES.txt");
+            if (System.IO.File.Exists(path))
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch { /* no viewer / blocked: swallow */ }
+        return Task.CompletedTask;
+    }
 
     private static InvalidOperationException NotConfigured()
         => new("Set the server URL in Settings first.");

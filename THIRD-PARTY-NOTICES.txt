@@ -1,0 +1,111 @@
+ZYNC MASTER — THIRD-PARTY NOTICES
+=================================
+
+Zync Master is built with open-source software. The components below are
+distributed as part of, or alongside, the Zync Master desktop application.
+Each remains the property of its respective authors and is used under the
+license noted. The full text of each license is available at the linked URL.
+
+This file covers the runtime dependencies of the desktop application
+(the program you install). The companion command-line tools and the sync
+server ship separately and carry their own equivalent notices.
+
+Last reviewed: 2026-06.
+
+-------------------------------------------------------------------------------
+DESKTOP APPLICATION — runtime components
+-------------------------------------------------------------------------------
+
+Avalonia
+  Version: 12.0.3
+  License: MIT
+  https://www.nuget.org/packages/Avalonia/12.0.3/license
+  https://github.com/AvaloniaUI/Avalonia
+
+Avalonia.Desktop
+  Version: 12.0.3
+  License: MIT
+  https://www.nuget.org/packages/Avalonia.Desktop/12.0.3/license
+  https://github.com/AvaloniaUI/Avalonia
+
+Avalonia.Themes.Fluent
+  Version: 12.0.3
+  License: MIT
+  https://www.nuget.org/packages/Avalonia.Themes.Fluent/12.0.3/license
+  https://github.com/AvaloniaUI/Avalonia
+
+Avalonia.Fonts.Inter
+  Version: 12.0.3
+  License: MIT
+  https://www.nuget.org/packages/Avalonia.Fonts.Inter/12.0.3/license
+  https://github.com/AvaloniaUI/Avalonia
+
+  Bundled font: Inter
+  License: SIL Open Font License 1.1
+  https://github.com/rsms/inter/blob/master/LICENSE.txt
+
+Microsoft.Web.WebView2
+  Version: 1.0.3967.48
+  License: Microsoft Software License Terms (WebView2 SDK)
+  https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3967.48/license
+  https://aka.ms/webview2
+
+  The WebView2 control relies on the Microsoft Edge WebView2 Runtime
+  (the "Evergreen" distributable), which is installed and updated separately
+  by Microsoft and governed by its own terms.
+  https://developer.microsoft.com/microsoft-edge/webview2/
+
+Newtonsoft.Json
+  Version: 13.0.3
+  License: MIT
+  https://www.nuget.org/packages/Newtonsoft.Json/13.0.3/license
+  https://github.com/JamesNK/Newtonsoft.Json
+
+-------------------------------------------------------------------------------
+RUNTIME PLATFORM
+-------------------------------------------------------------------------------
+
+.NET Runtime (Microsoft.NETCore.App) and the base class libraries
+  License: MIT
+  https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
+
+-------------------------------------------------------------------------------
+COMPANION TOOLS AND SERVER — additional components
+-------------------------------------------------------------------------------
+
+These ship as separate executables and are listed here for completeness.
+
+Microsoft.Identity.Client (MSAL.NET)
+  Version: 4.66.2
+  License: MIT
+  https://github.com/AzureAD/microsoft-authentication-library-for-dotnet
+
+Microsoft.Identity.Client.Extensions.Msal
+  Version: 4.66.2
+  License: MIT
+  https://github.com/AzureAD/microsoft-authentication-library-for-dotnet
+
+Microsoft.Office.Interop.Outlook
+  Version: 15.0.4797.1003
+  License: Microsoft Software License Terms (Office Primary Interop Assemblies)
+  https://www.nuget.org/packages/Microsoft.Office.Interop.Outlook/
+
+System.Security.Cryptography.ProtectedData
+  Version: 9.0.0
+  License: MIT
+  https://github.com/dotnet/runtime
+
+FluentValidation
+  Version: 11.9.2
+  License: Apache-2.0
+  https://github.com/FluentValidation/FluentValidation
+
+Microsoft.AspNetCore.DataProtection.EntityFrameworkCore
+  Version: 10.0.8
+  License: MIT
+  https://github.com/dotnet/aspnetcore
+
+Microsoft.EntityFrameworkCore.SqlServer
+  Version: 10.0.8
+  License: MIT
+  https://github.com/dotnet/efcore

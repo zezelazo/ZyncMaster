@@ -61,7 +61,7 @@ public sealed class CalendarSyncModule : ICalendarSyncModule
 
         var writer = _registry.ResolveWriter(pair.Destination);
         var result = await writer
-            .MirrorAsync(pair.Destination.CalendarId, events, ReminderMinutes, from, to, ct)
+            .MirrorAsync(pair.Destination.CalendarId, events, ReminderMinutes, from, to, ct, pair.Id)
             .ConfigureAwait(false);
 
         return new CalendarModuleResult { Result = result };
