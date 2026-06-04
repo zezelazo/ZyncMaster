@@ -196,7 +196,10 @@ const Bridge = (() => {
     // rest are no-ops) — the UI hides their entry points in web mode anyway.
     const mapped = webRequestFor(action, data);
     if (mapped === null) {
-      return action === 'getAutoStart' ? { enabled: false } : null;
+      if (action === 'getAutoStart') return { enabled: false };
+      // The browser panel is not a local device: no Outlook COM, so COM affordances stay off.
+      if (action === 'getCapabilities') return { outlookCom: false };
+      return null;
     }
     return req(mapped.method, mapped.path, mapped.body);
   }
@@ -381,7 +384,17 @@ const live = {
   loadedPairs: false,
   loadingPairs: false,
   pairsAttempted: false,  // web panel: home auto-loads pairs at most once (a 401 must not loop)
+  // Device capabilities (getCapabilities), loaded once at boot. Until it resolves we ASSUME
+  // COM is unavailable (the safer default: COM affordances stay disabled until confirmed).
+  capabilities: { outlookCom: false },
+  capabilitiesLoaded: false,
 };
+
+// True only once getCapabilities has confirmed Outlook Classic COM is present on this device.
+// Before that (and on the web panel) it is false, so COM-only affordances stay disabled.
+function comAvailable() {
+  return !!(live.capabilities && live.capabilities.outlookCom);
+}
 
 // Web panel sign-in gate state. Only consulted in web mode (Bridge.webPanel). signedIn flips
 // true once getStatus resolves; a 401 from any web call flips it false and shows the gate.
@@ -867,15 +880,24 @@ function pairAccordion(pair) {
         onclick: (e) => { e.stopPropagation(); setPairState(pair.id, disabled ? 'active' : 'disabled'); } },
         iconEl(disabled ? 'check' : 'close', 12, 1.8), el('span', { style: 'font-size:12px', text: disabled ? 'Enable' : 'Disable' })));
 
-      // Export .txt — per-pair Outlook COM export. Only meaningful when the SOURCE is local Outlook
-      // (OutlookCom); for Graph→Graph pairs there is no COM source to export, so the button is shown
-      // disabled with an explanatory hint. Opens the export options popup for this pair.
+      // Export .txt — per-pair export of the pair's SOURCE calendar. Routing is by source
+      // provider, inside openExportTxtModal: a COM source exports the local Outlook via
+      // generateTxt (requires Outlook installed); a Graph source exports the online calendar via
+      // the server (exportSourceTxt, always available). For a COM source we disable the button
+      // when Outlook is not present on this device.
       const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
+      const comBlocked = isCom && !comAvailable();
       const txtBtn = el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
-        disabled: !isCom, title: isCom ? 'Export a month of this calendar to a .txt file' : 'Only available for Outlook sources on this PC',
-        onclick: (e) => { e.stopPropagation(); if (isCom) openExportTxtModal(pair); } },
+        disabled: comBlocked,
+        title: comBlocked ? 'Outlook is not available on this device' : 'Export a month of this calendar to a .txt file',
+        onclick: (e) => { e.stopPropagation(); if (!comBlocked) openExportTxtModal(pair); } },
         iconEl('folder', 12, 1.6), el('span', { style: 'font-size:12px', text: 'Export .txt' }));
       controls.append(txtBtn);
+
+      // Edit — open the wizard preloaded with this pair (F2). Reuses renderAddPairLive in edit mode.
+      controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
+        onclick: (e) => { e.stopPropagation(); startEditPair(pair.id); } },
+        iconEl('settings', 12, 1.8), el('span', { style: 'font-size:12px', text: 'Edit' })));
 
       controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px;color:var(--err);margin-left:auto',
         onclick: (e) => { e.stopPropagation(); deletePair(pair.id); } },
@@ -976,18 +998,56 @@ const addPair = { step: 0, srcId: null, dstId: null, name: '', windowDays: 14, i
 // always an online account+calendar. accountRef/calendarId come from the host.
 const addPairLive = {
   step: 0,
+  editId: null,               // null = creating; a pair id = editing that pair (F2)
   sourceKind: null,           // 'com' | 'online'
   srcAccountRef: null, srcCalendarId: null, srcCalendarName: null,
   dstAccountRef: null, dstCalendarId: null, dstCalendarName: null,
   name: '', intervalMin: 15,
+  // Originals captured on edit so step 3 can warn when source/destination changed (fresh start /
+  // orphans left in the old destination). Unused when creating.
+  origSourceKind: null, origSrcAccountRef: null, origSrcCalendarId: null,
+  origDstAccountRef: null, origDstCalendarId: null,
 };
 function resetAddPairLive() {
   Object.assign(addPairLive, {
-    step: 0, sourceKind: null,
+    step: 0, editId: null, sourceKind: null,
     srcAccountRef: null, srcCalendarId: null, srcCalendarName: null,
     dstAccountRef: null, dstCalendarId: null, dstCalendarName: null,
     name: '', intervalMin: 15,
+    origSourceKind: null, origSrcAccountRef: null, origSrcCalendarId: null,
+    origDstAccountRef: null, origDstCalendarId: null,
   });
+}
+
+// startEditPair(id) — preload the wizard from a SyncPair and open it in edit mode (F2). Looks the
+// raw pair up in live.pairs (it carries source/destination; the view model does not). Captures the
+// original source/destination so step 3 can warn when they change.
+function startEditPair(id) {
+  if (!Bridge.available || !id) return;
+  const pair = (live.pairs || []).find((p) => p && p.id === id);
+  if (!pair) return;
+  const src = pair.source || {};
+  const dst = pair.destination || {};
+  const com = (src.provider || '').toLowerCase() === 'outlookcom';
+  Object.assign(addPairLive, {
+    step: 0,
+    editId: id,
+    sourceKind: com ? 'com' : 'online',
+    srcAccountRef: com ? null : (src.accountRef || null),
+    srcCalendarId: src.calendarId || (com ? 'local' : null),
+    srcCalendarName: src.calendarName || (com ? 'Outlook (this PC)' : null),
+    dstAccountRef: dst.accountRef || null,
+    dstCalendarId: dst.calendarId || null,
+    dstCalendarName: dst.calendarName || null,
+    name: pair.name || '',
+    intervalMin: pair.intervalMin || 15,
+    origSourceKind: com ? 'com' : 'online',
+    origSrcAccountRef: com ? null : (src.accountRef || null),
+    origSrcCalendarId: src.calendarId || (com ? 'local' : null),
+    origDstAccountRef: dst.accountRef || null,
+    origDstCalendarId: dst.calendarId || null,
+  });
+  navigate('add-pair');
 }
 
 function calendarPicker(value, onChange, exclude) {
@@ -1177,8 +1237,9 @@ function createCalendarFor(accountRef, name, onPick, onError) {
 function renderAddPairLive(root) {
   const labels = ['Source', 'Destination', 'Configure'];
   const a = addPairLive;
+  const editing = !!a.editId;
 
-  root.append(viewHeader('Add a sync pair', { onBack: () => { if (a.step === 0) navigate('calendar'); else { a.step--; rerender(); } } }));
+  root.append(viewHeader(editing ? 'Edit sync pair' : 'Add a sync pair', { onBack: () => { if (a.step === 0) { resetAddPairLive(); navigate('calendar'); } else { a.step--; rerender(); } } }));
   root.append(wizardStepper(a.step, labels));
 
   if (live.accounts === null) {
@@ -1189,13 +1250,17 @@ function renderAddPairLive(root) {
     root.append(el('div', { class: 'wizard-title', text: 'Pick the source calendar' }));
     root.append(el('div', { class: 'wizard-sub', text: 'Changes here are mirrored to the destination. The source is never modified.' }));
 
-    // Two source kinds: local Outlook (COM) or an online account calendar.
+    // Two source kinds: local Outlook (COM) or an online account calendar. The COM tile is ALWAYS
+    // rendered, but disabled (no-op onclick) when Outlook is not available on this device.
     const kinds = el('div', { class: 'provider-grid' });
-    kinds.append(el('button', { class: `provider-tile glass${a.sourceKind === 'com' ? ' is-selected' : ''}`,
-      onclick: () => { a.sourceKind = 'com'; a.srcCalendarId = 'local'; a.srcCalendarName = 'Outlook (this PC)'; a.srcAccountRef = null; rerender(); } },
+    const comOff = !comAvailable();
+    kinds.append(el('button', { class: `provider-tile glass${a.sourceKind === 'com' ? ' is-selected' : ''}${comOff ? ' is-disabled' : ''}`,
+      disabled: comOff,
+      title: comOff ? 'Not available on this device' : undefined,
+      onclick: () => { if (comOff) return; a.sourceKind = 'com'; a.srcCalendarId = 'local'; a.srcCalendarName = 'Outlook (this PC)'; a.srcAccountRef = null; rerender(); } },
       el('div', { class: 'provider-tile__logo', dataset: { tone: 'azure' }, text: 'PC' }),
       el('div', { class: 'provider-tile__name', text: 'Outlook on this PC' }),
-      el('div', { class: 'provider-tile__sub', text: 'Local Outlook · read via COM' })));
+      el('div', { class: 'provider-tile__sub', text: comOff ? 'Not available on this device' : 'Local Outlook · read via COM' })));
     kinds.append(el('button', { class: `provider-tile glass${a.sourceKind === 'online' ? ' is-selected' : ''}`,
       onclick: () => { a.sourceKind = 'online'; rerender(); } },
       el('div', { class: 'provider-tile__logo', dataset: { tone: 'ink' }, text: 'M' }),
@@ -1211,7 +1276,7 @@ function renderAddPairLive(root) {
 
     const srcReady = a.sourceKind === 'com' || (a.sourceKind === 'online' && a.srcCalendarId);
     root.append(el('div', { class: 'wizard-foot' },
-      el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => navigate('calendar') }),
+      el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => { resetAddPairLive(); navigate('calendar'); } }),
       el('button', { class: 'btn btn--primary', disabled: !srcReady, onclick: () => { a.step = 1; rerender(); } },
         el('span', { text: 'Continue' }), iconEl('arrowright', 14, 1.8))));
   } else if (a.step === 1) {
@@ -1226,7 +1291,7 @@ function renderAddPairLive(root) {
         el('span', { text: 'Continue' }), iconEl('arrowright', 14, 1.8))));
   } else if (a.step === 2) {
     if (!a.name) a.name = `${a.srcCalendarName} → ${a.dstCalendarName}`;
-    root.append(el('div', { class: 'wizard-title', text: 'Configure the sync' }));
+    root.append(el('div', { class: 'wizard-title', text: editing ? 'Edit the sync' : 'Configure the sync' }));
     root.append(el('div', { class: 'wizard-sub', text: 'Review the pair and tune how often it runs.' }));
 
     const col = (label, name, sub) => el('div', { class: 'pair-preview__col' },
@@ -1236,6 +1301,18 @@ function renderAddPairLive(root) {
       el('span', { style: 'color:var(--ink-3);display:inline-flex', html: icon('arrowright', { size: 14, stroke: 1.8 }) }),
       pairBadge('Outlook'), col('DESTINATION', a.dstCalendarName, a.dstAccountRef)));
 
+    // F2 warning: when editing and the source OR destination changed, the next run starts fresh
+    // (the new destination has no events tagged with this source). Events already mirrored into the
+    // PREVIOUS destination are left untouched — we never delete the old destination's events.
+    if (editing && editEndpointsChanged()) {
+      const destChanged = (a.dstCalendarId !== a.origDstCalendarId) || ((a.dstAccountRef || null) !== (a.origDstAccountRef || null));
+      const msg = destChanged
+        ? 'Changing the destination starts a fresh sync into the new calendar. Events already mirrored into the previous destination are left untouched; remove them manually if you don’t want them.'
+        : 'Changing the source restarts the sync. The destination will be reconciled against the new source on the next run.';
+      root.append(el('div', { class: 'glass glass--card wizard-warn' },
+        el('div', { class: 'wizard-warn__text', text: msg })));
+    }
+
     const cfg = el('div', { class: 'glass glass--card config-section', style: 'margin-top:10px' });
     const nameInput = el('input', { class: 'field-input', value: a.name });
     nameInput.addEventListener('input', () => { a.name = nameInput.value; });
@@ -1244,10 +1321,53 @@ function renderAddPairLive(root) {
     cfg.append(intervalRow(() => a.intervalMin, (v) => { a.intervalMin = v; }));
     root.append(cfg);
 
+    // Secondary action while editing: export this month of the pair's source to a .txt, reusing
+    // the same modal the per-pair Export button opens (routes by source provider inside).
+    // The export reads the SAVED source from the server (the value before this edit's PATCH), so
+    // while there are unsaved endpoint changes it would export the OLD source — confusing and wrong.
+    // Disable it in that case with a clear "save first" hint; for a COM source it also needs Outlook.
+    if (editing) {
+      const srcCom = a.sourceKind === 'com';
+      const unsavedEndpoints = editEndpointsChanged();
+      const exportBlocked = unsavedEndpoints || (srcCom && !comAvailable());
+      const blockTitle = unsavedEndpoints
+        ? 'Save changes before exporting'
+        : (srcCom && !comAvailable() ? 'Outlook is not available on this device' : 'Export a month of the source calendar to a .txt file');
+      root.append(el('div', { style: 'margin-top:10px' },
+        el('button', { class: 'btn btn--ghost', style: 'width:100%',
+          disabled: exportBlocked,
+          title: blockTitle,
+          onclick: () => { if (!exportBlocked) openExportTxtModal(editPairForModal()); } },
+          iconEl('folder', 13, 1.6),
+          el('span', { text: unsavedEndpoints ? 'Save changes before exporting' : 'Export this month to .txt' }))));
+    }
+
     root.append(el('div', { class: 'wizard-foot' },
       el('button', { class: 'btn btn--ghost', text: 'Back', onclick: () => { a.step = 1; rerender(); } }),
-      el('button', { class: 'btn btn--primary', onclick: () => completeAddPairLive() }, iconEl('check', 14, 2.2), el('span', { text: 'Create pair' }))));
+      el('button', { class: 'btn btn--primary', onclick: () => completeAddPairLive() }, iconEl('check', 14, 2.2), el('span', { text: editing ? 'Save changes' : 'Create pair' }))));
   }
+}
+
+// True when the wizard is editing and the source or destination differs from the loaded original.
+function editEndpointsChanged() {
+  const a = addPairLive;
+  if (!a.editId) return false;
+  const srcChanged = a.sourceKind !== a.origSourceKind
+    || a.srcCalendarId !== a.origSrcCalendarId
+    || ((a.srcAccountRef || null) !== (a.origSrcAccountRef || null));
+  const dstChanged = a.dstCalendarId !== a.origDstCalendarId
+    || ((a.dstAccountRef || null) !== (a.origDstAccountRef || null));
+  return srcChanged || dstChanged;
+}
+
+// Builds a minimal pair-like object the export modal understands (it reads pair.id and
+// pair.src.provider), from the in-edit wizard state.
+function editPairForModal() {
+  const a = addPairLive;
+  return {
+    id: a.editId,
+    src: { provider: a.sourceKind === 'com' ? 'OutlookCom' : 'MicrosoftGraph' },
+  };
 }
 
 function completeAddPairLive() {
@@ -1256,9 +1376,14 @@ function completeAddPairLive() {
     ? { provider: 'OutlookCom', calendarId: 'local', calendarName: 'Outlook (this PC)' }
     : { provider: 'MicrosoftGraph', accountRef: a.srcAccountRef, calendarId: a.srcCalendarId, calendarName: a.srcCalendarName };
   const destination = { provider: 'MicrosoftGraph', accountRef: a.dstAccountRef, calendarId: a.dstCalendarId, calendarName: a.dstCalendarName };
-  const req = { name: a.name, source, destination, intervalMin: a.intervalMin };
 
-  Bridge.call('createPair', JSON.stringify(req))
+  // Edit (F2) updates in place (preserving the id); create makes a new pair. Both send the same
+  // {name, source, destination, intervalMin}; updatePair additionally carries the id.
+  const call = a.editId
+    ? Bridge.call('updatePair', JSON.stringify({ id: a.editId, name: a.name, intervalMin: a.intervalMin, source, destination }))
+    : Bridge.call('createPair', JSON.stringify({ name: a.name, source, destination, intervalMin: a.intervalMin }));
+
+  call
     .then(() => loadPairs())
     .then(() => { resetAddPairLive(); navigate('calendar'); })
     .catch(() => { resetAddPairLive(); navigate('calendar'); });
@@ -2121,13 +2246,19 @@ function openModal({ title, body, onClose }) {
 }
 
 // ---------------- Per-pair .txt export popup ----------------
-// openExportTxtModal(pair) — month/year/include-cancelled options for exporting the local Outlook
-// calendar on THIS PC (via COM). The export always reads the on-this-PC Outlook calendar, never a
-// remote or pair-specific calendar, so there is no calendar picker. Confirming calls generateTxt
-// with {year, month, includeCancelled}. Mirrors the previous save/cancel feedback.
+// openExportTxtModal(pair) — month/year/include-cancelled options for exporting the pair's SOURCE
+// calendar for one month. Routing is by source provider:
+//   * OutlookCom source → generateTxt (reads the local Outlook on THIS PC via COM). Requires
+//     Outlook installed; the modal does not open when COM is unavailable (defence in depth).
+//   * MicrosoftGraph source → exportSourceTxt (the server reads the online source calendar and
+//     returns the .txt; the App saves it). No COM dependency.
+// The copy adapts to the provider, so a Graph source never claims "local Outlook on this PC".
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 function openExportTxtModal(pair) {
-  if (!Bridge.available) return;
+  if (!Bridge.available || !pair) return;
+  const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
+  // A COM source needs Outlook on this device; bail rather than opening a modal that can't export.
+  if (isCom && !comAvailable()) return;
   const now = new Date();
   const selected = { month: now.getMonth() + 1, year: now.getFullYear(), includeCancelled: true };
 
@@ -2149,8 +2280,11 @@ function openExportTxtModal(pair) {
   const feedback = el('div', { class: 'cfg-row__hint modal__feedback', style: 'min-height:16px' });
   const confirmBtn = el('button', { class: 'btn btn--primary', type: 'button' }, iconEl('folder', 13, 1.6), el('span', { text: 'Export .txt' }));
 
+  const srcText = isCom
+    ? 'Exports your local Outlook calendar on this PC for the selected month.'
+    : 'Exports the source calendar (read online by the server) for the selected month.';
   const body = el('div', { class: 'export-modal' },
-    el('div', { class: 'export-modal__src cfg-row__hint', style: 'margin-bottom:4px' }, 'Exports your local Outlook calendar on this PC for the selected month.'),
+    el('div', { class: 'export-modal__src cfg-row__hint', style: 'margin-bottom:4px' }, srcText),
     el('div', { class: 'glass glass--card config-section' },
       cfgRow('Month', null, monthSel),
       cfgRow('Year', null, yearSel),
@@ -2165,8 +2299,13 @@ function openExportTxtModal(pair) {
     confirmBtn.disabled = true;
     if (span) span.textContent = 'Saving…';
     feedback.textContent = ''; feedback.style.color = '';
-    const req = { year: selected.year, month: selected.month, includeCancelled: selected.includeCancelled };
-    Bridge.call('generateTxt', JSON.stringify(req))
+    // COM source → generateTxt (local Outlook); Graph source → exportSourceTxt (server reads the
+    // online source). The latter needs the pair id so the server knows which source to read.
+    const action = isCom ? 'generateTxt' : 'exportSourceTxt';
+    const req = isCom
+      ? { year: selected.year, month: selected.month, includeCancelled: selected.includeCancelled }
+      : { pairId: pair.id, year: selected.year, month: selected.month, includeCancelled: selected.includeCancelled };
+    Bridge.call(action, JSON.stringify(req))
       .then((r) => {
         if (r && r.cancelled) {
           // The host's save dialog was dismissed — leave the modal open so the user can retry.
@@ -2624,6 +2763,13 @@ async function boot() {
   if (Bridge.available) {
     Bridge.start();
     Bridge.onStatus((s) => applyNativeStatus(s));
+
+    // Load device capabilities once. The web panel maps this to {outlookCom:false}; the desktop
+    // App probes Outlook Classic. A failure leaves the safe default (COM disabled). Repaint so
+    // tiles/buttons that gate on COM reflect the real value once it lands.
+    Bridge.call('getCapabilities')
+      .then((c) => { if (c) live.capabilities = { outlookCom: !!c.outlookCom }; live.capabilitiesLoaded = true; rerenderInPlace(); })
+      .catch(() => { live.capabilitiesLoaded = true; });
 
     // Desktop App: warm up the server FIRST. The Azure F1 free tier cold-starts, so before the
     // identity gate (which talks to the server) we ping /health and show "waking up" feedback.

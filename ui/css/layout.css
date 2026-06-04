@@ -544,6 +544,18 @@
 }
 .wizard-foot .btn { min-width: 90px; }
 
+/* F2 edit warning: source/destination changed → the next run starts fresh. */
+.wizard-warn {
+  margin-top: 10px;
+  padding: 12px;
+  border-left: 3px solid var(--warn);
+}
+.wizard-warn__text {
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+
 /* Calendar picker */
 .cal-list { padding: 4px; display: grid; gap: 1px; }
 .cal-item {
@@ -643,6 +655,10 @@
 /* No hover transform — only a calm border tint, so the tile never shifts under the cursor. */
 .provider-tile:hover { border-color: var(--terra-edge); }
 .provider-tile.is-selected { outline: 1px solid var(--azure-edge); background: var(--azure-soft); }
+.provider-tile.is-disabled,
+.provider-tile:disabled { opacity: 0.5; cursor: not-allowed; }
+.provider-tile.is-disabled:hover,
+.provider-tile:disabled:hover { border-color: var(--ctrl-stroke); }
 .provider-tile__logo {
   width: 32px; height: 32px;
   display: grid; place-items: center;
