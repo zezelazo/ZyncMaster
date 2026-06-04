@@ -47,6 +47,7 @@ public sealed class HttpPairsClient : IPairsClient
             {
                 AccountRef = item["accountRef"]?.Value<string>() ?? "",
                 DisplayName = item["displayName"]?.Value<string>() ?? "",
+                Email = item["email"]?.Value<string>() ?? "",
                 IsDefault = item["isDefault"]?.Value<bool>() ?? false,
             });
         return list;

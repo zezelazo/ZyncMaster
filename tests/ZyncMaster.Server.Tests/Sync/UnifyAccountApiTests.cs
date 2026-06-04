@@ -147,6 +147,28 @@ public class UnifyAccountApiTests
             .SingleOrDefault(a => a.GetProperty("accountRef").GetString() == poolId);
         pool.ValueKind.Should().NotBe(JsonValueKind.Undefined);
         pool.GetProperty("displayName").GetString().Should().Be("Pool Account");
+        // The real mailbox is surfaced as `email` so the UI shows it instead of the accountRef GUID.
+        pool.GetProperty("email").GetString().Should().Be("pool@test");
+    }
+
+    [Fact]
+    public async Task Accounts_pool_account_without_display_uses_email_as_displayName_and_emits_email()
+    {
+        using var factory = Build();
+        var client = await AuthedClientAsync(factory);
+        var userId = await CookieUserIdAsync(factory);
+        // A pool account with a real email but NO display name: AccountDisplayName must fall back to
+        // the email (never "Connected account"), and the email field must carry the mailbox so the
+        // UI never has to show the accountRef GUID.
+        var poolId = SeedPoolAccount(factory, userId, "noname@test", "");
+
+        var accounts = await client.GetFromJsonAsync<JsonElement>("/api/accounts");
+        var pool = accounts.EnumerateArray()
+            .Single(a => a.GetProperty("accountRef").GetString() == poolId);
+
+        pool.GetProperty("displayName").GetString().Should().Be("noname@test");
+        pool.GetProperty("email").GetString().Should().Be("noname@test");
+        pool.GetProperty("accountRef").GetString().Should().Be(poolId);
     }
 
     [Fact]

@@ -84,7 +84,7 @@ public sealed class HttpPairsClientTests
     public async Task ListAccounts_GetsAndParsesAndSendsBearer()
     {
         var (client, stub) = Make(HttpStatusCode.OK,
-            @"[ { ""accountRef"": ""a1"", ""displayName"": ""Work"", ""isDefault"": true },
+            @"[ { ""accountRef"": ""a1"", ""displayName"": ""Work"", ""email"": ""work@x"", ""isDefault"": true },
                 { ""accountRef"": ""a2"", ""displayName"": ""Home"", ""isDefault"": false } ]");
 
         var result = await client.ListAccountsAsync(Bearerr, CancellationToken.None);
@@ -97,7 +97,10 @@ public sealed class HttpPairsClientTests
         result.Should().HaveCount(2);
         result[0].AccountRef.Should().Be("a1");
         result[0].DisplayName.Should().Be("Work");
+        result[0].Email.Should().Be("work@x");
         result[0].IsDefault.Should().BeTrue();
+        // A missing email field maps to empty (not null), so the UI label logic is safe.
+        result[1].Email.Should().BeEmpty();
         result[1].IsDefault.Should().BeFalse();
     }
 

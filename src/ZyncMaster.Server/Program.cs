@@ -82,6 +82,11 @@ builder.Services.AddDataProtection()
 builder.Services.AddHttpClient<IMicrosoftTokenService, MicrosoftTokenService>();
 builder.Services.AddHttpClient("graph");
 
+// Best-effort Graph /me lookup used to capture a connected account's real mailbox + display name
+// (the calendar token-exchange omits `openid`, so it returns no id_token / email). Typed client
+// over the same "graph" pool so no new HTTP dependency is added.
+builder.Services.AddHttpClient<IGraphUserInfoService, GraphUserInfoService>();
+
 // The accessor is a SINGLETON over IHttpContextAccessor and reads HttpContext per call,
 // so injecting it into the singleton EF stores does not capture a single request's user.
 builder.Services.AddHttpContextAccessor();
@@ -95,6 +100,10 @@ builder.Services.AddSingleton<ISyncStateStore, EfSyncStateStore>();
 builder.Services.AddSingleton<ISecretProvider, ConfigurationSecretProvider>();
 builder.Services.AddSingleton<IConnectedAccountStore, EfConnectedAccountStore>();
 builder.Services.AddSingleton<ICalendarAccountStore, EfCalendarAccountStore>();
+
+// Best-effort one-time email/displayName backfill for pool accounts connected before /me capture
+// existed. Runs on the account listing endpoints; only touches accounts whose email is still blank.
+builder.Services.AddSingleton<CalendarAccountEmailBackfill>();
 
 // §C-3 — the one place that bridges the legacy per-UPN store and the new accountId pool. It is
 // resolved everywhere the pair/token code needs to turn an Endpoint.AccountRef (which may be a

@@ -118,6 +118,29 @@ public sealed class EfCalendarAccountStore : ICalendarAccountStore
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task UpdateProfileAsync(
+        string accountId, string? email, string? displayName, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(accountId);
+
+        // Nothing usable to write — skip the round-trip entirely.
+        if (string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(displayName))
+            return;
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var row = await TrackedAsync(db, accountId, ct);
+        if (row is null) return;
+
+        // Only overwrite with non-empty values so a partial /me (e.g. email but no displayName)
+        // never clobbers a field that was already populated.
+        if (!string.IsNullOrWhiteSpace(email))
+            row.AccountEmail = email.Trim();
+        if (!string.IsNullOrWhiteSpace(displayName))
+            row.DisplayName = displayName.Trim();
+
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task RemoveAsync(string accountId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(accountId);
