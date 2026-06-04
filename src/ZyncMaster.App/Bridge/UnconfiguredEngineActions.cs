@@ -135,6 +135,10 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<CalendarAccountSummary>>(new List<CalendarAccountSummary>());
 
+    // No connect can be in flight without a configured engine, so cancelling is a quiet no-op
+    // (mirrors CancelLoginAsync).
+    public Task CancelConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
+
     private static InvalidOperationException NotConfigured()
         => new("Set the server URL in Settings first.");
 }

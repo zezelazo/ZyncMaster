@@ -26,6 +26,10 @@ export const INERT_ACTIONS = Object.freeze([
   // Device self-management is a desktop-App concern (a browser panel is not a paired device); the
   // UI hides the "This device" section in web mode, so these are inert no-ops there.
   'getDevice', 'renameDevice',
+  // Calendar-account connection lifecycle is desktop-only: it drives a system-browser + loopback
+  // OAuth round-trip the browser panel cannot perform. The UI gates these behind Bridge.desktopApp,
+  // so they are inert no-ops in web mode rather than being routed to the server.
+  'connectCalendar', 'listCalendarAccounts', 'cancelConnect',
 ]);
 
 // Returns the REST request for a given action, or null when the action is composite

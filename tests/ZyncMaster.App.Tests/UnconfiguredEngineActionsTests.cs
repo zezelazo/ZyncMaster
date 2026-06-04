@@ -44,4 +44,16 @@ public class UnconfiguredEngineActionsTests
         generate.Should().BeNull();
         export.Should().BeNull();
     }
+
+    [Fact]
+    public async Task CancelConnect_is_a_quiet_no_op()
+    {
+        // No connect can be in flight without a configured engine, so cancelling must complete
+        // quietly (mirrors CancelLoginAsync) rather than throwing.
+        var engine = Build();
+
+        var act = async () => await engine.CancelConnectAsync(CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+    }
 }

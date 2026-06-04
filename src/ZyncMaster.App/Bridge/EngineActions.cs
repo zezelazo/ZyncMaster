@@ -486,6 +486,14 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
         => _calendarConnect.ListCalendarAccountsAsync(ct);
 
+    // CalendarConnectService.CancelConnect is synchronous (it just cancels the in-flight CTS and
+    // stops the loopback), so wrap the completed task exactly like CancelLoginAsync does.
+    public Task CancelConnectAsync(CancellationToken ct = default)
+    {
+        _calendarConnect.CancelConnect();
+        return Task.CompletedTask;
+    }
+
     private async Task<string> RequireKeyAsync(CancellationToken ct)
     {
         var key = await _keys.LoadAsync(ct);

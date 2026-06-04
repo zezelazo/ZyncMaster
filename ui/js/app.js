@@ -1743,9 +1743,10 @@ function renderCalendarSettings(root) {
 
   // Connect button. When the identity is Microsoft, hint that connecting reuses that account.
   const reuseEmail = (identityAuth.me && identityAuth.me.email) || null;
-  const connectBtn = el('button', { class: 'btn btn--primary connect-cal', onclick: () => connectCalendarAccount(connectBtn) },
+  const connectWrap = el('div', { class: 'connect-cal__wrap' });
+  const connectBtn = el('button', { class: 'btn btn--primary connect-cal', onclick: () => connectCalendarAccount(connectBtn, connectWrap) },
     iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: 'Connect a calendar account' }));
-  const connectWrap = el('div', { class: 'connect-cal__wrap' }, connectBtn);
+  connectWrap.append(connectBtn);
   if (reuseEmail) connectWrap.append(el('div', { class: 'cfg-row__hint', style: 'margin-top:6px', text: `Reuse ${reuseEmail}` }));
   accountRows.push(connectWrap);
   root.append(cfgSection('Calendar accounts', ...accountRows));
@@ -2364,17 +2365,35 @@ function unlinkAccount(accountRef) {
   if (live.accounts === null && !accountRef) loadAccounts().then(run); else run();
 }
 
-// connectCalendarAccount(btn?) — connect a calendar OAuth grant into the per-user account pool.
-// Calls the host's connectCalendar with a read/write scope (a long-running interactive flow, so a
-// generous timeout). On {Connected:true} it drops the cached accounts and reloads them (the new
+// connectCalendarAccount(btn?, wrap?) — connect a calendar OAuth grant into the per-user account
+// pool. Calls the host's connectCalendar with a read/write scope (a long-running interactive flow,
+// so a generous timeout). On {Connected:true} it drops the cached accounts and reloads them (the new
 // account now shows up via listAccounts), then repaints. {Cancelled} and {Error} surface inline
 // feedback on the button without disturbing the rest of the screen.
-function connectCalendarAccount(btn) {
+//
+// While the connect is in flight the system browser is open and we are blocked on the loopback
+// callback. Mirroring the sign-in gate's Cancel button, we mount a small Cancel affordance next to
+// the connecting button that asks the host to abort the in-flight connect (cancelConnect) and free
+// the loopback port. The host then resolves the pending connectCalendar with a quiet Cancelled
+// outcome ({cancelled:true}), which the .then below renders as "Cancelled" — no red error.
+function connectCalendarAccount(btn, wrap) {
   if (!Bridge.desktopApp) return;
   const span = btn && btn.querySelector('span.connect-cal__label');
   const orig = span ? span.textContent : '';
   if (span) span.textContent = 'Connecting…';
   if (btn) btn.disabled = true;
+
+  // Cancel affordance: fire-and-forget cancelConnect. The in-flight connectCalendar promise then
+  // settles with {cancelled:true}, so we do NOT restore the UI here — the shared .then/.finally
+  // path owns that, exactly like cancelAppLogin leaves the recovery to the login promise.
+  let cancelBtn = null;
+  if (wrap) {
+    cancelBtn = el('button', { class: 'btn btn--ghost connect-cal__cancel', text: 'Cancel',
+      onclick: () => { if (cancelBtn) cancelBtn.disabled = true; Bridge.call('cancelConnect').catch(() => {}); } });
+    wrap.append(cancelBtn);
+  }
+  const removeCancel = () => { if (cancelBtn && cancelBtn.parentNode) cancelBtn.parentNode.removeChild(cancelBtn); cancelBtn = null; };
+
   Bridge.call('connectCalendar', JSON.stringify({ scope: 'readwrite' }), 210000)
     .then((r) => {
       if (r && r.connected) {
@@ -2394,6 +2413,7 @@ function connectCalendarAccount(btn) {
     })
     .catch(() => { if (span) span.textContent = 'Failed'; announce('Connect failed.'); })
     .finally(() => {
+      removeCancel();
       // Only restore the button if we didn't navigate away after a successful connect.
       if (state.view === 'calendar-settings') {
         if (btn) btn.disabled = false;
@@ -2696,11 +2716,21 @@ function saveDeviceName(input, feedback, indicator) {
 
 function pushConfig() {
   if (!Bridge.available) return;
+  // The host's SaveConfig is a WHOLESALE replace: it deserializes this object straight into a fresh
+  // AppSettings and persists it. So any field this payload omits resets to the AppSettings POCO
+  // default on disk. Two consequences for the now per-sync settings:
+  //   * syncWindowDays / intervalMinutes map to real AppSettings properties (SyncWindowDays /
+  //     IntervalMinutes). IntervalMinutes is the default interval CreatePair falls back to
+  //     (dto.IntervalMin ?? EngineSettings.IntervalMinutes), so we keep sending them to avoid
+  //     silently snapping the engine default down to the bare POCO value on every save. The UI no
+  //     longer edits these (interval/window moved to the per-pair Add-pair wizard); they are legacy
+  //     globals carried through unchanged.
+  //   * autoSync was dropped: AppSettings has NO matching property, so the host ignored it on
+  //     deserialization anyway. It was dead weight in the payload and is removed here.
   const cfg = {
     deviceName: settings.deviceName,
     syncWindowDays: settings.windowDays,
     intervalMinutes: settings.interval,
-    autoSync: settings.autoSync,
     runAtStartup: settings.startup,
     theme: storedTheme(),
   };

@@ -307,6 +307,13 @@ public class UiBridgeTests
             ListCalendarAccountsCalls++;
             return CalendarAccountsToReturn;
         }
+
+        public int CancelConnectCalls;
+        public async Task CancelConnectAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CancelConnectCalls++;
+        }
     }
 
     private sealed class FakeWindowControl : IWindowControl
@@ -1046,5 +1053,18 @@ public class UiBridgeTests
         payload.GetArrayLength().Should().Be(1);
         payload[0].GetProperty("id").GetString().Should().Be("acc-1");
         payload[0].GetProperty("accountEmail").GetString().Should().Be("me@outlook.com");
+    }
+
+    [Fact]
+    public void CancelConnect_calls_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("cancelConnect", "k6"));
+
+        engine.CancelConnectCalls.Should().Be(1);
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
     }
 }
