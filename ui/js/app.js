@@ -930,9 +930,6 @@ function renderCalendar(root) {
   }
   root.append(list);
 
-  root.append(el('div', { style: 'margin-top:10px;text-align:center' },
-    el('button', { class: 'btn', onclick: () => navigate('add-pair') }, iconEl('plus', 13, 2), el('span', { text: 'Add a calendar pair' }))));
-
   // Kick a one-shot background refresh the first time we open this screen; repaint when it
   // lands. Live actions (run/pause/delete) refresh explicitly, so we don't poll on paint.
   if (Bridge.available && !live.loadedPairs && !live.loadingPairs) {
