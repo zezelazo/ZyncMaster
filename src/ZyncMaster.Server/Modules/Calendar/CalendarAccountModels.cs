@@ -1,4 +1,4 @@
-namespace ZyncMaster.Server.Modules.Calendar;
+namespace ZyncMaster.Server;
 
 // Models for the per-user pool of connected calendar accounts.
 

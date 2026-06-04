@@ -3,7 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using ZyncMaster.Server;
-using ZyncMaster.Server.Modules.Calendar;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Sync;

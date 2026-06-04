@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using ZyncMaster.Server.Data;
-using ZyncMaster.Server.Modules.Calendar;
 
 namespace ZyncMaster.Server;
 

@@ -1,4 +1,4 @@
-namespace ZyncMaster.Server.Modules.Calendar;
+namespace ZyncMaster.Server;
 
 // The SINGLE place that knows both account representations exist at once (plan v2 §C-3):
 //

@@ -7,7 +7,6 @@ using Microsoft.Extensions.Options;
 using ZyncMaster.Server;
 using ZyncMaster.Server.Data;
 using ZyncMaster.Server.Infrastructure.Email;
-using ZyncMaster.Server.Modules.Calendar;
 
 var builder = WebApplication.CreateBuilder(args);
 

@@ -13,7 +13,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using ZyncMaster.Graph;
 using ZyncMaster.Server.Data;
-using ZyncMaster.Server.Modules.Calendar;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Sync;
