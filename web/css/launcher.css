@@ -104,32 +104,6 @@ button { font-family: inherit; cursor: pointer; }
   padding: 0 10px;
 }
 
-/* DEV-only "Open app / Test" button — clearly temporary.
-   To remove for production: delete every element with class .dev
-   (one in the nav, one in the download section) and this rule block. */
-.dev {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 38px;
-  padding: 0 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--terra);
-  background: rgba(224, 138, 99, .14);
-  border: 1px dashed rgba(224, 138, 99, .5);
-}
-.devt {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: .1em;
-  background: var(--terra);
-  color: #1b1108;
-  padding: 2px 5px;
-  border-radius: 4px;
-}
-
 /* ---- "See how it works": frosted-glass secondary CTA, sized to match .go ----
    Opaque fallback first; real blur where supported. */
 .ghost {
@@ -371,7 +345,6 @@ h1 .g {
 }
 /* very narrow phones: trim the action pill so it can't collide with the brand */
 @media (max-width: 400px) {
-  .dev { padding: 0 10px; gap: 5px; }
   .navdl { padding: 0 12px; }
   .navdl__t { display: none; }
 }
@@ -456,15 +429,6 @@ h1 .g {
 .getstarted .h2 { margin: 16px auto 0; max-width: none; }
 .getstarted .lead { margin: 16px auto 0; max-width: 52ch; }
 .getstarted .cta { margin: 32px auto 0; justify-content: center; max-width: none; }
-.getstarted__dev {
-  margin-top: 36px;
-  padding-top: 28px;
-  width: 100%;
-  border-top: 1px solid var(--stroke);
-  display: flex;
-  justify-content: center;
-}
-.getstarted__dev .dev { height: 40px; }
 .plat { display: flex; gap: 16px; justify-content: center; margin-top: 24px; font-size: 13px; color: var(--ink3); flex-wrap: wrap; }
 .plat span { display: inline-flex; align-items: center; gap: 7px; }
 .plat svg { width: 15px; height: 15px; }
