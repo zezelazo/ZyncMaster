@@ -29,7 +29,12 @@ public interface IPairsClient
 
     Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct);
 
-    Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct);
+    Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct, Endpoint? source = null, Endpoint? destination = null);
+
+    // Exports the pair's SOURCE calendar for one month as a Simple-mode .txt (Graph sources
+    // only; the server returns 409 no_server_reader for an OutlookCom source). The response is
+    // raw text/plain — the exact .txt — not JSON, so it is returned as the crude string.
+    Task<string> ExportSourceTxtAsync(string bearer, string id, int year, int month, bool includeCancelled, CancellationToken ct);
 
     Task DeletePairAsync(string bearer, string id, CancellationToken ct);
 

@@ -216,6 +216,26 @@ public class UiBridgeTests
             return GenerateTxtPathToReturn;
         }
 
+        public int ExportSourceTxtCalls;
+        public string? ExportSourceTxtArg;
+        public string? ExportSourceTxtPathToReturn = "C:/exports/source.txt";
+        public async Task<string?> ExportSourceTxtAsync(string requestJson, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            ExportSourceTxtCalls++;
+            ExportSourceTxtArg = requestJson;
+            return ExportSourceTxtPathToReturn;
+        }
+
+        public int GetCapabilitiesCalls;
+        public AppCapabilities CapabilitiesToReturn = new() { OutlookCom = true };
+        public async Task<AppCapabilities> GetCapabilitiesAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GetCapabilitiesCalls++;
+            return CapabilitiesToReturn;
+        }
+
         public async Task<bool> GetAutoStartAsync(CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
@@ -780,6 +800,56 @@ public class UiBridgeTests
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
         var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
         payload.GetProperty("cancelled").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void ExportSourceTxt_calls_engine_and_returns_saved_path()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        var json = "{\"pairId\":\"p1\",\"year\":2026,\"month\":6,\"includeCancelled\":true}";
+        transport.PushInbound(Message("exportSourceTxt", "e1", json));
+
+        engine.ExportSourceTxtCalls.Should().Be(1);
+        engine.ExportSourceTxtArg.Should().Be(json);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("cancelled").GetBoolean().Should().BeFalse();
+        payload.GetProperty("path").GetString().Should().Be("C:/exports/source.txt");
+    }
+
+    [Fact]
+    public void ExportSourceTxt_cancelled_reports_cancelled_true()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { ExportSourceTxtPathToReturn = null };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("exportSourceTxt", "e2", "{\"pairId\":\"p1\"}"));
+
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("cancelled").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void GetCapabilities_calls_engine_and_returns_outlookCom_flag()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { CapabilitiesToReturn = new() { OutlookCom = true } };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("getCapabilities", "c1"));
+
+        engine.GetCapabilitiesCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("outlookCom").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

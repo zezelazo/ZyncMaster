@@ -80,6 +80,7 @@ public class EngineActionsHealthTests
             "host.exe",
             identity,
             calendarConnect,
+            new Mock<IOutlookComProbe>().Object,
             http);
     }
 

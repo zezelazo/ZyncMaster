@@ -48,7 +48,8 @@ public class PairRunPushTests : IClassFixture<ServerTestFactory>
         public List<(string calendarId, DateTimeOffset from, DateTimeOffset to)> Calls { get; } = new();
 
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
-            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
+            CancellationToken ct = default, bool preserveLocalTime = false)
         {
             Calls.Add((calendarId, fromUtc, toUtc));
             return Task.FromResult<IReadOnlyList<AppointmentRecord>>(Window);

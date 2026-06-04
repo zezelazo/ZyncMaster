@@ -41,6 +41,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly string _autoStartExePath;
     private readonly IdentityLoginService _identity;
     private readonly CalendarConnectService _calendarConnect;
+    private readonly IOutlookComProbe _comProbe;
     private readonly HttpClient _http;
     private readonly string _healthUrl;
 
@@ -71,6 +72,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         string autoStartExePath,
         IdentityLoginService identity,
         CalendarConnectService calendarConnect,
+        IOutlookComProbe comProbe,
         HttpClient http,
         HttpClient? ownedHttp = null)
     {
@@ -89,6 +91,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _autoStartExePath = autoStartExePath ?? throw new ArgumentNullException(nameof(autoStartExePath));
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _calendarConnect = calendarConnect ?? throw new ArgumentNullException(nameof(calendarConnect));
+        _comProbe = comProbe ?? throw new ArgumentNullException(nameof(comProbe));
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _healthUrl = $"{(_engineSettings.ServerBaseUrl ?? "").TrimEnd('/')}/health";
         _ownedHttp = ownedHttp;
@@ -255,7 +258,9 @@ public sealed class EngineActions : IEngineActions, IDisposable
         if (string.IsNullOrEmpty(dto.Id))
             throw new InvalidOperationException("update-pair request is missing 'id'.");
 
-        return await _pairs.UpdatePairAsync(bearer, dto.Id, dto.Name, dto.IntervalMin, dto.State, ct);
+        return await _pairs.UpdatePairAsync(
+            bearer, dto.Id, dto.Name, dto.IntervalMin, dto.State, ct,
+            dto.Source?.ToEndpoint(), dto.Destination?.ToEndpoint());
     }
 
     public async Task DeletePairAsync(string id, CancellationToken ct = default)
@@ -374,6 +379,53 @@ public sealed class EngineActions : IEngineActions, IDisposable
         await _txtExporter.ExportAsync(year, month, calendarNames, includeCancelled, path, ct);
         return path;
     }
+
+    public async Task<string?> ExportSourceTxtAsync(string requestJson, CancellationToken ct = default)
+    {
+        if (requestJson == null) throw new ArgumentNullException(nameof(requestJson));
+
+        ExportSourceTxtDto dto;
+        try
+        {
+            dto = Newtonsoft.Json.JsonConvert.DeserializeObject<ExportSourceTxtDto>(requestJson)
+                  ?? throw new InvalidOperationException("Invalid export-source-txt request.");
+        }
+        catch (Newtonsoft.Json.JsonException)
+        {
+            throw new InvalidOperationException("Invalid export-source-txt request.");
+        }
+
+        if (string.IsNullOrEmpty(dto.PairId))
+            throw new InvalidOperationException("export-source-txt request is missing 'pairId'.");
+
+        var now = DateTime.Now;
+        var year = dto.Year ?? now.Year;
+        var month = dto.Month ?? now.Month;
+        if (month is < 1 or > 12)
+            throw new InvalidOperationException("Month must be between 1 and 12.");
+        if (year is < 1 or > 9999)
+            throw new InvalidOperationException("Year is out of range.");
+
+        var includeCancelled = dto.IncludeCancelled ?? true;
+
+        // Ask for the destination FIRST: if the user cancels the save dialog we return without ever
+        // contacting the server, so a cancelled export never wastes a Graph read. Only once we have a
+        // real path do we read the source and write the .txt.
+        var suggested = $"ZyncMaster-{year:D4}-{month:D2}.txt";
+        var path = await _saveDialog(suggested);
+        if (string.IsNullOrEmpty(path))
+            return null; // user cancelled — no server read
+
+        // The source calendar is online; the server reads it and returns the Simple-mode .txt.
+        var bearer = await RequireBearerAsync(ct);
+        var txt = await _pairs.ExportSourceTxtAsync(bearer, dto.PairId, year, month, includeCancelled, ct);
+
+        await File.WriteAllTextAsync(path, txt, ct);
+        return path;
+    }
+
+    public Task<AppCapabilities> GetCapabilitiesAsync(CancellationToken ct = default)
+        => Task.FromResult(new AppCapabilities { OutlookCom = _comProbe.IsAvailable() });
 
     public Task<bool> GetAutoStartAsync(CancellationToken ct = default)
         => Task.FromResult(_autoStart.IsEnabled());
@@ -501,6 +553,17 @@ public sealed class EngineActions : IEngineActions, IDisposable
         [Newtonsoft.Json.JsonProperty("name")] public string? Name { get; set; }
         [Newtonsoft.Json.JsonProperty("intervalMin")] public int? IntervalMin { get; set; }
         [Newtonsoft.Json.JsonProperty("state")] public string? State { get; set; }
+        // §F2 endpoint edits: null leaves the existing side unchanged on the server.
+        [Newtonsoft.Json.JsonProperty("source")] public EndpointDto? Source { get; set; }
+        [Newtonsoft.Json.JsonProperty("destination")] public EndpointDto? Destination { get; set; }
+    }
+
+    private sealed class ExportSourceTxtDto
+    {
+        [Newtonsoft.Json.JsonProperty("pairId")] public string? PairId { get; set; }
+        [Newtonsoft.Json.JsonProperty("year")] public int? Year { get; set; }
+        [Newtonsoft.Json.JsonProperty("month")] public int? Month { get; set; }
+        [Newtonsoft.Json.JsonProperty("includeCancelled")] public bool? IncludeCancelled { get; set; }
     }
 
     private sealed class GenerateTxtDto

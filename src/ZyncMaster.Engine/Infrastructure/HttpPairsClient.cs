@@ -123,7 +123,7 @@ public sealed class HttpPairsClient : IPairsClient
         return list;
     }
 
-    public async Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct)
+    public async Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct, Endpoint? source = null, Endpoint? destination = null)
     {
         if (bearer == null) throw new ArgumentNullException(nameof(bearer));
         if (id == null) throw new ArgumentNullException(nameof(id));
@@ -132,9 +132,28 @@ public sealed class HttpPairsClient : IPairsClient
         if (name != null) body["name"] = name;
         if (intervalMin != null) body["intervalMin"] = intervalMin.Value;
         if (state != null) body["state"] = state;
+        if (source != null) body["source"] = EndpointToJson(source);
+        if (destination != null) body["destination"] = EndpointToJson(destination);
 
         var root = await SendBearerAsync(HttpMethod.Patch, $"/api/pairs/{id}", bearer, body, ct) as JObject ?? new JObject();
         return ParsePair(root);
+    }
+
+    public async Task<string> ExportSourceTxtAsync(string bearer, string id, int year, int month, bool includeCancelled, CancellationToken ct)
+    {
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
+        if (id == null) throw new ArgumentNullException(nameof(id));
+
+        var body = new JObject
+        {
+            ["year"] = year,
+            ["month"] = month,
+            ["includeCancelled"] = includeCancelled,
+        };
+
+        // The response is the .txt itself (text/plain), not JSON — read it as the raw body so
+        // the exact pipe-delimited content is preserved without JSON escaping/unescaping.
+        return await SendBearerRawAsync(HttpMethod.Post, $"/api/pairs/{id}/export-source-txt", bearer, body, ct);
     }
 
     public async Task DeletePairAsync(string bearer, string id, CancellationToken ct)
@@ -290,6 +309,27 @@ public sealed class HttpPairsClient : IPairsClient
             method, path,
             req => req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer),
             body, ct);
+
+    // Identity-bearer transport that returns the RAW response body as a string (no JSON parse).
+    // Used by ExportSourceTxtAsync, whose response is text/plain (.txt content), not JSON. A
+    // non-2xx still throws SyncClientException, matching the JSON transport's failure contract.
+    private async Task<string> SendBearerRawAsync(HttpMethod method, string path, string bearer, JObject? body, CancellationToken ct)
+    {
+        var url = $"{_baseUrl}{path}";
+        using var request = new HttpRequestMessage(method, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
+        if (body != null)
+            request.Content = new StringContent(body.ToString(Formatting.None), Encoding.UTF8, "application/json");
+
+        using var response = await _http.SendAsync(request, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
+            throw new SyncClientException(
+                $"Pairs request {method} {url} failed with status {(int)response.StatusCode}: {text}");
+
+        return text;
+    }
 
     private async Task<JToken?> SendCoreAsync(
         HttpMethod method, string path, Action<HttpRequestMessage> applyAuth, JObject? body, CancellationToken ct)

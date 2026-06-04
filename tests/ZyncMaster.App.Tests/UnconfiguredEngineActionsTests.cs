@@ -29,4 +29,19 @@ public class UnconfiguredEngineActionsTests
 
         available.Should().BeFalse();
     }
+
+    [Fact]
+    public async Task ExportSourceTxt_degrades_to_null_like_GenerateTxt()
+    {
+        // Both .txt export branches must behave identically when unconfigured: GenerateTxt (COM)
+        // returns null (cancelled), so the Graph branch must too — never throw — so the UI shows the
+        // clean "Save cancelled" path instead of a red error.
+        var engine = Build();
+
+        var generate = await engine.GenerateTxtAsync("{}", CancellationToken.None);
+        var export = await engine.ExportSourceTxtAsync("{\"pairId\":\"p1\"}", CancellationToken.None);
+
+        generate.Should().BeNull();
+        export.Should().BeNull();
+    }
 }

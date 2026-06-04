@@ -48,13 +48,25 @@ public interface IEngineActions
     // device api key.
     Task<bool> CheckDeviceNameAsync(string name, CancellationToken ct = default);
 
-    // Writes a Simple-mode .txt export to a user-chosen path. Returns the saved path,
-    // or null if the user cancelled the save dialog. The request JSON carries the export
-    // parameters CalExport Simple mode supports: {year, month, includeCancelled, calendarNames?}.
-    // The exported calendar is always a LOCAL Outlook Classic (COM) calendar — CalExport has no
-    // Graph read path — so this only makes sense for syncs whose source is OutlookCom; the
-    // optional calendarNames filters which COM calendar(s) by display name.
+    // COM branch of the per-pair "Export .txt" flow. Writes a Simple-mode .txt export of the
+    // LOCAL Outlook Classic (COM) calendar to a user-chosen path via CalExport.exe, and returns
+    // the saved path or null if the save dialog was cancelled. This path is for OutlookCom
+    // SOURCES only — CalExport has no Graph read path. The request JSON carries the params
+    // CalExport Simple mode supports: {year, month, includeCancelled, calendarNames?}; the
+    // optional calendarNames filters which COM calendar(s) by display name. For a MicrosoftGraph
+    // source the App uses ExportSourceTxtAsync instead (the server reads the online calendar).
     Task<string?> GenerateTxtAsync(string requestJson, CancellationToken ct = default);
+
+    // Graph branch of the per-pair "Export .txt" flow. The pair's SOURCE calendar lives online
+    // and only the server can read it, so the .txt is built server-side; the App just saves it.
+    // Asks the server for the Simple-mode .txt of the pair's source for {year, month,
+    // includeCancelled}, prompts the save dialog, writes the file, and returns the saved path
+    // (null if cancelled). The request JSON is {pairId, year, month, includeCancelled}.
+    Task<string?> ExportSourceTxtAsync(string requestJson, CancellationToken ct = default);
+
+    // Device capabilities, queried once at boot so the UI can gate COM-only affordances. On the
+    // desktop App this probes Outlook Classic; the web panel reports everything off.
+    Task<AppCapabilities> GetCapabilitiesAsync(CancellationToken ct = default);
 
     // Login auto-start toggle, backed by IAutoStartManager.
     Task<bool> GetAutoStartAsync(CancellationToken ct = default);

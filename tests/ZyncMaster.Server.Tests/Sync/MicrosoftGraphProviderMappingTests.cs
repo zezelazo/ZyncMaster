@@ -27,9 +27,15 @@ public class MicrosoftGraphProviderMappingTests
     private sealed class FuncHandler : HttpMessageHandler
     {
         private readonly string _json;
+        public string? LastPreferHeader;
+        public bool SawPreferHeader;
         public FuncHandler(string json) => _json = json;
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(_json) });
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            SawPreferHeader = request.Headers.TryGetValues("Prefer", out var values);
+            LastPreferHeader = SawPreferHeader ? string.Join(",", values!) : null;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(_json) });
+        }
     }
 
     private sealed class NoopTarget : ICalendarTarget
@@ -186,5 +192,34 @@ public class MicrosoftGraphProviderMappingTests
 
         await provider.Invoking(p => p.ReadWindowAsync(calendarId, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1)))
             .Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task Sync_read_forces_utc_via_prefer_header()
+    {
+        // Default (sync/mirror) path: the Prefer:UTC header normalizes every event to UTC so the
+        // destructive mirror reconciles against UTC-normalized destination events. Must NOT change.
+        var handler = new FuncHandler("""{ "value": [] }""");
+        var provider = new MicrosoftGraphProvider(new HttpClient(handler), new StubTokenProvider(), new NoopTarget());
+
+        await provider.ReadWindowAsync("cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1));
+
+        handler.SawPreferHeader.Should().BeTrue();
+        handler.LastPreferHeader.Should().Contain("outlook.timezone=\"UTC\"");
+    }
+
+    [Fact]
+    public async Task Export_read_omits_prefer_header_to_keep_local_time()
+    {
+        // Export-to-.txt path (preserveLocalTime): the Prefer header is omitted so Graph returns
+        // each event in its ORIGINAL declared zone, and Start ends up as the local clock time the
+        // user sees — matching CalExport COM rather than UTC.
+        var handler = new FuncHandler("""{ "value": [] }""");
+        var provider = new MicrosoftGraphProvider(new HttpClient(handler), new StubTokenProvider(), new NoopTarget());
+
+        await provider.ReadWindowAsync(
+            "cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1), preserveLocalTime: true);
+
+        handler.SawPreferHeader.Should().BeFalse();
     }
 }

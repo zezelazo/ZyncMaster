@@ -87,6 +87,13 @@ test('device self-management actions are inert in the web panel', () => {
   }
 });
 
+test('exportSourceTxt and getCapabilities are inert in the web panel', () => {
+  for (const a of ['exportSourceTxt', 'getCapabilities']) {
+    assert.equal(isInertAction(a), true, `${a} must be inert in web mode`);
+    assert.equal(webRequestFor(a), null);
+  }
+});
+
 test('unmapped action throws', () => {
   assert.throws(() => webRequestFor('bogusAction'), /unmapped action "bogusAction"/);
 });

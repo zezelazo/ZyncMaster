@@ -43,7 +43,8 @@ public sealed class CalendarSyncModuleTests
         public List<(string calendarId, DateTimeOffset from, DateTimeOffset to)> Calls { get; } = new();
 
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
-            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
+            CancellationToken ct = default, bool preserveLocalTime = false)
         {
             Calls.Add((calendarId, fromUtc, toUtc));
             if (Throw is not null)

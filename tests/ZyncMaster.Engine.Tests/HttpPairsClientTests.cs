@@ -308,4 +308,70 @@ public sealed class HttpPairsClientTests
         (await act.Should().ThrowAsync<SyncClientException>())
             .Which.Message.Should().Contain("500");
     }
+
+    [Fact]
+    public async Task UpdatePair_IncludesSourceAndDestinationWhenProvided()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK,
+            @"{ ""id"": ""p1"", ""name"": ""M"", ""intervalMin"": 10, ""state"": ""active"",
+                ""source"": { ""provider"": ""MicrosoftGraph"", ""calendarId"": ""s"", ""calendarName"": ""S"" },
+                ""destination"": { ""provider"": ""MicrosoftGraph"", ""calendarId"": ""d"", ""calendarName"": ""D"" } }");
+
+        var source = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "acc", CalendarId = "s", CalendarName = "S" };
+        var destination = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "acc", CalendarId = "d", CalendarName = "D" };
+
+        await client.UpdatePairAsync(Bearerr, "p1", name: "M", intervalMin: null, state: null, CancellationToken.None,
+            source: source, destination: destination);
+
+        var body = JObject.Parse(stub.LastBody!);
+        body["name"]!.Value<string>().Should().Be("M");
+        body["source"]!["provider"]!.Value<string>().Should().Be("MicrosoftGraph");
+        body["source"]!["calendarId"]!.Value<string>().Should().Be("s");
+        body["destination"]!["calendarId"]!.Value<string>().Should().Be("d");
+    }
+
+    [Fact]
+    public async Task UpdatePair_OmitsSourceAndDestinationWhenNull()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK, @"{ ""id"": ""p1"", ""name"": ""M"" }");
+
+        await client.UpdatePairAsync(Bearerr, "p1", name: "M", intervalMin: null, state: null, CancellationToken.None);
+
+        var body = JObject.Parse(stub.LastBody!);
+        body.ContainsKey("source").Should().BeFalse();
+        body.ContainsKey("destination").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExportSourceTxt_PostsBodyAndReturnsRawText()
+    {
+        // text/plain response — the raw .txt, not JSON. The client must return it verbatim.
+        var raw = "2026-06-10 | 09:30 | 1h 30m | Standup | Ana <ana@test>\n2026-06-12 | All day | All day | Holiday | HR";
+        var stub = new StubHandler(HttpStatusCode.OK, raw);
+        var http = new HttpClient(stub);
+        var client = new HttpPairsClient(http, "https://srv.example.com");
+
+        var txt = await client.ExportSourceTxtAsync(Bearerr, "p1", 2026, 6, includeCancelled: true, CancellationToken.None);
+
+        txt.Should().Be(raw);
+        stub.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/pairs/p1/export-source-txt");
+        stub.LastBearer.Should().Be(Bearerr);
+
+        var body = JObject.Parse(stub.LastBody!);
+        body["year"]!.Value<int>().Should().Be(2026);
+        body["month"]!.Value<int>().Should().Be(6);
+        body["includeCancelled"]!.Value<bool>().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExportSourceTxt_ConflictThrowsSyncClientException()
+    {
+        var (client, _) = Make(HttpStatusCode.Conflict, @"{ ""error"": ""no_server_reader"" }");
+
+        Func<Task> act = () => client.ExportSourceTxtAsync(Bearerr, "p1", 2026, 6, true, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<SyncClientException>())
+            .Which.Message.Should().Contain("409");
+    }
 }

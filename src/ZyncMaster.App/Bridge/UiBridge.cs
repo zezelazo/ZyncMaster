@@ -190,6 +190,19 @@ public sealed class UiBridge
                 var path = await _engine.GenerateTxtAsync(message.Payload ?? "", ct);
                 return JsonSerializer.Serialize(new { cancelled = path == null, path }, JsonOptions);
             }
+            case "exportSourceTxt":
+            {
+                // {pairId, year, month, includeCancelled} — the server reads the pair's online
+                // source calendar and returns the .txt; the engine saves it. Same reply shape as
+                // generateTxt so the UI handles both export branches identically.
+                var path = await _engine.ExportSourceTxtAsync(message.Payload ?? "", ct);
+                return JsonSerializer.Serialize(new { cancelled = path == null, path }, JsonOptions);
+            }
+            case "getCapabilities":
+            {
+                var caps = await _engine.GetCapabilitiesAsync(ct);
+                return JsonSerializer.Serialize(caps, JsonOptions);
+            }
             case "getAutoStart":
             {
                 var enabled = await _engine.GetAutoStartAsync(ct);

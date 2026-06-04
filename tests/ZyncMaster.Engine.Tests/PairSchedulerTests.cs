@@ -73,8 +73,10 @@ public sealed class PairSchedulerTests
             LastListBearer = bearer;
             return Task.FromResult((IReadOnlyList<SyncPair>)Pairs.ToList());
         }
-        public Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct)
+        public Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct, Endpoint? source = null, Endpoint? destination = null)
             => Task.FromResult(new SyncPair());
+        public Task<string> ExportSourceTxtAsync(string bearer, string id, int year, int month, bool includeCancelled, CancellationToken ct)
+            => Task.FromResult("");
         public Task DeletePairAsync(string bearer, string id, CancellationToken ct) => Task.CompletedTask;
         public Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct)
         {

@@ -79,7 +79,8 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
         string calendarId,
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool preserveLocalTime = false)
     {
         if (string.IsNullOrWhiteSpace(calendarId))
             throw new ArgumentException("calendarId required.", nameof(calendarId));
@@ -100,7 +101,7 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
 
         while (!string.IsNullOrEmpty(url))
         {
-            var json = await GetJsonAsync(url, ct).ConfigureAwait(false);
+            var json = await GetJsonAsync(url, preserveLocalTime, ct).ConfigureAwait(false);
 
             // Every page of a Graph collection — first and every nextLink page — carries a
             // "value" array, even the last page (`value: []`, no nextLink). A 2xx page with
@@ -213,12 +214,20 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
     private static bool IsTransientStatus(int status)
         => status == 429 || status == 500 || status == 502 || status == 503 || status == 504 || status == 408;
 
-    private async Task<JObject> GetJsonAsync(string url, CancellationToken ct)
+    private async Task<JObject> GetJsonAsync(string url, bool preserveLocalTime, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         var token = await _tokens.GetAccessTokenAsync(false, ct).ConfigureAwait(false);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        request.Headers.Add("Prefer", "outlook.timezone=\"UTC\"");
+
+        // SYNC path: force UTC so every event normalizes to the same instant the destructive
+        // mirror reconciles against. EXPORT path (preserveLocalTime): omit the Prefer header so
+        // Graph returns each event in its ORIGINAL declared time zone (start.timeZone = the
+        // event's real zone, start.dateTime = wall-clock in that zone). ParseGraphDateTime then
+        // interprets it locally, so AppointmentRecord.Start carries the local clock time the user
+        // sees — the same value CalExport's COM exporter writes to the .txt.
+        if (!preserveLocalTime)
+            request.Headers.Add("Prefer", "outlook.timezone=\"UTC\"");
 
         using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);

@@ -23,7 +23,8 @@ public class EngineActionsExportAndCalendarTests
         Mock<IPairsClient> pairs,
         Mock<IIdentityTokenCache> identityCache,
         Func<string, Task<string?>> saveDialog,
-        EngineSettings? settings = null)
+        EngineSettings? settings = null,
+        IOutlookComProbe? comProbe = null)
     {
         settings ??= new EngineSettings { ServerBaseUrl = "https://server.test" };
 
@@ -67,6 +68,7 @@ public class EngineActionsExportAndCalendarTests
             "host.exe",
             identity,
             calendarConnect,
+            comProbe ?? new Mock<IOutlookComProbe>().Object,
             new HttpClient());
     }
 
@@ -275,5 +277,142 @@ public class EngineActionsExportAndCalendarTests
 
         await act.Should().ThrowAsync<InvalidOperationException>();
         pairs.Verify(p => p.CreateCalendarAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ---------------- ExportSourceTxtAsync (Graph branch of the per-pair export) ----------------
+
+    [Fact]
+    public async Task ExportSourceTxt_fetches_server_text_and_writes_to_chosen_path()
+    {
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.ExportSourceTxtAsync("bearer-1", "p1", 2026, 6, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("the .txt content");
+
+        var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"zync-export-{System.Guid.NewGuid():N}.txt");
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            pairs,
+            SignedIn(),
+            _ => Task.FromResult<string?>(tmp));
+
+        try
+        {
+            var json = "{\"pairId\":\"p1\",\"year\":2026,\"month\":6,\"includeCancelled\":true}";
+            var path = await actions.ExportSourceTxtAsync(json, CancellationToken.None);
+
+            path.Should().Be(tmp);
+            (await System.IO.File.ReadAllTextAsync(tmp)).Should().Be("the .txt content");
+            pairs.Verify(p => p.ExportSourceTxtAsync("bearer-1", "p1", 2026, 6, true, It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public async Task ExportSourceTxt_returns_null_and_writes_nothing_when_save_cancelled()
+    {
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.ExportSourceTxtAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("content");
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            pairs,
+            SignedIn(),
+            _ => Task.FromResult<string?>(null)); // user cancelled the save dialog
+
+        var json = "{\"pairId\":\"p1\",\"year\":2026,\"month\":6,\"includeCancelled\":true}";
+        var path = await actions.ExportSourceTxtAsync(json, CancellationToken.None);
+
+        path.Should().BeNull();
+        // The save dialog is asked FIRST, so a cancel must NOT waste a Graph read on the server.
+        pairs.Verify(p => p.ExportSourceTxtAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExportSourceTxt_requires_pairId()
+    {
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            new Mock<IPairsClient>(),
+            SignedIn(),
+            _ => Task.FromResult<string?>("x.txt"));
+
+        Func<Task> act = () => actions.ExportSourceTxtAsync("{\"year\":2026,\"month\":6}", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task ExportSourceTxt_rejects_invalid_month()
+    {
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            new Mock<IPairsClient>(),
+            SignedIn(),
+            _ => Task.FromResult<string?>("x.txt"));
+
+        Func<Task> act = () => actions.ExportSourceTxtAsync("{\"pairId\":\"p1\",\"year\":2026,\"month\":13}", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task ExportSourceTxt_requires_sign_in()
+    {
+        var cache = new Mock<IIdentityTokenCache>();
+        cache.Setup(c => c.LoadAsync(It.IsAny<CancellationToken>())).ReturnsAsync((IdentityTokens?)null);
+
+        var pairs = new Mock<IPairsClient>();
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            pairs,
+            cache,
+            _ => Task.FromResult<string?>("x.txt"));
+
+        Func<Task> act = () => actions.ExportSourceTxtAsync("{\"pairId\":\"p1\",\"year\":2026,\"month\":6}", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        pairs.Verify(p => p.ExportSourceTxtAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ---------------- GetCapabilitiesAsync ----------------
+
+    [Fact]
+    public async Task GetCapabilities_reports_com_available_when_probe_true()
+    {
+        var probe = new Mock<IOutlookComProbe>();
+        probe.Setup(p => p.IsAvailable()).Returns(true);
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            new Mock<IPairsClient>(),
+            SignedIn(),
+            _ => Task.FromResult<string?>(null),
+            comProbe: probe.Object);
+
+        var caps = await actions.GetCapabilitiesAsync(CancellationToken.None);
+        caps.OutlookCom.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetCapabilities_reports_com_unavailable_when_probe_false()
+    {
+        var probe = new Mock<IOutlookComProbe>();
+        probe.Setup(p => p.IsAvailable()).Returns(false);
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            new Mock<IPairsClient>(),
+            SignedIn(),
+            _ => Task.FromResult<string?>(null),
+            comProbe: probe.Object);
+
+        var caps = await actions.GetCapabilitiesAsync(CancellationToken.None);
+        caps.OutlookCom.Should().BeFalse();
     }
 }

@@ -92,7 +92,8 @@ public class CrossUserIsolationTests
     private sealed class RecordingReader : ICalendarReader
     {
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
-            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default) =>
+            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
+            CancellationToken ct = default, bool preserveLocalTime = false) =>
             Task.FromResult<IReadOnlyList<AppointmentRecord>>(new[] { MakeEvent("r1") });
     }
 

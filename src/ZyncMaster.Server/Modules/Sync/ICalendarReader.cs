@@ -8,9 +8,18 @@ namespace ZyncMaster.Server;
 // arrive via the push endpoint from a desktop device.
 public interface ICalendarReader
 {
+    // preserveLocalTime controls how the event's clock time is projected onto
+    // AppointmentRecord.Start:
+    //   * false (default — the SYNC/mirror path): events are normalized to UTC, so
+    //     Start carries the UTC instant. This is what the destructive mirror needs to
+    //     reconcile against UTC-normalized destination events. Do NOT change this for sync.
+    //   * true (the EXPORT-to-.txt path): events keep the LOCAL wall-clock time the user
+    //     sees in their calendar (the event's declared time zone), so the .txt matches what
+    //     CalExport's COM exporter renders. Used only when producing the human-facing .txt.
     Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
         string calendarId,
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool preserveLocalTime = false);
 }

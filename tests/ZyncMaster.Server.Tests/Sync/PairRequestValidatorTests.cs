@@ -120,4 +120,40 @@ public class UpdatePairRequestValidatorTests
     {
         Sut.Validate(new UpdatePairRequest { Name = "Renamed", IntervalMin = 5 }).IsValid.Should().BeTrue();
     }
+
+    [Fact]
+    public void Valid_source_endpoint_passes()
+    {
+        Sut.Validate(new UpdatePairRequest
+        {
+            Source = new Endpoint { Provider = "MicrosoftGraph", CalendarId = "c", CalendarName = "C" },
+        }).IsValid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Source_with_invalid_provider_fails()
+    {
+        Sut.Validate(new UpdatePairRequest
+        {
+            Source = new Endpoint { Provider = "Bogus", CalendarId = "c" },
+        }).IsValid.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Source_with_empty_calendar_id_fails()
+    {
+        Sut.Validate(new UpdatePairRequest
+        {
+            Source = new Endpoint { Provider = "MicrosoftGraph", CalendarId = "" },
+        }).IsValid.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Destination_with_invalid_provider_fails()
+    {
+        Sut.Validate(new UpdatePairRequest
+        {
+            Destination = new Endpoint { Provider = "Nope", CalendarId = "c" },
+        }).IsValid.Should().BeFalse();
+    }
 }

@@ -105,11 +105,16 @@ public sealed class EngineHost : IDisposable
             () => new Platform.HttpListenerIdentityLoopback("/calendar/callback/"),
             new Platform.DefaultSystemBrowser());
 
+        // COM availability probe (HKCR Outlook.Application ProgID). Untested OS wrapper like
+        // WindowsRegistry; gates the COM-only source tile + local .txt export in the UI.
+        var comProbe = new WindowsOutlookComProbe();
+
         var actions = new EngineActions(
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
             pairsClient, identityCache, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
             identityLogin,
             calendarConnect,
+            comProbe,
             http,
             ownedHttp: null);
 

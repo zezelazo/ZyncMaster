@@ -241,7 +241,8 @@ internal sealed class E2EHarness : IDisposable
         public RecordingReader(List<AppointmentRecord> window) => _window = window;
 
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
-            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default) =>
+            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
+            CancellationToken ct = default, bool preserveLocalTime = false) =>
             Task.FromResult<IReadOnlyList<AppointmentRecord>>(_window.ToList());
     }
 

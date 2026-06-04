@@ -245,24 +245,134 @@ public static class PairEndpoints
             return pair is null ? Results.NotFound() : Results.Ok(pair);
         }).RequireCookieOrIdentityBearer();
 
-        app.MapPatch("/api/pairs/{id}", async (string id, UpdatePairRequest req, ISyncPairStore store) =>
+        app.MapPatch("/api/pairs/{id}", async (
+            string id,
+            UpdatePairRequest req,
+            ISyncPairStore store,
+            ILegacyConnectedAccountAdapter adapter,
+            CancellationToken ct) =>
         {
             var validation = new UpdatePairRequestValidator().Validate(req);
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
 
-            var existing = await store.GetAsync(id);
+            var existing = await store.GetAsync(id, ct);
             if (existing is null)
                 return Results.NotFound();
+
+            // §F2 — endpoint edits. The EFFECTIVE source/destination is the incoming one when
+            // supplied, else the existing side. Apply the SAME account-ownership + origin!=dest
+            // validation createPair uses, so editing can never point a pair at a foreign account
+            // or self-mirror a calendar into itself.
+            var effectiveSource = req.Source ?? existing.Source;
+            var effectiveDestination = req.Destination ?? existing.Destination;
+
+            if (req.Source is not null || req.Destination is not null)
+            {
+                if (await ReferencedAccountIsMissingAsync(effectiveSource, adapter, ct))
+                    return Results.BadRequest(new { error = "unknown_source_account", message = "source.accountRef does not belong to the current user." });
+                if (await ReferencedAccountIsMissingAsync(effectiveDestination, adapter, ct))
+                    return Results.BadRequest(new { error = "unknown_destination_account", message = "destination.accountRef does not belong to the current user." });
+                if (await IsSameSourceAndDestinationAsync(effectiveSource, effectiveDestination, adapter, ct))
+                    return Results.BadRequest(new { error = "same_source_destination", message = "source and destination must be different calendars." });
+            }
+
+            // A change to either endpoint means the destructive mirror's reconciliation set
+            // changes: a new destination has no events carrying this source's CalImportSourceId
+            // (so the next run starts fresh), and a new source changes the id set the kept
+            // destination is reconciled against. There is no per-pair sync state on the server
+            // (ISyncStateStore is the device-push path, keyed by deviceId), so "reset the pair's
+            // state" reduces to clearing the visual run counters — the next run re-mirrors fresh.
+            var endpointChanged =
+                !EndpointsEqual(effectiveSource, existing.Source) ||
+                !EndpointsEqual(effectiveDestination, existing.Destination);
 
             var updated = existing with
             {
                 Name = req.Name ?? existing.Name,
                 IntervalMin = req.IntervalMin ?? existing.IntervalMin,
                 State = req.State ?? existing.State,
+                Source = effectiveSource,
+                Destination = effectiveDestination,
+                LastRunUtc = endpointChanged ? null : existing.LastRunUtc,
+                LastResult = endpointChanged ? null : existing.LastResult,
             };
-            await store.UpdateAsync(updated);
+            await store.UpdateAsync(updated, ct);
             return Results.Ok(updated);
+        }).RequireCookieOrIdentityBearer();
+
+        // §F1 (Graph source) — export the pair's SOURCE calendar for one month as a Simple-mode
+        // .txt, byte-identical to CalExport's Simple output. Only Graph sources have a server-side
+        // reader; an OutlookCom source must export locally via COM (the App's generateTxt path), so
+        // it gets a 409 no_server_reader here. The pair is user-scoped (404 when not the caller's).
+        app.MapPost("/api/pairs/{id}/export-source-txt", async (
+            string id,
+            ExportSourceTxtRequest req,
+            ISyncPairStore store,
+            ProviderRegistry registry,
+            CancellationToken ct) =>
+        {
+            ArgumentNullException.ThrowIfNull(req);
+
+            if (req.Month is < 1 or > 12)
+                return Results.BadRequest(new { error = "invalid_month", message = "Month must be between 1 and 12." });
+            if (req.Year is < 1 or > 9999)
+                return Results.BadRequest(new { error = "invalid_year", message = "Year is out of range." });
+
+            // TODO (Plan 5 / multi-user): once pairs are user-scoped, GetAsync(id) MUST 404 for a
+            // pair the caller does not own, so the export never reads another user's source via
+            // Graph. The store already filters by current user for the other pair endpoints; keep
+            // this one on the same user-scoped store when the multi-user model lands.
+            var pair = await store.GetAsync(id, ct);
+            if (pair is null)
+                return Results.NotFound();
+
+            // OutlookCom has no server reader: its events live in local Outlook, read on the
+            // device via COM. The App routes that case through generateTxt instead.
+            var reader = registry.ResolveReader(pair.Source);
+            if (reader is null)
+                return Results.Conflict(new { error = "no_server_reader", message = "This source has no server reader; export it locally via Outlook." });
+
+            // The .txt must show each event's LOCAL clock time (what the user sees in their
+            // calendar), consistent with CalExport's COM exporter — NOT UTC. So the reader runs in
+            // preserveLocalTime mode (no Prefer:UTC), and "June" must mean the USER'S June, not a
+            // UTC June. We do not know the mailbox's zone server-side, and each event carries its
+            // OWN declared zone, so we render every event in its own local zone and keep only those
+            // whose LOCAL date falls in the requested month/year. To guarantee no boundary event is
+            // missed across any earth offset (UTC-12..UTC+14), the Graph window is padded one day on
+            // each side; the precise month filter below trims it back to exactly the user's month.
+            var monthStart = new DateTime(req.Year, req.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+            var monthEnd = monthStart.AddMonths(1);
+            var from = new DateTimeOffset(monthStart, TimeSpan.Zero).AddDays(-1);
+            var to = new DateTimeOffset(monthEnd, TimeSpan.Zero).AddDays(1);
+
+            IReadOnlyList<AppointmentRecord> records;
+            try
+            {
+                records = await reader
+                    .ReadWindowAsync(pair.Source.CalendarId, from, to, ct, preserveLocalTime: true)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsTransientReadFailure(ex))
+            {
+                // A transient Graph blip (429/timeout/network) is retryable: surface 503 so the
+                // client can offer "try again" instead of a hard failure.
+                return Results.Json(
+                    new { error = "transient_read_failure", message = "The calendar could not be read right now; try again shortly." },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            // Keep only events whose LOCAL start date lands in the requested month. Start now
+            // carries local wall-clock time (preserveLocalTime), so this is the user's month.
+            records = records
+                .Where(r => r.Start >= monthStart && r.Start < monthEnd)
+                .ToList();
+
+            if (!req.IncludeCancelled)
+                records = records.Where(r => !r.IsCancelled).ToList();
+
+            var txt = SimpleAppointmentFormatter.Format(records);
+            return Results.Text(txt, "text/plain");
         }).RequireCookieOrIdentityBearer();
 
         app.MapDelete("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
@@ -358,6 +468,14 @@ public static class PairEndpoints
             return Results.Ok(outcome.Result);
         }).RequireCookieOrApiKey();
     }
+
+    // Endpoint identity for the §F2 "did this side change?" check: a change to the provider,
+    // account or calendar id means a different reconciliation set, so the run counters reset.
+    // CalendarName is a display label only and is intentionally NOT compared.
+    private static bool EndpointsEqual(Endpoint a, Endpoint b) =>
+        string.Equals(a.Provider, b.Provider, StringComparison.Ordinal)
+        && string.Equals(a.AccountRef ?? "", b.AccountRef ?? "", StringComparison.Ordinal)
+        && string.Equals(a.CalendarId, b.CalendarId, StringComparison.Ordinal);
 
     private const int ReminderMinutes = 30;
 

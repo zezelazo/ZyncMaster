@@ -100,6 +100,16 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<string?> GenerateTxtAsync(string requestJson, CancellationToken ct = default)
         => Task.FromResult<string?>(null);
 
+    // Mirror GenerateTxtAsync: degrade quietly to "cancelled" (null) rather than throwing. Both
+    // .txt export branches (COM via generateTxt, Graph via this one) must behave the same when the
+    // engine is unconfigured, so the UI shows the clean "Save cancelled" path instead of a red error.
+    public Task<string?> ExportSourceTxtAsync(string requestJson, CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
+
+    // No engine yet → no device probe; report everything off so COM affordances stay disabled.
+    public Task<AppCapabilities> GetCapabilitiesAsync(CancellationToken ct = default)
+        => Task.FromResult(new AppCapabilities { OutlookCom = false });
+
     public Task<bool> GetAutoStartAsync(CancellationToken ct = default) => Task.FromResult(false);
 
     public Task SetAutoStartAsync(bool enabled, CancellationToken ct = default) => Task.CompletedTask;
