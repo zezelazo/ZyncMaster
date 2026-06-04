@@ -603,3 +603,83 @@
   /* Spinner: hold still rather than spin (the "waiting" copy still reads as in-progress). */
   .spinner { animation: none; }
 }
+
+/* =========================================================
+   MODAL / OVERLAY (per-pair .txt export popup, and any future dialog)
+   The backdrop is an INTERACTIVE layer (it catches the dismiss click) — not a decorative
+   pointer-events:none overlay — so the card floats above it and clicks inside the card never
+   reach the backdrop. Sits below the launch splash (z-index 50) but above the bottom nav.
+   ========================================================= */
+.modal-overlay {
+  position: fixed; inset: 0;
+  z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+  background: rgba(6, 9, 18, 0.52);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  animation: modal-fade-in var(--d-base) var(--ease-out) both;
+}
+.modal-overlay.is-closing { animation: modal-fade-out 200ms var(--ease-out) both; }
+@keyframes modal-fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+.modal__card {
+  width: 100%;
+  max-width: 360px;
+  max-height: calc(100% - 24px);
+  display: flex; flex-direction: column;
+  padding: 16px;
+  overflow: hidden;
+  animation: modal-card-in var(--d-base) var(--ease-emph) both;
+}
+.modal-overlay.is-closing .modal__card { animation: none; }
+@keyframes modal-card-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay, .modal__card { animation: none; }
+}
+
+.modal__head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 12px;
+}
+.modal__title { font-size: 15px; font-weight: 600; color: var(--ink-1); }
+.modal__close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: none;
+  border: 0; background: transparent; color: var(--ink-2);
+  border-radius: var(--r-sm); cursor: pointer;
+  transition: background var(--d-fast), color var(--d-fast);
+}
+.modal__close:hover { background: var(--ctrl-hover); color: var(--ink-1); }
+.modal__body { overflow: auto; }
+.modal__foot { display: flex; justify-content: flex-end; margin-top: 14px; }
+.modal__foot .btn { min-width: 132px; }
+.modal__feedback { margin-top: 8px; }
+.export-modal__src { color: var(--ink-3); }
+
+/* =========================================================
+   INLINE "+ New calendar" (destination picker)
+   ========================================================= */
+.cal-new { padding: 4px 6px 8px; }
+.cal-new__trigger {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 10px;
+  border: 1px dashed var(--ctrl-stroke);
+  background: transparent; color: var(--azure);
+  border-radius: var(--r-sm); cursor: pointer;
+  font-size: 12px; font-weight: 600;
+  transition: border-color var(--d-fast), background var(--d-fast);
+}
+.cal-new__trigger:hover { border-color: var(--azure-edge); background: var(--azure-soft); }
+.cal-new__form { display: flex; align-items: center; gap: 6px; }
+.cal-new__form .field-input { flex: 1; min-width: 0; }
+.cal-new__create, .cal-new__cancel { height: 32px; flex: none; }
+.cal-new__feedback { margin-top: 5px; }
+
+/* Consolidated identity hint (Signed-in chip + email on one line). */
+.identity-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.identity-hint__email { color: var(--ink-2); }

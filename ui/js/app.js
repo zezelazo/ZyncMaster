@@ -867,6 +867,16 @@ function pairAccordion(pair) {
         onclick: (e) => { e.stopPropagation(); setPairState(pair.id, disabled ? 'active' : 'disabled'); } },
         iconEl(disabled ? 'check' : 'close', 12, 1.8), el('span', { style: 'font-size:12px', text: disabled ? 'Enable' : 'Disable' })));
 
+      // Export .txt — per-pair Outlook COM export. Only meaningful when the SOURCE is local Outlook
+      // (OutlookCom); for Graph→Graph pairs there is no COM source to export, so the button is shown
+      // disabled with an explanatory hint. Opens the export options popup for this pair.
+      const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
+      const txtBtn = el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
+        disabled: !isCom, title: isCom ? 'Export a month of this calendar to a .txt file' : 'Only available for Outlook sources on this PC',
+        onclick: (e) => { e.stopPropagation(); if (isCom) openExportTxtModal(pair); } },
+        iconEl('folder', 12, 1.6), el('span', { style: 'font-size:12px', text: 'Export .txt' }));
+      controls.append(txtBtn);
+
       controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px;color:var(--err);margin-left:auto',
         onclick: (e) => { e.stopPropagation(); deletePair(pair.id); } },
         iconEl('close', 12, 1.8), el('span', { style: 'font-size:12px', text: 'Delete' })));
@@ -939,10 +949,21 @@ function sliderRow(label, get, set) {
     el('div', null, el('div', { class: 'cfg-row__label', text: label }),
       el('div', { class: 'cfg-row__hint' }, 'Next ', hintVal, ' days · past events are never touched')), slider);
 }
+// intervalRow — segmented 5/15/30/60-minute control. Selecting an option updates aria-pressed on
+// the buttons IN PLACE (the same technique the theme picker uses) instead of repainting the whole
+// view, so picking an interval never reconstructs the screen or flickers. The caller's `set` still
+// runs (to persist / update state) but must NOT trigger a full rerender for this control.
 function intervalRow(get, set) {
   const seg = el('div', { class: 'segmented' });
-  [5, 15, 30, 60].forEach((n) => seg.append(el('button', { class: 'segmented__item', 'aria-pressed': String(get() === n), onclick: () => set(n) },
-    el('span', { class: 'num', text: String(n) }), 'm')));
+  const buttons = [];
+  [5, 15, 30, 60].forEach((n) => {
+    const b = el('button', { class: 'segmented__item', 'aria-pressed': String(get() === n),
+      onclick: () => { set(n); buttons.forEach((btn) => btn.setAttribute('aria-pressed', String(Number(btn.dataset.val) === n))); } },
+      el('span', { class: 'num', text: String(n) }), 'm');
+    b.dataset.val = String(n);
+    buttons.push(b);
+    seg.append(b);
+  });
   return el('div', { class: 'cfg-row' },
     el('div', null, el('div', { class: 'cfg-row__label', text: 'Interval' }), el('div', { class: 'cfg-row__hint', text: 'How often we check for changes' })), seg);
 }
@@ -1029,7 +1050,7 @@ function renderAddPair(root) {
     cfg.append(el('div', { class: 'cfg-row' },
       el('div', null, el('div', { class: 'cfg-row__label', text: 'Pair name' }), el('div', { class: 'cfg-row__hint', text: 'Shown on your dashboard' })), nameInput));
     cfg.append(sliderRow('Sync window', () => addPair.windowDays, (v) => { addPair.windowDays = v; }));
-    cfg.append(intervalRow(() => addPair.intervalMin, (v) => { addPair.intervalMin = v; rerender(); }));
+    cfg.append(intervalRow(() => addPair.intervalMin, (v) => { addPair.intervalMin = v; }));
     root.append(cfg);
 
     root.append(el('div', { class: 'wizard-foot' },
@@ -1046,8 +1067,10 @@ function completeAddPair() {
 
 // ---------------- Add Pair wizard (bridged / live data) ----------------
 // A list of online accounts (from listAccounts), each expandable into its calendars
-// (from listCalendars). Selecting a calendar invokes onPick with the chosen endpoint.
-function onlineCalendarPicker(selectedCalendarId, onPick) {
+// (from listCalendars). Selecting a calendar invokes onPick with the chosen endpoint. When
+// `allowCreate` is true (the DESTINATION step) each account also gets a "+ New calendar" affordance
+// that creates a fresh calendar on that account via the createCalendar bridge action and selects it.
+function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
   const wrap = el('div', { class: 'glass glass--card', style: 'padding:4px' });
   const list = el('div', { class: 'cal-list' });
 
@@ -1077,10 +1100,78 @@ function onlineCalendarPicker(selectedCalendarId, onPick) {
           el('div', { class: 'cal-item__sub', text: acc.displayName || acc.accountRef })),
         el('div', { class: 'cal-item__check', html: selected ? icon('check', { size: 12, stroke: 2.6 }) : '' })));
     });
+
+    // "+ New calendar" — destination only. Reveals an inline name field; confirming creates the
+    // calendar on this account and auto-selects it (mirrors the Connect-account inline states).
+    if (allowCreate) list.append(newCalendarRow(acc, onPick));
   });
 
   wrap.append(list);
   return wrap;
+}
+
+// newCalendarRow(acc, onPick) — an inline "+ New calendar" control for one account. Clicking it
+// swaps in a name input + Create/Cancel; Create calls createCalendarFor, which on success refreshes
+// the account's calendars, selects the new one (onPick), and re-renders the wizard. Failures show
+// inline feedback without disturbing the rest of the picker. Pattern mirrors connectCalendarAccount.
+function newCalendarRow(acc, onPick) {
+  const row = el('div', { class: 'cal-new' });
+
+  const showForm = () => {
+    row.replaceChildren();
+    const input = el('input', { class: 'field-input cal-new__input', type: 'text', placeholder: 'New calendar name', 'aria-label': 'New calendar name', maxlength: '120' });
+    const feedback = el('div', { class: 'cfg-row__hint cal-new__feedback' });
+    const createBtn = el('button', { class: 'btn btn--primary cal-new__create', type: 'button' }, iconEl('plus', 12, 2), el('span', { text: 'Create' }));
+    const cancelBtn = el('button', { class: 'btn btn--ghost cal-new__cancel', type: 'button', text: 'Cancel', onclick: showButton });
+    const submit = () => {
+      const name = (input.value || '').trim();
+      if (!name) { feedback.textContent = 'Enter a name.'; feedback.style.color = 'var(--err)'; input.focus(); return; }
+      createBtn.disabled = true; cancelBtn.disabled = true; input.disabled = true;
+      const span = createBtn.querySelector('span'); if (span) span.textContent = 'Creating…';
+      feedback.textContent = ''; feedback.style.color = '';
+      createCalendarFor(acc.accountRef, name, onPick, (err) => {
+        // Failure path: restore the form with an inline error.
+        createBtn.disabled = false; cancelBtn.disabled = false; input.disabled = false;
+        if (span) span.textContent = 'Create';
+        feedback.textContent = err || 'Could not create the calendar.'; feedback.style.color = 'var(--err)';
+        input.focus();
+      });
+    };
+    createBtn.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    row.append(el('div', { class: 'cal-new__form' }, input, createBtn, cancelBtn), feedback);
+    input.focus();
+  };
+
+  const showButton = () => {
+    row.replaceChildren();
+    row.append(el('button', { class: 'cal-new__trigger', type: 'button', onclick: showForm },
+      iconEl('plus', 13, 2.2), el('span', { text: 'New calendar' })));
+  };
+
+  showButton();
+  return row;
+}
+
+// createCalendarFor(accountRef, name, onPick, onError) — create a calendar on the account through
+// the createCalendar bridge action, then invalidate + reload that account's calendar list, select
+// the freshly-created calendar (onPick) and re-render the wizard. onError gets a message on failure.
+function createCalendarFor(accountRef, name, onPick, onError) {
+  if (!Bridge.available || !accountRef) { if (onError) onError('No bridge available.'); return; }
+  Bridge.call('createCalendar', JSON.stringify({ accountRef, name }))
+    .then((created) => {
+      // Drop the cached calendars so the new one is included on reload, then select it.
+      delete live.calendars[accountRef];
+      return loadCalendars(accountRef).then((cals) => {
+        const newId = created && created.id;
+        const picked = (cals || []).find((c) => c.id === newId)
+          || (created && created.id ? { id: created.id, displayName: created.displayName || name } : null);
+        const acc = (live.accounts || []).find((a) => a.accountRef === accountRef) || { accountRef };
+        if (picked && onPick) onPick(acc, picked);
+        if (state.view === 'add-pair') rerender();
+      });
+    })
+    .catch((e) => { if (onError) onError((e && e.message) || 'Could not create the calendar.'); });
 }
 
 function renderAddPairLive(root) {
@@ -1128,7 +1219,7 @@ function renderAddPairLive(root) {
     root.append(el('div', { class: 'wizard-sub', text: 'Events are written here. Past events on the destination are never touched.' }));
     root.append(onlineCalendarPicker(a.dstCalendarId, (acc, c) => {
       a.dstAccountRef = acc.accountRef; a.dstCalendarId = c.id; a.dstCalendarName = c.displayName || c.id; rerender();
-    }));
+    }, true));
     root.append(el('div', { class: 'wizard-foot' },
       el('button', { class: 'btn btn--ghost', text: 'Back', onclick: () => { a.step = 0; rerender(); } }),
       el('button', { class: 'btn btn--primary', disabled: !a.dstCalendarId, onclick: () => { a.step = 2; rerender(); } },
@@ -1150,7 +1241,7 @@ function renderAddPairLive(root) {
     nameInput.addEventListener('input', () => { a.name = nameInput.value; });
     cfg.append(el('div', { class: 'cfg-row' },
       el('div', null, el('div', { class: 'cfg-row__label', text: 'Pair name' }), el('div', { class: 'cfg-row__hint', text: 'Shown on your dashboard' })), nameInput));
-    cfg.append(intervalRow(() => a.intervalMin, (v) => { a.intervalMin = v; rerender(); }));
+    cfg.append(intervalRow(() => a.intervalMin, (v) => { a.intervalMin = v; }));
     root.append(cfg);
 
     root.append(el('div', { class: 'wizard-foot' },
@@ -1268,20 +1359,77 @@ function cfgRow(label, hint, control) {
     el('div', null, el('div', { class: 'cfg-row__label', text: label }), hint || null), control);
 }
 
-// ensureCalendarData — lazy-load the connected accounts + their calendars once, repainting the
-// given settings view in place when each arrives. Shared by the hub's Calendar nav-row (so a value
-// can be shown) and the Calendar module (which lists them). Repaints with softRepaint() so the
-// arriving data never replays the entrance animation.
-function ensureCalendarData(view) {
+// ensureCalendarAccounts — lazy-load ONLY the connected accounts once for the Calendar module, then
+// do a SINGLE softRepaint when the list settles. The module no longer lists calendars per account
+// (the target-calendar select moved to the per-pair wizard), so it never precharges
+// live.calendars[*] — that would be wasted fetches and extra repaints. Guarded so it runs once: if
+// live.accounts is already populated there is nothing to do. softRepaint() avoids replaying the
+// entrance animation when the data arrives.
+function ensureCalendarAccounts(view) {
   if (!Bridge.available) return;
-  if (live.accounts === null) {
-    loadAccounts().then((list) => {
-      (list || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === view) softRepaint(); }); });
-      if (state.view === view) softRepaint();
-    });
-  } else {
-    (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef).then(() => { if (state.view === view) softRepaint(); }); });
+  if (live.accounts !== null) return;
+  loadAccounts().finally(() => { if (state.view === view) softRepaint(); });
+}
+
+// ensureConfigData — coalesced first-load for the Settings hub. Fires every lazy fetch the hub
+// needs (device, auto-start, connected accounts + their calendars) in one batch and triggers a
+// SINGLE softRepaint when the whole batch settles, instead of each fetch repainting on its own.
+// That stops the first open of Settings from flickering as each promise lands. Guarded so the batch
+// runs at most once per session (configDataLoaded); nothing here re-fetches data already cached.
+let configDataLoaded = false;
+let configDataLoading = false;
+function ensureConfigData() {
+  if (!Bridge.available || configDataLoaded || configDataLoading) return;
+  configDataLoading = true;
+
+  const jobs = [];
+
+  // Device record (desktop App). Cached on live.device.
+  if (live.device === null && !live.deviceLoading) {
+    live.deviceLoading = true;
+    jobs.push(Bridge.call('getDevice')
+      .then((d) => { live.device = d || {}; if (d && d.name) settings.deviceName = d.name; })
+      .catch(() => { live.device = {}; })
+      .finally(() => { live.deviceLoading = false; }));
   }
+
+  // Auto-start preference (desktop App). Cached on live.autoStart.
+  if (live.autoStart === null) {
+    jobs.push(Bridge.call('getAutoStart')
+      .then((r) => { live.autoStart = !!(r && r.enabled); })
+      .catch(() => {}));
+  }
+
+  // Connected accounts + each account's calendars (desktop App only; the web panel has none).
+  if (Bridge.desktopApp && live.accounts === null) {
+    jobs.push(loadAccounts().then((list) => Promise.all(
+      (list || []).map((acc) => (live.calendars[acc.accountRef] ? Promise.resolve() : loadCalendars(acc.accountRef)))
+    )));
+  } else if (Bridge.desktopApp) {
+    (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) jobs.push(loadCalendars(acc.accountRef)); });
+  }
+
+  Promise.all(jobs).finally(() => {
+    configDataLoaded = true;
+    configDataLoading = false;
+    if (state.view === 'config') softRepaint();
+  });
+}
+
+// resetSessionState — clear every per-session cache the Settings hub relies on so the next sign-in
+// (possibly a DIFFERENT identity on the same machine without restarting the App) reloads fresh data
+// instead of showing the previous user's device name, auto-start toggle and account count. Without
+// this, ensureConfigData()'s once-per-session guard (configDataLoaded) would short-circuit and the
+// hub would render stale values. Called on sign-out.
+function resetSessionState() {
+  configDataLoaded = false;
+  configDataLoading = false;
+  live.device = null;
+  live.deviceLoading = false;
+  live.autoStart = null;
+  live.accounts = null;
+  live.calendars = {};
+  live.me = null;
 }
 
 // ---------------- Screen: Settings hub ----------------
@@ -1303,6 +1451,12 @@ function renderConfig(root) {
     return;
   }
 
+  // Coalesced first-load: kick every lazy fetch this hub needs (device, auto-start, accounts +
+  // their calendars) in ONE batch and repaint ONCE when the batch settles, instead of each fetch
+  // firing its own softRepaint (which made the first open of Settings flicker repeatedly). The
+  // section builders below only READ from `live`; they no longer trigger their own loads.
+  ensureConfigData();
+
   // Account & device — identity (who) + this device (where), consolidated into one card.
   root.append(accountAndDeviceSection());
 
@@ -1310,14 +1464,13 @@ function renderConfig(root) {
   // unless Bridge.desktopApp, so showing the row in mock/web would be a dead-end (a flash that
   // navigates and immediately returns). Show a live summary value (account count) when known.
   if (Bridge.desktopApp) {
-    ensureCalendarData('config');
     const accounts = live.accounts || [];
     let calValue = '';
     if (live.accounts === null) calValue = '';
     else if (accounts.length === 0) calValue = 'Not connected';
     else calValue = `${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}`;
     root.append(el('div', { class: 'glass glass--card config-section' },
-      navRow({ label: 'Calendar', sublabel: 'Accounts, target, schedule, export', value: calValue, onClick: () => navigate('calendar-settings') })));
+      navRow({ label: 'Calendar', sublabel: 'Calendar accounts', value: calValue, onClick: () => navigate('calendar-settings') })));
   }
 
   // Appearance.
@@ -1333,19 +1486,25 @@ function renderConfig(root) {
 function accountAndDeviceSection() {
   const rows = [];
 
-  // Identity row: name (displayName||email) + email hint + optional plan chip + Sign out.
+  // Identity row: name (displayName||email) on top, a "Signed in" chip + email/plan hint below,
+  // and Sign out on the right. This single row IS the session representation — the old separate
+  // "Status" row ("This device is signed in as X") was redundant with it and has been removed.
+  // identityRow(primary, email, plan) builds the consolidated row.
+  const identityRow = (primary, email, plan) => {
+    const hint = el('div', { class: 'cfg-row__hint identity-hint' });
+    hint.append(el('span', { class: 'chip chip--ok identity-signed', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'));
+    if (email) hint.append(el('span', { class: 'identity-hint__email', text: email }));
+    if (plan) hint.append(el('span', { class: 'chip chip--ok', style: 'margin-left:8px;height:18px;font-size:9.5px', text: String(plan) }));
+    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
+    return cfgRow(primary, hint, signOutBtn);
+  };
+
   if (Bridge.desktopApp && identityAuth.signedIn) {
     const me = identityAuth.me || {};
-    const primary = me.displayName || me.email || 'Signed in';
-    const hint = el('div', { class: 'cfg-row__hint' });
-    if (me.displayName && me.email) hint.append(document.createTextNode(me.email));
-    if (me.plan) hint.append(el('span', { class: 'chip chip--ok', style: 'margin-left:8px;height:18px;font-size:9.5px', text: String(me.plan) }));
-    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
-    rows.push(cfgRow(primary, hint, signOutBtn));
+    rows.push(identityRow(me.displayName || me.email || 'Signed in', (me.displayName && me.email) ? me.email : '', me.plan));
   } else if (!Bridge.available) {
     // Mock-only walkthrough identity.
-    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
-    rows.push(cfgRow('Daniel López', el('div', { class: 'cfg-row__hint', text: 'daniel@outlook.com' }), signOutBtn));
+    rows.push(identityRow('Daniel López', 'daniel@outlook.com', null));
   }
 
   // Device name row — the REAL registered device name (getDevice / live.device) on the desktop App,
@@ -1364,14 +1523,8 @@ function accountAndDeviceSection() {
       scheduleDeviceNameCheck(nameInput, indicator, feedback);
     });
     nameInput.addEventListener('change', () => saveDeviceName(nameInput, feedback, indicator));
-    // Lazy-load the device once, then repaint in place (no entrance replay).
-    if (live.device === null && !live.deviceLoading) {
-      live.deviceLoading = true;
-      Bridge.call('getDevice')
-        .then((d) => { live.device = d || {}; if (d && d.name) settings.deviceName = d.name; })
-        .catch(() => { live.device = {}; })
-        .finally(() => { live.deviceLoading = false; if (state.view === 'config') softRepaint(); });
-    }
+    // (The device record is fetched by the coalesced ensureConfigData() batch — this builder only
+    // reads live.device so the first open of Settings repaints once, not once per lazy load.)
     rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint' }, document.createTextNode('Visible to your other devices'), feedback), inputWrap));
   } else {
     if (!settings.deviceName) settings.deviceName = "Daniel's MacBook";
@@ -1380,16 +1533,8 @@ function accountAndDeviceSection() {
     rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput));
   }
 
-  // Status row — "Signed in" chip + "as <who>".
-  let who = null;
-  if (Bridge.available) { if (identityAuth.signedIn && identityAuth.me) who = identityAuth.me.displayName || identityAuth.me.email; }
-  else who = 'daniel@outlook.com';
-  if (who) {
-    rows.push(cfgRow('Status',
-      el('div', { class: 'cfg-row__hint' },
-        el('span', { class: 'chip chip--ok', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'),
-        el('span', { style: 'color:var(--ink-2)', text: `as ${who}` }))));
-  }
+  // (The standalone "Status" row was merged into the identity row above — the "Signed in" chip
+  // now lives there, next to the name/email, instead of duplicating the identity in its own row.)
 
   // Run at startup — a device/app preference (NOT calendar), so it lives here. Native/loopback
   // only; backed by the host auto-start manager.
@@ -1397,9 +1542,7 @@ function accountAndDeviceSection() {
     const startupToggle = toggle(
       () => (live.autoStart !== null) ? live.autoStart : settings.startup,
       (v) => { settings.startup = v; live.autoStart = v; Bridge.call('setAutoStart', v ? 'true' : 'false').catch(() => {}); });
-    if (live.autoStart === null) {
-      Bridge.call('getAutoStart').then((r) => { live.autoStart = !!(r && r.enabled); if (state.view === 'config') softRepaint(); }).catch(() => {});
-    }
+    // (auto-start is fetched by the coalesced ensureConfigData() batch — read-only here.)
     rows.push(cfgRow('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }), startupToggle));
   } else {
     rows.push(cfgRow('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }),
@@ -1438,9 +1581,10 @@ function aboutSection() {
 }
 
 // ---------------- Screen: Calendar module ----------------
-// Desktop App only. Everything calendar-shaped lives here: connected accounts (connect / per-account
-// unlink), the target calendar, the schedule (auto-sync + interval + window) and the basic .txt
-// export tool. Reached from the hub's Calendar nav-row.
+// Desktop App only. This module is now ONLY the connected calendar accounts (connect / per-account
+// unlink). The target calendar, the schedule (interval / window) and the .txt export are no longer
+// global settings: target + interval belong to each sync pair (chosen in the Add-pair wizard) and
+// the .txt export is a per-pair action with its own popup. Reached from the hub's Calendar nav-row.
 function renderCalendarSettings(root) {
   root.append(viewHeader('Calendar', { onBack: () => navigate('config') }));
 
@@ -1450,7 +1594,7 @@ function renderCalendarSettings(root) {
     return;
   }
 
-  ensureCalendarData('calendar-settings');
+  ensureCalendarAccounts('calendar-settings');
   const accounts = live.accounts || [];
 
   // Calendar accounts — list of connected accounts with per-account Unlink, plus Connect.
@@ -1481,32 +1625,11 @@ function renderCalendarSettings(root) {
   accountRows.push(connectWrap);
   root.append(cfgSection('Calendar accounts', ...accountRows));
 
-  // Target calendar — the real <select> moved out of the old renderConfig.
-  const targetSel = el('select', { class: 'field-select' });
-  const cals = accounts.flatMap((acc) => (live.calendars[acc.accountRef] || []).map((c) => ({ acc, c })));
-  if (cals.length === 0) {
-    const placeholder = accounts.length === 0 ? 'Connect an account first' : 'No calendars yet';
-    targetSel.append(el('option', { text: placeholder, value: '', disabled: true, selected: true }));
-  } else {
-    cals.forEach(({ acc, c }) => targetSel.append(
-      el('option', { value: c.id, text: `${acc.displayName || acc.accountRef} · ${c.displayName || c.id}` })));
-  }
-  // pushConfig does not persist a target-calendar value yet (no AppSettings field), so the change
-  // handler stays a no-op for now — wiring it to a real host field is a deliberate contract change.
-  targetSel.addEventListener('change', pushConfig);
-  root.append(cfgSection('Target calendar',
-    cfgRow('Target calendar', el('div', { class: 'cfg-row__hint', text: 'Where mirrored events are written' }), targetSel)));
-
-  // Schedule — auto-sync, interval, sync window. interval/window repaint softly (no flicker).
-  root.append(cfgSection('Schedule',
-    cfgRow('Auto-sync', el('div', { class: 'cfg-row__hint', text: 'Mirror changes automatically' }), toggle(() => settings.autoSync, (v) => { settings.autoSync = v; })),
-    intervalRow(() => settings.interval, (v) => { settings.interval = v; pushConfig(); softRepaint(); }),
-    sliderRow('Sync window', () => settings.windowDays, (v) => { settings.windowDays = v; pushConfig(); })));
-
-  // Tools — basic .txt export (device-only Outlook COM export).
-  const txtBtn = el('button', { class: 'btn btn--ghost', onclick: () => generateBasicTxt(txtBtn) }, iconEl('folder', 13, 1.6), el('span', { text: 'Generate .txt' }));
-  root.append(cfgSection('Tools',
-    cfgRow('Basic .txt export', el('div', { class: 'cfg-row__hint', text: 'Save this month as a pipe-delimited text file' }), txtBtn)));
+  // Note: the per-sync target calendar, interval/window and the .txt export used to live here as
+  // global settings. They are now per-pair concerns — target + interval are picked in the Add-pair
+  // wizard, and the .txt export is a per-pair action with its own popup on the dashboard.
+  root.append(el('div', { class: 'cfg-note', style: 'margin-top:10px;padding:0 4px;font-size:11px;color:var(--ink-3);line-height:16px' },
+    'Target calendar, interval and .txt export are set per sync. Manage them on each pair from the Calendar Sync screen.'));
 }
 
 // ---------------- Screen: Sign in (web panel gate) ----------------
@@ -1648,6 +1771,7 @@ function signOutApp() {
       identityAuth.me = null;
       identityAuth.magicLinkSent = false;
       identityAuth.error = null;
+      resetSessionState();
       state.view = 'home';
       rerender();
     });
@@ -1943,16 +2067,138 @@ function deletePair(id) {
     .catch(() => {});
 }
 
-// ---------------- Settings tools (native shell) ----------------
-function generateBasicTxt(btn) {
+// ---------------- Modal helper ----------------
+// openModal({ title, body, onClose }) — a focus-trapped, dismissable overlay built from the existing
+// glass tokens. The backdrop is a real interactive layer (it catches the dismiss click) — NOT a
+// decorative pointer-events:none overlay — while the card itself stops propagation so clicks inside
+// never close it. Escape and the backdrop close it; focus moves into the card and returns to the
+// previously-focused element on close. Returns { close }.
+function openModal({ title, body, onClose }) {
+  const prevFocus = document.activeElement;
+  let closed = false;
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', onKey, true);
+    overlay.classList.add('is-closing');
+    const remove = () => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+    overlay.addEventListener('animationend', remove, { once: true });
+    setTimeout(remove, 300);
+    if (prevFocus && prevFocus.focus) { try { prevFocus.focus(); } catch (_) {} }
+    if (onClose) onClose();
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key === 'Tab') {
+      // Simple focus trap: keep Tab within the card's focusable elements.
+      const focusables = card.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+
+  const closeBtn = el('button', { class: 'modal__close', type: 'button', 'aria-label': 'Close', onclick: close }, iconEl('close', 16, 1.8));
+  const head = el('div', { class: 'modal__head' }, el('div', { class: 'modal__title', text: title }), closeBtn);
+  const card = el('div', { class: 'glass glass--card modal__card', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+    head, el('div', { class: 'modal__body' }, body));
+  card.addEventListener('click', (e) => e.stopPropagation());
+
+  const overlay = el('div', { class: 'modal-overlay', onclick: close });
+  overlay.append(card);
+  document.body.append(overlay);
+
+  document.addEventListener('keydown', onKey, true);
+  // Move focus into the dialog (first focusable, else the close button).
+  const firstField = card.querySelector('input, select, button');
+  if (firstField && firstField.focus) firstField.focus(); else closeBtn.focus();
+
+  return { close };
+}
+
+// ---------------- Per-pair .txt export popup ----------------
+// openExportTxtModal(pair) — month/year/include-cancelled options for exporting the local Outlook
+// calendar on THIS PC (via COM). The export always reads the on-this-PC Outlook calendar, never a
+// remote or pair-specific calendar, so there is no calendar picker. Confirming calls generateTxt
+// with {year, month, includeCancelled}. Mirrors the previous save/cancel feedback.
+const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function openExportTxtModal(pair) {
   if (!Bridge.available) return;
-  const span = btn && btn.querySelector('span');
-  const orig = span ? span.textContent : '';
-  if (span) span.textContent = 'Saving…';
-  Bridge.call('generateTxt')
-    .then((r) => { if (span) span.textContent = (r && r.cancelled) ? 'Cancelled' : 'Saved'; })
-    .catch(() => { if (span) span.textContent = 'Failed'; })
-    .finally(() => { if (span) setTimeout(() => { span.textContent = orig || 'Generate .txt'; }, 1800); });
+  const now = new Date();
+  const selected = { month: now.getMonth() + 1, year: now.getFullYear(), includeCancelled: true };
+
+  // Month select.
+  const monthSel = el('select', { class: 'field-select', 'aria-label': 'Month' });
+  MONTH_LABELS.forEach((label, i) => monthSel.append(el('option', { value: String(i + 1), text: label, selected: (i + 1) === selected.month })));
+  monthSel.addEventListener('change', () => { selected.month = Number(monthSel.value); });
+
+  // Year select — current year and the four preceding years.
+  const yearSel = el('select', { class: 'field-select', 'aria-label': 'Year' });
+  for (let y = now.getFullYear(); y >= now.getFullYear() - 4; y--) {
+    yearSel.append(el('option', { value: String(y), text: String(y), selected: y === selected.year }));
+  }
+  yearSel.addEventListener('change', () => { selected.year = Number(yearSel.value); });
+
+  // Include cancelled toggle (default on).
+  const cancelToggle = toggleLocal(() => selected.includeCancelled, (v) => { selected.includeCancelled = v; }, 'Include cancelled events');
+
+  const feedback = el('div', { class: 'cfg-row__hint modal__feedback', style: 'min-height:16px' });
+  const confirmBtn = el('button', { class: 'btn btn--primary', type: 'button' }, iconEl('folder', 13, 1.6), el('span', { text: 'Export .txt' }));
+
+  const body = el('div', { class: 'export-modal' },
+    el('div', { class: 'export-modal__src cfg-row__hint', style: 'margin-bottom:4px' }, 'Exports your local Outlook calendar on this PC for the selected month.'),
+    el('div', { class: 'glass glass--card config-section' },
+      cfgRow('Month', null, monthSel),
+      cfgRow('Year', null, yearSel),
+      cfgRow('Include cancelled', el('div', { class: 'cfg-row__hint', text: 'Keep events marked as cancelled' }), cancelToggle)),
+    feedback,
+    el('div', { class: 'modal__foot' }, confirmBtn));
+
+  const modal = openModal({ title: 'Export to .txt', body });
+
+  confirmBtn.addEventListener('click', () => {
+    const span = confirmBtn.querySelector('span');
+    confirmBtn.disabled = true;
+    if (span) span.textContent = 'Saving…';
+    feedback.textContent = ''; feedback.style.color = '';
+    const req = { year: selected.year, month: selected.month, includeCancelled: selected.includeCancelled };
+    Bridge.call('generateTxt', JSON.stringify(req))
+      .then((r) => {
+        if (r && r.cancelled) {
+          // The host's save dialog was dismissed — leave the modal open so the user can retry.
+          confirmBtn.disabled = false;
+          if (span) span.textContent = 'Export .txt';
+          feedback.textContent = 'Save cancelled.'; feedback.style.color = 'var(--ink-2)';
+          return;
+        }
+        if (span) span.textContent = 'Saved';
+        feedback.textContent = 'File saved.'; feedback.style.color = 'var(--ok)';
+        setTimeout(() => modal.close(), 900);
+      })
+      .catch((e) => {
+        confirmBtn.disabled = false;
+        if (span) span.textContent = 'Export .txt';
+        feedback.textContent = (e && e.message) || 'Export failed.'; feedback.style.color = 'var(--err)';
+      });
+  });
+}
+
+// toggleLocal — a toggle whose set() does NOT call pushConfig (the shared toggle() pushes settings to
+// the host on every flip, which is wrong for an ephemeral in-modal option). Same look + a11y. The
+// optional label becomes the accessible name (aria-label) — the role=switch element has no visible
+// text of its own, so without it screen readers announce an unnamed switch.
+function toggleLocal(get, set, label) {
+  const attrs = { class: 'toggle', role: 'switch', 'aria-checked': String(get()), tabindex: '0' };
+  if (label) attrs['aria-label'] = label;
+  const t = el('div', attrs);
+  const flip = () => { const v = !get(); set(v); t.setAttribute('aria-checked', String(v)); };
+  t.addEventListener('click', flip);
+  t.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flip(); } });
+  return t;
 }
 
 // unlinkAccount(accountRef?) — unlink a calendar account. With an explicit accountRef (the
