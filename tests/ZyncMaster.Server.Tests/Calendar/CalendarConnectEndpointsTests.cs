@@ -32,21 +32,26 @@ public class CalendarConnectEndpointsTests
     private sealed class FakeTokenService : IMicrosoftTokenService
     {
         public string? LastCalendarScopes { get; private set; }
+        // When empty, the exchange returns NO id_token-derived email/displayName (the real calendar
+        // exchange omits `openid`), so the callback must fall back to Graph /me. Defaults to a value
+        // so the existing tests keep their behaviour.
         public string Email { get; init; } = "calendar@test";
+        public string DisplayName { get; init; } = "Calendar Owner";
         public string Refresh { get; init; } = "calendar-refresh-token";
 
         public Task<TokenResult> ExchangeCalendarCodeAsync(string code, string scopes, CancellationToken ct = default)
         {
             LastCalendarScopes = scopes;
+            var hasEmail = !string.IsNullOrEmpty(Email);
             return Task.FromResult(new TokenResult
             {
                 AccessToken = "calendar-access-token",
                 RefreshToken = Refresh,
                 ExpiresUtc = DateTimeOffset.UtcNow.AddHours(1),
-                UserPrincipalName = Email,
+                UserPrincipalName = hasEmail ? Email : null,
                 Subject = "calendar-oid",
-                Email = Email,
-                DisplayName = "Calendar Owner",
+                Email = hasEmail ? Email : null,
+                DisplayName = string.IsNullOrEmpty(DisplayName) ? null : DisplayName,
             });
         }
 
@@ -60,12 +65,37 @@ public class CalendarConnectEndpointsTests
             throw new NotSupportedException();
     }
 
+    // Stub /me lookup: returns a fixed email/displayName and records how many times it was called so
+    // a test can prove the callback hit /me exactly when the exchange returned no email.
+    private sealed class FakeGraphUserInfo : IGraphUserInfoService
+    {
+        public int Calls { get; private set; }
+        public GraphUserInfo Result { get; init; } = new("me@test", "Me From Graph");
+
+        public Task<GraphUserInfo> GetMeAsync(string accessToken, CancellationToken ct = default)
+        {
+            Calls++;
+            return Task.FromResult(Result);
+        }
+    }
+
     private static WebApplicationFactory<Program> CreateFactory(FakeTokenService fake) =>
         new ServerTestFactory().WithWebHostBuilder(b =>
             b.ConfigureServices(s =>
             {
                 s.RemoveAll<IMicrosoftTokenService>();
                 s.AddSingleton<IMicrosoftTokenService>(fake);
+            }));
+
+    private static WebApplicationFactory<Program> CreateFactory(
+        FakeTokenService fake, IGraphUserInfoService userInfo) =>
+        new ServerTestFactory().WithWebHostBuilder(b =>
+            b.ConfigureServices(s =>
+            {
+                s.RemoveAll<IMicrosoftTokenService>();
+                s.AddSingleton<IMicrosoftTokenService>(fake);
+                s.RemoveAll<IGraphUserInfoService>();
+                s.AddSingleton<IGraphUserInfoService>(userInfo);
             }));
 
     private static HttpClient NoRedirectClient(WebApplicationFactory<Program> factory) =>
@@ -421,6 +451,104 @@ public class CalendarConnectEndpointsTests
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
         db.CalendarAccounts.Single(a => a.UserId == userId).Scope.Should().Be(AccountScope.Read.ToString());
+    }
+
+    // ---- callback: email capture via Graph /me ---------------------------------------------
+
+    [Fact]
+    public async Task Callback_captures_email_from_graph_me_when_exchange_returns_no_email()
+    {
+        // The calendar exchange omits openid, so it returns no email/displayName. The callback must
+        // fall back to Graph /me with the access token and persist the real mailbox + name.
+        var fake = new FakeTokenService { Email = "", DisplayName = "" };
+        var me = new FakeGraphUserInfo { Result = new GraphUserInfo("real@contoso.com", "Real Person") };
+        using var factory = CreateFactory(fake, me);
+        var (token, userId) = IssueBearer(factory, "cb-me", "cb-me@test");
+        var client = NoRedirectClient(factory);
+
+        var (state, csrfCookie) = await StartConnect(client, token, "readwrite", 51930, "me-nonce");
+        var callback = Bearer(HttpMethod.Get,
+            $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
+        callback.Headers.Add("Cookie", csrfCookie);
+        (await client.SendAsync(callback)).StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        me.Calls.Should().Be(1);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        var row = db.CalendarAccounts.Single(a => a.UserId == userId);
+        row.AccountEmail.Should().Be("real@contoso.com");
+        row.DisplayName.Should().Be("Real Person");
+    }
+
+    [Fact]
+    public async Task Callback_does_not_call_graph_me_when_exchange_already_has_email()
+    {
+        // When the exchange already returned an email (defaults), /me is not needed and not called.
+        var fake = new FakeTokenService();
+        var me = new FakeGraphUserInfo();
+        using var factory = CreateFactory(fake, me);
+        var (token, userId) = IssueBearer(factory, "cb-nome", "cb-nome@test");
+        var client = NoRedirectClient(factory);
+
+        var (state, csrfCookie) = await StartConnect(client, token, "readwrite", 51931, "nome-nonce");
+        var callback = Bearer(HttpMethod.Get,
+            $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
+        callback.Headers.Add("Cookie", csrfCookie);
+        await client.SendAsync(callback);
+
+        me.Calls.Should().Be(0);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        db.CalendarAccounts.Single(a => a.UserId == userId).AccountEmail.Should().Be("calendar@test");
+    }
+
+    [Fact]
+    public async Task Callback_persists_blank_email_when_exchange_and_me_both_empty()
+    {
+        // Best-effort: if both the exchange AND /me yield nothing, the connect still completes and
+        // the account is created with a blank email (the listing backfill retries later).
+        var fake = new FakeTokenService { Email = "", DisplayName = "" };
+        var me = new FakeGraphUserInfo { Result = GraphUserInfo.Empty };
+        using var factory = CreateFactory(fake, me);
+        var (token, userId) = IssueBearer(factory, "cb-empty", "cb-empty@test");
+        var client = NoRedirectClient(factory);
+
+        var (state, csrfCookie) = await StartConnect(client, token, "readwrite", 51932, "empty-nonce");
+        var callback = Bearer(HttpMethod.Get,
+            $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
+        callback.Headers.Add("Cookie", csrfCookie);
+        (await client.SendAsync(callback)).StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        db.CalendarAccounts.Single(a => a.UserId == userId).AccountEmail.Should().BeEmpty();
+    }
+
+    // ---- listing backfill: the listing never breaks even when the refresh fails ------------
+
+    [Fact]
+    public async Task CalendarAccounts_listing_with_blank_email_does_not_break_when_backfill_fails()
+    {
+        // An account connected with a blank email triggers a best-effort backfill on listing. Here
+        // the fake's RefreshAsync throws (NotSupported), so the backfill must swallow it and the
+        // listing must still return the account (the email/displayName stay blank). The successful
+        // refresh+persist path is covered by CalendarAccountEmailBackfillTests.
+        var fake = new FakeTokenService { Email = "", DisplayName = "" };
+        var me = new FakeGraphUserInfo { Result = new GraphUserInfo("backfilled@contoso.com", "Backfilled") };
+        using var factory = CreateFactory(fake, me);
+        var (token, _) = IssueBearer(factory, "bf-user", "bf-user@test");
+        var client = NoRedirectClient(factory);
+
+        var (state, csrfCookie) = await StartConnect(client, token, "readwrite", 51940, "bf-nonce");
+        var cb = Bearer(HttpMethod.Get,
+            $"/calendar/connect/callback/graph?code=abc&state={Uri.EscapeDataString(state)}", null);
+        cb.Headers.Add("Cookie", csrfCookie);
+        await client.SendAsync(cb);
+
+        var list = await client.SendAsync(Bearer(HttpMethod.Get, "/api/calendar/accounts", token));
+        list.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+        json.RootElement.GetArrayLength().Should().Be(1);
     }
 
     [Fact]

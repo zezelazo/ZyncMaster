@@ -362,8 +362,49 @@
 .empty-cal__sub   { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
 
 /* Connect-a-calendar-account block (button + reuse hint), kept full-width and left-aligned. */
-.connect-cal__wrap { padding: 10px; }
+.connect-cal__wrap { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .connect-cal { width: 100%; justify-content: center; }
+/* Secondary "connect a different account" — quieter than the reuse primary. */
+.connect-cal--other { font-weight: 500; }
+
+/* Connected-account row: calendar glyph + email/name on the left, Disconnect on the right. */
+.acct-row { align-items: center; }
+.acct-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;            /* let the text ellipsize instead of overflowing the card */
+}
+.acct-avatar {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--azure-2);
+  background: var(--azure-soft);
+  border: 1px solid var(--azure-edge);
+}
+.acct-text { min-width: 0; }
+.acct-text__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-text__sub { margin-top: 1px; }
+/* Disconnect stays a quiet ghost until hovered, where it warms to the error tone — no flicker. */
+.acct-disconnect { flex: none; color: var(--ink-2); transition: color var(--d-fast), background var(--d-fast); }
+.acct-disconnect:hover { color: var(--err); }
+
+/* Disconnect confirm modal copy. */
+.disconnect-modal__lead { font-size: 14px; font-weight: 600; color: var(--ink-1); }
+.disconnect-modal__detail { margin-top: 8px; line-height: 17px; }
+.modal__foot .acct-disconnect--confirm { background: var(--err); border-color: var(--err); }
 
 .field-input, .field-select {
   height: 32px;

@@ -46,6 +46,7 @@ public sealed class LegacyConnectedAccountAdapterTests
 
         public Task UpdateStatusAsync(string accountId, string status, CancellationToken ct = default) => Task.CompletedTask;
         public Task UpgradeScopeAsync(string accountId, AccountScope newScope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateProfileAsync(string accountId, string? email, string? displayName, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task RemoveAsync(string accountId, CancellationToken ct = default)
         {

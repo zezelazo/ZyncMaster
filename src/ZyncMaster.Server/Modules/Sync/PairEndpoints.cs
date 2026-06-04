@@ -29,10 +29,19 @@ public static class PairEndpoints
             ICalendarAccountStore pool,
             IConnectedAccountStore legacy,
             ILegacyConnectedAccountAdapter adapter,
+            CalendarAccountEmailBackfill backfill,
             CancellationToken ct) =>
         {
-            var pooled = await pool.ListAsync(ct);
+            var pooledRaw = await pool.ListAsync(ct);
             var legacyAccounts = await legacy.ListAsync(ct);
+
+            // Best-effort one-time backfill: any Graph pool account whose email is still blank (it
+            // was connected before /me capture existed) gets its real mailbox/name fetched and
+            // persisted now, so AccountDisplayName resolves to the email and the UI never has to
+            // fall back to the internal accountRef GUID. Already-named accounts pass through as-is.
+            var pooled = new List<CalendarAccount>(pooledRaw.Count);
+            foreach (var a in pooledRaw)
+                pooled.Add(await backfill.EnsureEmailAsync(a, ct));
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
             // Mailboxes already represented by a POOL account, normalized. A legacy account whose
@@ -50,6 +59,7 @@ public static class PairEndpoints
                 {
                     AccountRef = account.Id,
                     DisplayName = AccountDisplayName(account),
+                    Email = account.AccountEmail ?? "",
                     IsDefault = false,
                 });
             }
@@ -77,6 +87,9 @@ public static class PairEndpoints
                     DisplayName = string.Equals(account.UserPrincipalName, "default", StringComparison.Ordinal)
                         ? "Connected account"
                         : account.UserPrincipalName,
+                    // A legacy account is keyed by its UPN, which IS the mailbox — except the
+                    // "default" sentinel, which has no real email (LegacyMailbox returns empty).
+                    Email = LegacyMailbox(account.UserPrincipalName),
                     IsDefault = false,
                 });
             }

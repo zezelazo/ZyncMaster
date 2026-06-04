@@ -1722,40 +1722,131 @@ function renderCalendarSettings(root) {
   ensureCalendarAccounts('calendar-settings');
   const accounts = live.accounts || [];
 
-  // Calendar accounts — list of connected accounts with per-account Unlink, plus Connect.
+  // Calendar accounts — one humane row per connected account (email as the headline, a friendly
+  // sub-line, a clear Disconnect with confirm), plus a Connect affordance. The internal accountRef
+  // (a GUID) is NEVER shown to the user.
   const accountRows = [];
   if (live.accounts === null) {
     accountRows.push(cfgRow('Loading…', el('div', { class: 'cfg-row__hint', text: 'Reading your connected accounts' }), el('span', { class: 'spinner' })));
   } else if (accounts.length === 0) {
     accountRows.push(el('div', { class: 'empty-cal' },
       el('div', { class: 'empty-cal__title', text: 'No calendar accounts yet' }),
-      el('div', { class: 'empty-cal__sub', text: 'Connect one to choose a target calendar and start syncing.' })));
+      el('div', { class: 'empty-cal__sub', text: 'Connect a calendar below to pick a target and start syncing.' })));
   } else {
-    accounts.forEach((acc) => {
-      const primary = acc.displayName || acc.accountRef;
-      const hint = (acc.displayName && acc.accountRef && acc.displayName !== acc.accountRef)
-        ? el('div', { class: 'cfg-row__hint', text: acc.accountRef })
-        : el('div', { class: 'cfg-row__hint', text: acc.isDefault ? 'Default account' : 'Connected' });
-      const unlinkBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', onclick: () => unlinkAccount(acc.accountRef) }, el('span', { text: 'Unlink' }));
-      accountRows.push(cfgRow(primary, hint, unlinkBtn));
-    });
+    accounts.forEach((acc) => { accountRows.push(accountCard(acc)); });
   }
 
-  // Connect button. When the identity is Microsoft, hint that connecting reuses that account.
-  const reuseEmail = (identityAuth.me && identityAuth.me.email) || null;
-  const connectWrap = el('div', { class: 'connect-cal__wrap' });
-  const connectBtn = el('button', { class: 'btn btn--primary connect-cal', onclick: () => connectCalendarAccount(connectBtn, connectWrap) },
-    iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: 'Connect a calendar account' }));
-  connectWrap.append(connectBtn);
-  if (reuseEmail) connectWrap.append(el('div', { class: 'cfg-row__hint', style: 'margin-top:6px', text: `Reuse ${reuseEmail}` }));
-  accountRows.push(connectWrap);
-  root.append(cfgSection('Calendar accounts', ...accountRows));
+  root.append(cfgSection('Your calendar accounts', ...accountRows));
+
+  // Connect section — its own card so the heading explains what connecting does, with a one-click
+  // "Use <identity email>" primary when the signed-in identity is a Microsoft account.
+  root.append(connectAccountCard());
 
   // Note: the per-sync target calendar, interval/window and the .txt export used to live here as
   // global settings. They are now per-pair concerns — target + interval are picked in the Add-pair
   // wizard, and the .txt export is a per-pair action with its own popup on the dashboard.
   root.append(el('div', { class: 'cfg-note', style: 'margin-top:10px;padding:0 4px;font-size:11px;color:var(--ink-3);line-height:16px' },
     'Target calendar, interval and .txt export are set per sync. Manage them on each pair from the Calendar Sync screen.'));
+}
+
+// accountLabel(acc) — the humane { title, sub } for a connected account. The headline is the real
+// email when known, then a display name, and only ever a dignified generic ("Microsoft account")
+// if neither is present — NEVER the internal accountRef GUID. The sub-line is a short, human note
+// about what the account is, defaulting to "Connected" when we have nothing more specific.
+function accountLabel(acc) {
+  const email = (acc.email || '').trim();
+  const display = (acc.displayName || '').trim();
+  // A displayName that is actually the GUID (older servers fell back to the ref) is not a name.
+  const displayIsRef = display && acc.accountRef && display === acc.accountRef;
+  const niceDisplay = displayIsRef ? '' : display;
+
+  // Headline preference: email > a real (non-GUID) display name > a dignified generic.
+  const title = email || niceDisplay || 'Microsoft account';
+
+  // Sub-line: if the headline is the email, optionally show the person's name; otherwise a short
+  // human descriptor. We don't have the scope on /api/accounts, so keep it generic and friendly.
+  let sub;
+  if (email && niceDisplay && niceDisplay.toLowerCase() !== email.toLowerCase()) {
+    sub = niceDisplay;
+  } else if (acc.isDefault) {
+    sub = 'Microsoft calendar - default account';
+  } else {
+    sub = 'Microsoft calendar - connected';
+  }
+  return { title, sub };
+}
+
+// accountCard(acc) — one connected-account row: a calendar glyph, the email headline + friendly
+// sub-line, and a clear Disconnect action (which confirms before removing). Reuses the cfg-row
+// layout + glass tokens so it matches the rest of Settings.
+function accountCard(acc) {
+  const { title, sub } = accountLabel(acc);
+  const avatar = el('div', { class: 'acct-avatar', 'aria-hidden': 'true' }, iconEl('calendar', 15, 1.7));
+  const text = el('div', { class: 'acct-text' },
+    el('div', { class: 'acct-text__title', text: title }),
+    el('div', { class: 'acct-text__sub cfg-row__hint', text: sub }));
+  const left = el('div', { class: 'acct-id' }, avatar, text);
+  const disconnectBtn = el('button', {
+    class: 'btn btn--ghost acct-disconnect',
+    title: `Disconnect ${title}`,
+    'aria-label': `Disconnect ${title}`,
+    onclick: () => confirmDisconnectAccount(acc),
+  }, el('span', { text: 'Disconnect' }));
+  return el('div', { class: 'cfg-row acct-row' }, left, disconnectBtn);
+}
+
+// confirmDisconnectAccount(acc) — a small confirm before unlinking, so the user understands the
+// scope of the action: it disconnects ONLY that calendar account (and disables its sync pairs) and
+// does NOT sign them out of the app. On confirm it runs the existing unlinkAccount(accountRef).
+function confirmDisconnectAccount(acc) {
+  const { title } = accountLabel(acc);
+  const cancelBtn = el('button', { class: 'btn btn--ghost', type: 'button', text: 'Keep connected' });
+  const confirmBtn = el('button', { class: 'btn btn--primary acct-disconnect--confirm', type: 'button' },
+    el('span', { text: 'Disconnect' }));
+
+  const body = el('div', { class: 'disconnect-modal' },
+    el('div', { class: 'disconnect-modal__lead', text: `Disconnect ${title}?` }),
+    el('div', { class: 'cfg-row__hint disconnect-modal__detail' },
+      'Its sync pairs will be disabled and this calendar will stop syncing. ' +
+      'You stay signed in to the app - only this calendar connection is removed.'),
+    el('div', { class: 'modal__foot' }, cancelBtn, confirmBtn));
+
+  const modal = openModal({ title: 'Disconnect calendar', body });
+
+  cancelBtn.addEventListener('click', () => modal.close());
+  confirmBtn.addEventListener('click', () => {
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    const span = confirmBtn.querySelector('span');
+    if (span) span.textContent = 'Disconnecting…';
+    modal.close();
+    unlinkAccount(acc.accountRef);
+  });
+}
+
+// connectAccountCard() — the "connect a calendar" card. Clear, jargon-free heading + copy. When the
+// signed-in identity is a Microsoft account we offer a one-click "Use <email>" primary (reuse that
+// identity's calendar) and keep "Connect a different account" as the path to any other mailbox.
+function connectAccountCard() {
+  const reuseEmail = (identityAuth.me && identityAuth.me.email) || null;
+  const wrap = el('div', { class: 'connect-cal__wrap' });
+
+  const primaryLabel = reuseEmail ? `Use ${reuseEmail}` : 'Connect a calendar account';
+  const connectBtn = el('button', { class: 'btn btn--primary connect-cal', onclick: () => connectCalendarAccount(connectBtn, wrap) },
+    iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: primaryLabel }));
+  wrap.append(connectBtn);
+
+  // When we reused the identity email above, also offer connecting a different mailbox. It runs the
+  // same flow (the system browser lets the user pick another account), so it shares the handler.
+  if (reuseEmail) {
+    const otherBtn = el('button', { class: 'btn btn--ghost connect-cal connect-cal--other', onclick: () => connectCalendarAccount(otherBtn, wrap) },
+      el('span', { class: 'connect-cal__label', text: 'Connect a different account' }));
+    wrap.append(otherBtn);
+  }
+
+  return cfgSection('Connect a calendar',
+    el('div', { class: 'cfg-row__hint', style: 'padding:0 2px 6px', text: 'Connect the calendar of an account you want to sync. We only read the source and write the destination - your sign-in stays separate.' }),
+    wrap);
 }
 
 // ---------------- Screen: Sign in (web panel gate) ----------------

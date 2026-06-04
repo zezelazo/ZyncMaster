@@ -42,10 +42,14 @@ public sealed record MirrorResult
     public bool Partial { get; init; }
 }
 
-// Summary of a connected account exposed to the panel.
+// Summary of a connected account exposed to the panel. AccountRef is the opaque internal id
+// (a pool GUID or a legacy UPN) used to address the account on other endpoints; it is NEVER meant
+// to be shown to the user. Email is the real mailbox when known (empty for the "default" /
+// no-email case) so the UI can show a humane label instead of falling back to the GUID.
 public sealed record AccountInfo
 {
     public required string AccountRef { get; init; }
     public required string DisplayName { get; init; }
+    public string Email { get; init; } = "";
     public bool IsDefault { get; init; }
 }

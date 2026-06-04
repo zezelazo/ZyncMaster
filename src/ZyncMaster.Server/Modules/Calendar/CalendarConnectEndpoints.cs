@@ -165,6 +165,7 @@ public static class CalendarConnectEndpoints
             HttpContext context,
             IMicrosoftTokenService tokenService,
             ICalendarAccountStore accounts,
+            IGraphUserInfoService userInfo,
             IOptions<ServerOptions> opts,
             IDataProtectionProvider dp,
             CancellationToken ct) =>
@@ -212,6 +213,21 @@ public static class CalendarConnectEndpoints
             // the ones the user actually consented to (pinned in the signed state).
             var result = await tokenService.ExchangeCalendarCodeAsync(code, calendarScopes, ct);
             var email = result.Email ?? result.UserPrincipalName ?? "";
+            var displayName = result.DisplayName ?? "";
+
+            // The calendar scopes intentionally omit `openid`, so the exchange returns NO id_token
+            // and therefore no email/displayName (despite the older comment claiming otherwise).
+            // Capture the real mailbox + name from Graph /me using the access token we just got —
+            // the User.Read scope is granted, so /me succeeds. Best-effort: if /me fails we keep
+            // whatever the exchange produced (usually empty) and the listing backfill retries later.
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(displayName))
+            {
+                var me = await userInfo.GetMeAsync(result.AccessToken, ct);
+                if (string.IsNullOrWhiteSpace(email) && me.HasEmail)
+                    email = me.Email;
+                if (string.IsNullOrWhiteSpace(displayName) && !string.IsNullOrWhiteSpace(me.DisplayName))
+                    displayName = me.DisplayName;
+            }
 
             // Persist under the STATE's userId, never the ambient default. The IdentityBearer
             // token is not present on this anonymous callback, so we pin the user explicitly via
@@ -230,6 +246,11 @@ public static class CalendarConnectEndpoints
                 await accounts.UpgradeScopeAsync(stateModel.AccountId, AccountScope.ReadWrite, ct);
                 if (!string.IsNullOrEmpty(result.RefreshToken))
                     await accounts.UpdateRefreshTokenAsync(stateModel.AccountId, result.RefreshToken, ct);
+
+                // Opportunistically backfill the mailbox/name if the original connect missed it
+                // (e.g. an account connected before /me capture existed, now upgrading scope).
+                if (!string.IsNullOrWhiteSpace(email) || !string.IsNullOrWhiteSpace(displayName))
+                    await accounts.UpdateProfileAsync(stateModel.AccountId, email, displayName, ct);
             }
             else
             {
@@ -243,7 +264,7 @@ public static class CalendarConnectEndpoints
                     AccountEmail = email,
                     Authority = opts.Value.Authority,
                     Scope = scope,
-                    DisplayName = string.IsNullOrEmpty(result.DisplayName) ? email : result.DisplayName,
+                    DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName,
                     Status = "active",
                     ConnectedAt = DateTimeOffset.UtcNow,
                 };
@@ -262,10 +283,18 @@ public static class CalendarConnectEndpoints
         //    returns the refresh token.
         app.MapGet("/api/calendar/accounts", async (
             ICalendarAccountStore accounts,
+            CalendarAccountEmailBackfill backfill,
             CancellationToken ct) =>
         {
             var list = await accounts.ListAsync(ct);
-            return Results.Ok(list.Select(a => new
+
+            // Best-effort: backfill the real mailbox/name for any Graph account still missing it
+            // (connected before /me capture existed). Already-named accounts pass through untouched.
+            var enriched = new List<CalendarAccount>(list.Count);
+            foreach (var a in list)
+                enriched.Add(await backfill.EnsureEmailAsync(a, ct));
+
+            return Results.Ok(enriched.Select(a => new
             {
                 id = a.Id,
                 kind = a.Kind.ToString(),
