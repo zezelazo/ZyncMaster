@@ -3,7 +3,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
-using ZyncMaster.Server.Modules.Calendar;
 
 namespace ZyncMaster.Server;
 

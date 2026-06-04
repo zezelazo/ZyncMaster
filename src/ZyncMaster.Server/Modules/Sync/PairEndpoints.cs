@@ -1,6 +1,5 @@
 using ZyncMaster.Core;
 using ZyncMaster.Graph;
-using ZyncMaster.Server.Modules.Calendar;
 
 namespace ZyncMaster.Server;
 
@@ -18,11 +17,14 @@ public static class PairEndpoints
         //   * legacy accounts -> AccountRef = the legacy UPN (resolves via its derived id), kept
         //     exactly as before so existing pairs and the legacy listing behaviour are undisturbed.
         // Dedup note: pool accounts use a RANDOM Guid as their id, while a legacy account's canonical
-        // id is UuidV5(namespace, "{userId}|{upn}"). The two never collide, so a pool account and a
-        // legacy account are NEVER collapsed here — even for the same underlying mailbox they surface
-        // as two entries (distinct accountIds). The seen-set below only guards against listing the
-        // SAME legacy ref twice (e.g. a UPN whose canonical id already came from another legacy row);
-        // it does not — and cannot, on accountId — merge a pool/legacy pair for one mailbox.
+        // id is UuidV5(namespace, "{userId}|{upn}"). The two NEVER collide on id, so an accountId
+        // seen-set alone cannot merge a pool/legacy pair for one mailbox. We therefore ALSO dedup by
+        // normalized EMAIL (case-insensitive, trimmed): when a legacy account refers to the SAME
+        // mailbox as a pool account already listed, the legacy entry is dropped — the pool entry wins
+        // (its AccountRef = the pool accountId, which createPair/sync resolve directly). Edge case: a
+        // legacy "default" account has no real email, so it is NEVER collapsed by email; it stays a
+        // distinct entry. The accountId seen-set is still kept to guard against listing the SAME
+        // legacy ref twice (a UPN whose canonical id already came from another legacy row).
         app.MapGet("/api/accounts", async (
             ICalendarAccountStore pool,
             IConnectedAccountStore legacy,
@@ -33,11 +35,17 @@ public static class PairEndpoints
             var legacyAccounts = await legacy.ListAsync(ct);
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            // Mailboxes already represented by a POOL account, normalized. A legacy account whose
+            // mailbox is in here is the SAME casilla and is collapsed in favour of the pool entry.
+            var pooledEmails = new HashSet<string>(StringComparer.Ordinal);
             var infos = new List<AccountInfo>();
 
             foreach (var account in pooled)
             {
                 seen.Add(account.Id);
+                var email = NormalizeMailbox(account.AccountEmail);
+                if (email.Length > 0)
+                    pooledEmails.Add(email);
                 infos.Add(new AccountInfo
                 {
                     AccountRef = account.Id,
@@ -51,6 +59,14 @@ public static class PairEndpoints
                 // Skip a legacy account whose canonical id already came from the pool.
                 var canonicalId = await adapter.ResolveAccountIdAsync(account.UserPrincipalName, ct);
                 if (!seen.Add(canonicalId))
+                    continue;
+
+                // Collapse the same casilla: a legacy account whose mailbox (its UPN) matches a pool
+                // account already listed is dropped — the pool entry's AccountRef resolves it. A
+                // legacy "default" account carries no real email, so LegacyMailbox returns empty and
+                // it is never fused (a blank mailbox is not a match).
+                var legacyEmail = LegacyMailbox(account.UserPrincipalName);
+                if (legacyEmail.Length > 0 && pooledEmails.Contains(legacyEmail))
                     continue;
 
                 infos.Add(new AccountInfo
@@ -602,6 +618,14 @@ public static class PairEndpoints
     // representations of one mailbox compare equal regardless of casing/whitespace.
     private static string NormalizeMailbox(string? email) =>
         string.IsNullOrWhiteSpace(email) ? "" : email.Trim().ToLowerInvariant();
+
+    // The comparable mailbox of a legacy account, normalized. A legacy account is keyed by its UPN,
+    // which IS its mailbox — EXCEPT the literal "default" sentinel, which is the single-account case
+    // with no real email and therefore returns empty so it is never fused with a pool account.
+    private static string LegacyMailbox(string? userPrincipalName) =>
+        string.Equals(userPrincipalName, "default", StringComparison.Ordinal)
+            ? ""
+            : NormalizeMailbox(userPrincipalName);
 
     private static (DateTimeOffset from, DateTimeOffset to) Window(ServerOptions opts)
     {

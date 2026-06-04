@@ -5,7 +5,6 @@ using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
 using ZyncMaster.Server;
 using ZyncMaster.Server.Data;
-using ZyncMaster.Server.Modules.Calendar;
 using ZyncMaster.Server.Tests.Storage;
 using Xunit;
 

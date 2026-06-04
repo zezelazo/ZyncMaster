@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
 using ZyncMaster.Graph;
-using ZyncMaster.Server.Modules.Calendar;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Sync;

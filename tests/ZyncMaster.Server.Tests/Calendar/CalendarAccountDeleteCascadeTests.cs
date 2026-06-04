@@ -9,7 +9,6 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
-using ZyncMaster.Server.Modules.Calendar;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Calendar;

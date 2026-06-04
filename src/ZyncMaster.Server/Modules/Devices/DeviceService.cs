@@ -248,12 +248,50 @@ public sealed class DeviceService
     }
 
     // True when a DbUpdateException is the unique-constraint violation on the per-user device-name
-    // index. Matched on the column / index names so it works on BOTH SQLite (tests) and SQL Server.
-    private static bool IsNameConflict(DbUpdateException ex)
+    // index. Detected by the provider's NUMERIC error code on the INNER exception — NEVER by the
+    // message text, which drifts across EF/provider versions and is not even produced by SQLite in
+    // English. Works on BOTH SQL Server (prod) and SQLite (tests) without a hard reference to either
+    // provider's exception type: the inner exception is matched by type name + reflected code props.
+    //   * SQL Server: SqlException.Number 2601 (duplicate-key index) or 2627 (unique constraint).
+    //   * SQLite:     SqliteException.SqliteErrorCode 19 (SQLITE_CONSTRAINT) and/or
+    //                 SqliteExtendedErrorCode 2067 (SQLITE_CONSTRAINT_UNIQUE).
+    internal static bool IsNameConflict(DbUpdateException ex)
+        => ex.InnerException is { } inner && IsUniqueConstraintViolation(inner);
+
+    internal static bool IsUniqueConstraintViolation(Exception inner)
     {
-        var message = ((Exception?)ex.InnerException ?? ex).Message;
-        return message.Contains("NameLower", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("IX_Devices_UserId_NameLower", StringComparison.OrdinalIgnoreCase);
+        var typeName = inner.GetType().FullName ?? string.Empty;
+
+        // SQL Server — Microsoft.Data.SqlClient.SqlException exposes an int Number.
+        if (typeName == "Microsoft.Data.SqlClient.SqlException" ||
+            typeName == "System.Data.SqlClient.SqlException")
+        {
+            var number = ReadIntProperty(inner, "Number");
+            return number is 2601 or 2627;
+        }
+
+        // SQLite — Microsoft.Data.Sqlite.SqliteException exposes SqliteErrorCode (primary, 19 ==
+        // SQLITE_CONSTRAINT) and SqliteExtendedErrorCode (2067 == SQLITE_CONSTRAINT_UNIQUE). Either
+        // identifies the duplicate-index insert the tests trigger on the (UserId, NameLower) index.
+        if (typeName == "Microsoft.Data.Sqlite.SqliteException")
+        {
+            var primary = ReadIntProperty(inner, "SqliteErrorCode");
+            var extended = ReadIntProperty(inner, "SqliteExtendedErrorCode");
+            return primary == 19 || extended == 2067;
+        }
+
+        return false;
+    }
+
+    // Reads an int property by name via reflection so DeviceService needs no compile-time reference
+    // to the provider-specific exception types. Returns null when the property is absent/non-int.
+    private static int? ReadIntProperty(object instance, string propertyName)
+    {
+        var prop = instance.GetType().GetProperty(propertyName);
+        if (prop is null)
+            return null;
+        var value = prop.GetValue(instance);
+        return value is int i ? i : null;
     }
 
     // Returns the device identified by the api-key principal (the caller's own device), or null if

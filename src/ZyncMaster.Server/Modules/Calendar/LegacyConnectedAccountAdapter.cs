@@ -1,6 +1,6 @@
 using ZyncMaster.Core;
 
-namespace ZyncMaster.Server.Modules.Calendar;
+namespace ZyncMaster.Server;
 
 // Bridges the legacy per-UPN connected-account store into the new accountId-keyed pool world
 // (plan v2 §C-3). See ILegacyConnectedAccountAdapter for the contract and the retirement

@@ -1,4 +1,4 @@
-namespace ZyncMaster.Server.Modules.Calendar;
+namespace ZyncMaster.Server;
 
 // Per-user store for the pool of connected calendar accounts and their encrypted refresh
 // tokens. Every operation is scoped to the current authenticated user: an account owned by

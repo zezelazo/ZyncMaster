@@ -1,5 +1,4 @@
 using ZyncMaster.Graph;
-using ZyncMaster.Server.Modules.Calendar;
 
 namespace ZyncMaster.Server;
 
