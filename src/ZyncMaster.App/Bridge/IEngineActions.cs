@@ -93,4 +93,8 @@ public interface IEngineActions
     //   ListCalendarAccountsAsync — the signed-in user's connected calendar accounts (IdentityBearer).
     Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default);
     Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default);
+    //   CancelConnectAsync — abort the calendar-connect attempt currently in flight (user closed the
+    //     browser tab / hit Cancel) and free the loopback port so a new connectCalendar() can start
+    //     right away. Mirrors CancelLoginAsync.
+    Task CancelConnectAsync(CancellationToken ct = default);
 }

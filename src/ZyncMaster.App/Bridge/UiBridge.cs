@@ -247,6 +247,11 @@ public sealed class UiBridge
                 var accounts = await _engine.ListCalendarAccountsAsync(ct);
                 return JsonSerializer.Serialize(accounts, JsonOptions);
             }
+            case "cancelConnect":
+            {
+                await _engine.CancelConnectAsync(ct);
+                return null;
+            }
             // Frameless window controls driven by the custom web title bar (fire-and-forget).
             case "windowMinimize":
                 _windowProvider?.Invoke()?.Minimize();

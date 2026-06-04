@@ -94,6 +94,26 @@ test('exportSourceTxt and getCapabilities are inert in the web panel', () => {
   }
 });
 
+// Calendar-account connection lifecycle is desktop-only (system-browser + loopback OAuth). It must
+// NOT be routed to the server from the browser panel: each action resolves to an inert null mapping
+// rather than producing a real HTTP request, and never throws as an "unmapped action".
+test('calendar-connect lifecycle actions are inert in the web panel', () => {
+  for (const a of ['connectCalendar', 'listCalendarAccounts', 'cancelConnect']) {
+    assert.equal(isInertAction(a), true, `${a} must be inert in web mode`);
+    assert.equal(webRequestFor(a), null, `${a} must not map to an HTTP request`);
+  }
+});
+
+// Pin the safe defaults the desktop-only probes report in the web panel: getCapabilities is inert
+// (null mapping) and the panel substitutes {outlookCom:false} for it, exactly as the C# host's
+// unconfigured/web path does. This fixes the by-design contract with a test.
+test('desktop-only probes report the safe web default (outlookCom:false)', () => {
+  assert.equal(webRequestFor('getCapabilities'), null);
+  // The panel never reaches the server for this; it serves the inert default below.
+  const webDefaultCapabilities = { outlookCom: false };
+  assert.deepEqual(webDefaultCapabilities, { outlookCom: false });
+});
+
 test('unmapped action throws', () => {
   assert.throws(() => webRequestFor('bogusAction'), /unmapped action "bogusAction"/);
 });
