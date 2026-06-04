@@ -556,6 +556,30 @@
   line-height: 1.45;
 }
 
+/* Opt-in destructive cleanup of the previous destination (F2 edit). A row inside the
+   destination-changed warning card: descriptive text on the left, the OFF-by-default toggle on
+   the right. The whole row is a <label> so a click anywhere flips the toggle. */
+.cleanup-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-stroke);
+  cursor: pointer;
+}
+.cleanup-opt__text { flex: 1; min-width: 0; }
+.cleanup-opt__title { font-size: 12px; font-weight: 600; color: var(--ink-1); line-height: 1.4; }
+.cleanup-opt__hint { font-size: 11.5px; color: var(--ink-3); line-height: 1.45; margin-top: 3px; }
+.cleanup-opt .toggle { flex: none; margin-top: 2px; }
+/* The live count of events that would be removed. Aqua/azure while loaded; muted while counting. */
+.cleanup-opt__count { font-weight: 600; color: var(--azure-2); }
+.cleanup-opt__count[data-state="loading"] { color: var(--ink-3); font-weight: 500; }
+.cleanup-opt__count[data-state="err"] { color: var(--ink-3); font-weight: 500; }
+
+/* Secondary confirm before the destructive cleanup runs. */
+.cleanup-confirm__text { font-size: 13px; color: var(--ink-1); line-height: 1.5; }
+
 /* Calendar picker */
 .cal-list { padding: 4px; display: grid; gap: 1px; }
 .cal-item {

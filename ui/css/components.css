@@ -130,6 +130,18 @@
 
 .btn--block { width: 100%; }
 
+/* Destructive confirm button (e.g. "Delete them" in the old-destination cleanup confirm). Solid
+   error fill so the destructive action reads unambiguously; the only hover motion is the shared
+   border-light, never a colour flicker. */
+.btn--danger {
+  background: var(--err);
+  border-color: var(--err);
+  color: #fff;
+  padding: 0 16px;
+}
+.btn--danger:hover { background: var(--err); border-color: var(--err); }
+.btn--danger svg { color: #fff; }
+
 /* "Sign in with Microsoft" — official 4-square brand mark left of the label, both on a
    vertically-centred flex row with a comfortable gap (the .btn flex row already centres). */
 .ms-signin { gap: 10px; }

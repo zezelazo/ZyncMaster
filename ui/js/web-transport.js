@@ -30,6 +30,10 @@ export const INERT_ACTIONS = Object.freeze([
   // OAuth round-trip the browser panel cannot perform. The UI gates these behind Bridge.desktopApp,
   // so they are inert no-ops in web mode rather than being routed to the server.
   'connectCalendar', 'listCalendarAccounts', 'cancelConnect',
+  // Opening the bundled open-source notices is a desktop-App shell action (it hands a local file to
+  // the OS viewer). The browser panel has no such file; the UI gates the About row behind
+  // Bridge.desktopApp, so this is inert there rather than routed to the server.
+  'openLicenses',
 ]);
 
 // Returns the REST request for a given action, or null when the action is composite
@@ -45,6 +49,22 @@ export function webRequestFor(action, data) {
     }
     case 'deletePair':      return { method: 'DELETE', path: `/api/pairs/${enc(data)}` };
     case 'runPairNow':      return { method: 'POST', path: `/api/pairs/${enc(data)}/run` };
+    case 'cleanupOldDestination': {
+      // {pairId, destination} → POST /api/pairs/{pairId}/cleanup-destination with body {destination}.
+      const { pairId, destination } = data || {};
+      return { method: 'POST', path: `/api/pairs/${enc(pairId)}/cleanup-destination`, body: { destination } };
+    }
+    case 'countManagedInDestination': {
+      // {pairId, destination} → GET /api/pairs/{pairId}/managed-count?provider&accountRef&calendarId.
+      const { pairId, destination } = data || {};
+      const d = destination || {};
+      const qs = new URLSearchParams();
+      if (d.provider) qs.set('provider', d.provider);
+      if (d.accountRef) qs.set('accountRef', d.accountRef);
+      if (d.calendarId) qs.set('calendarId', d.calendarId);
+      const q = qs.toString();
+      return { method: 'GET', path: `/api/pairs/${enc(pairId)}/managed-count${q ? `?${q}` : ''}` };
+    }
     case 'listAccounts':    return { method: 'GET', path: '/api/accounts' };
     case 'listCalendars':   return { method: 'GET', path: `/api/accounts/${enc(data)}/calendars` };
     case 'unlinkAccount':   return { method: 'DELETE', path: `/api/accounts/${enc(data)}` };

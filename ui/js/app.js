@@ -1004,6 +1004,12 @@ const addPairLive = {
   // orphans left in the old destination). Unused when creating.
   origSourceKind: null, origSrcAccountRef: null, origSrcCalendarId: null,
   origDstAccountRef: null, origDstCalendarId: null,
+  origDstCalendarName: null,
+  // Opt-in cleanup of the PREVIOUS destination when the destination is re-targeted (F2). Default
+  // OFF — it is destructive. cleanupCount is the live "N events this pair copied there" the bridge
+  // reports (null = not loaded yet, 'err' = the count call failed). The count is keyed to the old
+  // destination so it is invalidated whenever that endpoint signature changes.
+  cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
 };
 function resetAddPairLive() {
   Object.assign(addPairLive, {
@@ -1012,7 +1018,8 @@ function resetAddPairLive() {
     dstAccountRef: null, dstCalendarId: null, dstCalendarName: null,
     name: '', intervalMin: 15,
     origSourceKind: null, origSrcAccountRef: null, origSrcCalendarId: null,
-    origDstAccountRef: null, origDstCalendarId: null,
+    origDstAccountRef: null, origDstCalendarId: null, origDstCalendarName: null,
+    cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
   });
 }
 
@@ -1043,6 +1050,8 @@ function startEditPair(id) {
     origSrcCalendarId: src.calendarId || (com ? 'local' : null),
     origDstAccountRef: dst.accountRef || null,
     origDstCalendarId: dst.calendarId || null,
+    origDstCalendarName: dst.calendarName || null,
+    cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
   });
   navigate('add-pair');
 }
@@ -1299,15 +1308,18 @@ function renderAddPairLive(root) {
       pairBadge('Outlook'), col('DESTINATION', a.dstCalendarName, a.dstAccountRef)));
 
     // F2 warning: when editing and the source OR destination changed, the next run starts fresh
-    // (the new destination has no events tagged with this source). Events already mirrored into the
-    // PREVIOUS destination are left untouched — we never delete the old destination's events.
+    // (the new destination has no events tagged with this source).
     if (editing && editEndpointsChanged()) {
-      const destChanged = (a.dstCalendarId !== a.origDstCalendarId) || ((a.dstAccountRef || null) !== (a.origDstAccountRef || null));
-      const msg = destChanged
-        ? 'Changing the destination starts a fresh sync into the new calendar. Events already mirrored into the previous destination are left untouched; remove them manually if you don’t want them.'
-        : 'Changing the source restarts the sync. The destination will be reconciled against the new source on the next run.';
-      root.append(el('div', { class: 'glass glass--card wizard-warn' },
-        el('div', { class: 'wizard-warn__text', text: msg })));
+      const destChanged = editDestChanged();
+      if (destChanged) {
+        // The previous destination keeps the events this pair copied there. Offer an opt-in,
+        // destructive cleanup of ONLY those events (the bridge enforces "this pair only" and refuses
+        // the current destination). Default OFF; the live count is shown once the bridge reports it.
+        root.append(buildCleanupPrevDestCard());
+      } else {
+        root.append(el('div', { class: 'glass glass--card wizard-warn' },
+          el('div', { class: 'wizard-warn__text', text: 'Changing the source restarts the sync. The destination will be reconciled against the new source on the next run.' })));
+      }
     }
 
     const cfg = el('div', { class: 'glass glass--card config-section', style: 'margin-top:10px' });
@@ -1357,6 +1369,82 @@ function editEndpointsChanged() {
   return srcChanged || dstChanged;
 }
 
+// True when editing and the DESTINATION specifically changed (account or calendar). The
+// source-only case is handled separately — only a destination change can orphan events in a
+// previous calendar.
+function editDestChanged() {
+  const a = addPairLive;
+  if (!a.editId) return false;
+  return a.dstCalendarId !== a.origDstCalendarId
+    || ((a.dstAccountRef || null) !== (a.origDstAccountRef || null));
+}
+
+// The PREVIOUS destination endpoint (the value before this edit), as the bridge expects it. Always
+// MicrosoftGraph — destinations are online accounts. Returns null when there is no original (creating).
+function oldDestinationEndpoint() {
+  const a = addPairLive;
+  if (!a.editId || !a.origDstCalendarId) return null;
+  return {
+    provider: 'MicrosoftGraph',
+    accountRef: a.origDstAccountRef || null,
+    calendarId: a.origDstCalendarId,
+    calendarName: a.origDstCalendarName || a.origDstCalendarId,
+  };
+}
+
+// A stable signature of the old destination, used to invalidate the cached cleanup count when the
+// edit context changes (e.g. a different pair is opened).
+function oldDestinationKey() {
+  const a = addPairLive;
+  return `${a.editId || ''}|${a.origDstAccountRef || ''}|${a.origDstCalendarId || ''}`;
+}
+
+// buildCleanupPrevDestCard() — the destination-changed card: a plain notice that the old
+// destination keeps its copied events, plus an OPT-IN (default OFF) toggle to delete only the events
+// THIS pair copied there. Shows the live count once the bridge reports it. The toggle drives
+// addPairLive.cleanupPrevDest, which completeAddPairLive reads after a successful PATCH.
+function buildCleanupPrevDestCard() {
+  const a = addPairLive;
+  const card = el('div', { class: 'glass glass--card wizard-warn' });
+  card.append(el('div', { class: 'wizard-warn__text',
+    text: 'Changing the destination starts a fresh sync into the new calendar. Events this pair already copied into the previous destination are left there unless you remove them below.' }));
+
+  // The count is tied to the old destination; refetch when the context key changes.
+  const key = oldDestinationKey();
+  if (a.cleanupCountKey !== key) { a.cleanupCount = null; a.cleanupCountKey = key; }
+
+  const countLabel = el('span', { class: 'cleanup-opt__count' });
+  const renderCount = () => {
+    if (a.cleanupCount === null) { countLabel.textContent = 'Counting…'; countLabel.dataset.state = 'loading'; }
+    else if (a.cleanupCount === 'err') { countLabel.textContent = 'count unavailable'; countLabel.dataset.state = 'err'; }
+    else { countLabel.textContent = `${a.cleanupCount} event${a.cleanupCount === 1 ? '' : 's'}`; countLabel.dataset.state = 'ok'; }
+  };
+  renderCount();
+
+  // Fetch the count once per context (only when a bridge is available and there is an old dest).
+  if (a.cleanupCount === null && Bridge.available) {
+    const dest = oldDestinationEndpoint();
+    if (dest) {
+      Bridge.call('countManagedInDestination', JSON.stringify({ pairId: a.editId, destination: dest }))
+        .then((r) => { a.cleanupCount = (r && typeof r.count === 'number') ? r.count : 0; })
+        .catch(() => { a.cleanupCount = 'err'; })
+        .then(() => { if (state.view === 'add-pair') renderCount(); });
+    } else {
+      a.cleanupCount = 0; renderCount();
+    }
+  }
+
+  const toggle = toggleLocal(() => a.cleanupPrevDest, (v) => { a.cleanupPrevDest = v; }, 'Remove the events already copied to the previous destination');
+  const optRow = el('label', { class: 'cleanup-opt' },
+    el('div', { class: 'cleanup-opt__text' },
+      el('div', { class: 'cleanup-opt__title', text: 'Also remove the events already copied to the previous destination' }),
+      el('div', { class: 'cleanup-opt__hint' },
+        el('span', { text: 'Permanently deletes only the events this pair created there — ' }), countLabel, el('span', { text: '. Events you created yourself are never touched.' }))),
+    toggle);
+  card.append(optRow);
+  return card;
+}
+
 // Builds a minimal pair-like object the export modal understands (it reads pair.id and
 // pair.src.provider), from the in-edit wizard state.
 function editPairForModal() {
@@ -1374,16 +1462,85 @@ function completeAddPairLive() {
     : { provider: 'MicrosoftGraph', accountRef: a.srcAccountRef, calendarId: a.srcCalendarId, calendarName: a.srcCalendarName };
   const destination = { provider: 'MicrosoftGraph', accountRef: a.dstAccountRef, calendarId: a.dstCalendarId, calendarName: a.dstCalendarName };
 
+  // Decide cleanup BEFORE the save mutates state: only when editing, the destination changed, the
+  // user opted in, and there is a real previous destination. Capture the old endpoint + label now.
+  const wantsCleanup = !!a.editId && editDestChanged() && a.cleanupPrevDest;
+  const oldDest = wantsCleanup ? oldDestinationEndpoint() : null;
+  const oldDestName = a.origDstCalendarName || a.origDstCalendarId || 'the previous calendar';
+  const pairId = a.editId;
+  const knownCount = (typeof a.cleanupCount === 'number') ? a.cleanupCount : null;
+
   // Edit (F2) updates in place (preserving the id); create makes a new pair. Both send the same
   // {name, source, destination, intervalMin}; updatePair additionally carries the id.
   const call = a.editId
     ? Bridge.call('updatePair', JSON.stringify({ id: a.editId, name: a.name, intervalMin: a.intervalMin, source, destination }))
     : Bridge.call('createPair', JSON.stringify({ name: a.name, source, destination, intervalMin: a.intervalMin }));
 
+  const finish = () => loadPairs().then(() => { resetAddPairLive(); navigate('calendar'); });
+
   call
-    .then(() => loadPairs())
-    .then(() => { resetAddPairLive(); navigate('calendar'); })
+    .then(() => {
+      // PATCH succeeded. Run the destructive cleanup ONLY now (never if the save failed), behind an
+      // explicit confirm. cleanupOldDestination deletes only the events this pair created in the old
+      // destination — the server refuses the pair's CURRENT destination, so this can't undo the save.
+      if (wantsCleanup && oldDest) {
+        return confirmCleanupOldDestination(pairId, oldDest, oldDestName, knownCount).then(finish);
+      }
+      return finish();
+    })
     .catch(() => { resetAddPairLive(); navigate('calendar'); });
+}
+
+// confirmCleanupOldDestination(pairId, oldDest, oldDestName, knownCount) — a secondary, explicit
+// confirm for the destructive cleanup, then the cleanupOldDestination bridge call. Always resolves
+// (never rejects): a declined confirm or a failed cleanup still lets the edit finish cleanly — the
+// PATCH already succeeded, and the cleanup is idempotent (a later edit can retry). Returns a Promise.
+function confirmCleanupOldDestination(pairId, oldDest, oldDestName, knownCount) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+
+    const countText = (knownCount === null)
+      ? `the events this pair copied to ${oldDestName}`
+      : `${knownCount} event${knownCount === 1 ? '' : 's'} this pair copied to ${oldDestName}`;
+
+    const feedback = el('div', { class: 'cfg-row__hint modal__feedback', style: 'min-height:16px' });
+    const cancelBtn = el('button', { class: 'btn btn--ghost', type: 'button', text: 'Keep them' });
+    const confirmBtn = el('button', { class: 'btn btn--danger', type: 'button' }, iconEl('alert', 13, 1.8), el('span', { text: 'Delete them' }));
+
+    const body = el('div', { class: 'cleanup-confirm' },
+      el('div', { class: 'cleanup-confirm__text',
+        text: `This permanently deletes ${countText}. Events you created yourself in that calendar are never touched.` }),
+      feedback,
+      el('div', { class: 'modal__foot' }, cancelBtn, confirmBtn));
+
+    const modal = openModal({ title: 'Remove old copies?', body, onClose: done });
+
+    cancelBtn.addEventListener('click', () => modal.close());
+    confirmBtn.addEventListener('click', () => {
+      const span = confirmBtn.querySelector('span');
+      confirmBtn.disabled = true; cancelBtn.disabled = true;
+      if (span) span.textContent = 'Removing…';
+      feedback.textContent = ''; feedback.style.color = '';
+      Bridge.call('cleanupOldDestination', JSON.stringify({ pairId, destination: oldDest }), 120000)
+        .then((r) => {
+          const deleted = (r && typeof r.deleted === 'number') ? r.deleted : 0;
+          const failures = (r && Array.isArray(r.failures)) ? r.failures.length : 0;
+          announce(failures ? `Removed ${deleted}; ${failures} could not be removed.` : `Removed ${deleted} old ${deleted === 1 ? 'copy' : 'copies'}.`);
+          if (span) span.textContent = 'Done';
+          feedback.style.color = failures ? 'var(--warn)' : 'var(--ok)';
+          feedback.textContent = failures ? `Removed ${deleted}; ${failures} could not be removed.` : `Removed ${deleted}.`;
+          setTimeout(() => modal.close(), 800);
+        })
+        .catch((e) => {
+          // The edit is already saved; surface the cleanup error but let the user dismiss and move on.
+          confirmBtn.disabled = false; cancelBtn.disabled = false;
+          if (span) span.textContent = 'Delete them';
+          feedback.textContent = (e && e.message) || 'Could not remove the old copies.';
+          feedback.style.color = 'var(--err)';
+        });
+    });
+  });
 }
 
 // ---------------- Screen: Add Calendar wizard ----------------
@@ -2134,6 +2291,21 @@ function renderAbout(root) {
   const link = (ic, label, href) => el('a', {
     class: 'about-link', href, target: '_blank', rel: 'noopener noreferrer',
   }, iconEl(ic, 13, 1.6), label);
+
+  // The open-source notices live in a file bundled next to the desktop exe; opening it is a
+  // desktop-only bridge action (openLicenses) that hands the file to the system's default viewer.
+  // In the web panel / standalone mock there is no such file, so the row is desktop-app only.
+  const links = el('div', { class: 'about-links' },
+    link('link', 'Website', ABOUT_WEBSITE_URL),
+    link('sparkle', "What's new", ABOUT_RELEASES_URL));
+  if (Bridge.desktopApp) {
+    links.append(el('button', {
+      class: 'about-link', type: 'button',
+      style: 'grid-column:1 / -1',
+      onclick: () => { Bridge.call('openLicenses').catch(() => {}); },
+    }, iconEl('note', 13, 1.6), 'Open-source notices'));
+  }
+
   root.append(el('div', { class: 'glass glass--card about-card' },
     el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
     el('div', { class: 'about-name', text: 'Zync Master' }),
@@ -2141,9 +2313,7 @@ function renderAbout(root) {
     // host. Keep this in step with the published release (currently 0.1.0, beta). No build number.
     el('div', { class: 'about-version num', text: 'VERSION 0.1.0 · BETA' }),
     el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
-    el('div', { class: 'about-links' },
-      link('link', 'Website', ABOUT_WEBSITE_URL),
-      link('sparkle', "What's new", ABOUT_RELEASES_URL)),
+    links,
   ));
   root.append(el('div', { class: 'glass glass--card about-credits' },
     el('div', { class: 'about-credits__hd', text: 'Made by DevLab-Pe' }),
