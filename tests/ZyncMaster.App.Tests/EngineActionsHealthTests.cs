@@ -81,6 +81,8 @@ public class EngineActionsHealthTests
             identity,
             calendarConnect,
             new Mock<IOutlookComProbe>().Object,
+            new Mock<ICalendarSource>().Object,
+            new Mock<IClock>().Object,
             http);
     }
 

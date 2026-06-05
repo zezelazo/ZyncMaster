@@ -21,7 +21,6 @@ namespace ZyncMaster.Engine;
 // API KEY. A tick with no identity (signed out) is a clean no-op, exactly like no device key.
 public sealed class PairScheduler
 {
-    private const string OutlookComProvider = "OutlookCom";
     private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromSeconds(30);
 
     private readonly IPairsClient _client;
@@ -134,19 +133,8 @@ public sealed class PairScheduler
         DropMissing(seen);
     }
 
-    private async Task RunPairAsync(string apiKey, SyncPair pair, DateTimeOffset now, CancellationToken ct)
-    {
-        if (string.Equals(pair.Source.Provider, OutlookComProvider, StringComparison.OrdinalIgnoreCase))
-        {
-            var to = now.AddDays(_settings.SyncWindowDays);
-            var events = await _comSource.ReadWindowAsync(now, to, ct);
-            await _client.PushPairAsync(apiKey, pair.Id, events, ct);
-        }
-        else
-        {
-            await _client.RunPairAsync(apiKey, pair.Id, ct);
-        }
-    }
+    private Task RunPairAsync(string apiKey, SyncPair pair, DateTimeOffset now, CancellationToken ct)
+        => PairRunner.RunOnceAsync(_client, _comSource, pair, apiKey, now, _settings, ct);
 
     private async Task TickSafelyAsync(CancellationToken ct)
     {

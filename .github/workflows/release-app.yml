@@ -33,9 +33,11 @@ jobs:
 
       - name: Publish app (self-contained win-x64)
         shell: pwsh
-        # Self-contained so the user does not need the .NET runtime installed. The app does
-        # not reference ZyncMaster.CalExport (it invokes ZyncMaster.CalExport.exe by path at
-        # run time), so this publish carries no Outlook COM dependency.
+        # Self-contained so the user does not need the .NET runtime installed. The App does not
+        # LINK ZyncMaster.CalExport — it launches ZyncMaster.CalExport.exe by path at run time —
+        # so the App publish itself is free of the Outlook COM interop. CalExport is published
+        # separately into a CalExport\ subfolder (next step) so the zip ships both side by side and
+        # the App finds it at AppContext.BaseDirectory\CalExport\ZyncMaster.CalExport.exe.
         run: >
           dotnet publish src/ZyncMaster.App/ZyncMaster.App.csproj
           -c Release
@@ -45,6 +47,22 @@ jobs:
           /p:AssemblyVersion=${{ inputs.version }}.0
           /p:FileVersion=${{ inputs.version }}.0
           -o "${{ runner.temp }}/publish"
+
+      - name: Publish CalExport into the App bundle (self-contained win-x64)
+        shell: pwsh
+        # CalExport drives Outlook Classic over COM, so it lives next to the App in a CalExport\
+        # subfolder of the same publish dir. Self-contained so it runs without a separate .NET
+        # install. The end user still needs Outlook Classic installed for it to actually read a
+        # calendar — but the bundle no longer depends on the App project referencing it.
+        run: >
+          dotnet publish src/ZyncMaster.CalExport/ZyncMaster.CalExport.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          /p:Version=${{ inputs.version }}
+          /p:AssemblyVersion=${{ inputs.version }}.0
+          /p:FileVersion=${{ inputs.version }}.0
+          -o "${{ runner.temp }}/publish/CalExport"
 
       - name: Package zip
         shell: pwsh

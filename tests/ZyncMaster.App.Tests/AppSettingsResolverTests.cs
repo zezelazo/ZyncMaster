@@ -42,7 +42,11 @@ public class AppSettingsResolverTests
         engine.DeviceName.Should().Be(Environment.MachineName);
         engine.SyncWindowDays.Should().Be(14);
         engine.IntervalMinutes.Should().Be(10);
-        engine.CalExportPath.Should().Be("ZyncMaster.CalExport.exe");
+        // CalExport is bundled in a CalExport\ subfolder next to the exe; the default resolves it
+        // from AppContext.BaseDirectory (not the cwd) so Process.Start gets an absolute, launchable
+        // path regardless of the working directory.
+        engine.CalExportPath.Should().Be(
+            System.IO.Path.Combine(AppContext.BaseDirectory, "CalExport", "ZyncMaster.CalExport.exe"));
         engine.CalendarNames.Should().BeNull();
     }
 

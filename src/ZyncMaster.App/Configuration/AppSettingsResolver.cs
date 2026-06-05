@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Linq;
 using ZyncMaster.Engine;
 
@@ -9,7 +10,13 @@ namespace ZyncMaster.App.Configuration;
 // Mirrors the Cli's CliSettingsResolver / CalImport's ImportSettingsResolver style.
 public sealed class AppSettingsResolver
 {
-    private const string DefaultCalExportPath = "ZyncMaster.CalExport.exe";
+    // CalExport is bundled next to the App in a CalExport\ subfolder (by the App csproj's
+    // CopyCalExport target for a VS build, and by the release workflow's publish step for the zip).
+    // Resolve it from the EXE directory (AppContext.BaseDirectory), NOT the cwd, so "Sync now" /
+    // the scheduler launch it regardless of where the process was started from. A user can still
+    // override it via settings.json calExportPath / env, in which case this default is unused.
+    private static readonly string DefaultCalExportPath =
+        Path.Combine(AppContext.BaseDirectory, "CalExport", "ZyncMaster.CalExport.exe");
 
     // Lets a developer point the app at a local server without editing settings.json:
     // ZYNCMASTER_SERVER_URL takes precedence over the file when set.
