@@ -51,11 +51,26 @@ public class PairEndpointsTests : IClassFixture<ServerTestFactory>
             Task.FromResult("token");
     }
 
-    private static WebApplicationFactory<Program> Build(bool seedAccount = true) =>
+    // Entitlements stub for the plan-cap gate test: returns whatever caps the test asks for.
+    private sealed class StubEntitlementsService : IEntitlementsService
+    {
+        private readonly ZyncMaster.Server.Entitlements _entitlements;
+        public StubEntitlementsService(ZyncMaster.Server.Entitlements entitlements) => _entitlements = entitlements;
+        public Task<ZyncMaster.Server.Entitlements> GetForUserAsync(string userId, CancellationToken ct = default) =>
+            Task.FromResult(_entitlements);
+    }
+
+    private static WebApplicationFactory<Program> Build(bool seedAccount = true, ZyncMaster.Server.Entitlements? entitlements = null) =>
         new ServerTestFactory().WithWebHostBuilder(builder =>
         {
             builder.ConfigureServices(services =>
             {
+                if (entitlements is not null)
+                {
+                    services.RemoveAll<IEntitlementsService>();
+                    services.AddSingleton<IEntitlementsService>(new StubEntitlementsService(entitlements));
+                }
+
                 services.RemoveAll<IMicrosoftTokenService>();
                 // Empty UPN so the callback's connected-account write normalizes to the
                 // "default" key and overwrites the seed rather than adding a second account
@@ -338,5 +353,40 @@ public class PairEndpointsTests : IClassFixture<ServerTestFactory>
         var resp = await client.PostAsJsonAsync("/api/accounts/default/calendars", new { name = "X" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Create_over_plan_pair_cap_returns_402_plan_limit_reached()
+    {
+        // FIX H — wire the entitlements gate. With a cap of one pair, the first create succeeds and
+        // the second is rejected with 402 plan_limit_reached (the user is already at the cap).
+        var factory = Build(entitlements: new ZyncMaster.Server.Entitlements { MaxPairs = 1 });
+        var client = await AuthedClientAsync(factory);
+
+        var first = await client.PostAsJsonAsync("/api/pairs", MakeCreateBody(name: "Pair one"));
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var second = await client.PostAsJsonAsync("/api/pairs", MakeCreateBody(name: "Pair two"));
+        second.StatusCode.Should().Be(HttpStatusCode.PaymentRequired);
+        using var doc = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("error").GetString().Should().Be("plan_limit_reached");
+
+        // The cap held: the second pair was never persisted.
+        var list = await client.GetFromJsonAsync<JsonElement>("/api/pairs");
+        list.GetArrayLength().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Create_clamps_interval_up_to_plan_floor()
+    {
+        // FIX H — MinSyncIntervalMinutes is a floor: a request below it is raised to the floor rather
+        // than rejected, so a paid floor never hard-fails pair creation on interval alone.
+        var factory = Build(entitlements: new ZyncMaster.Server.Entitlements { MinSyncIntervalMinutes = 30 });
+        var client = await AuthedClientAsync(factory);
+
+        var resp = await client.PostAsJsonAsync("/api/pairs", MakeCreateBody(interval: 5));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("intervalMin").GetInt32().Should().Be(30);
     }
 }

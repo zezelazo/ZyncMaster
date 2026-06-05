@@ -10,8 +10,9 @@ name: Sync cron
 # Optional repository variable:
 #   SYNC_BASE_URL     — defaults to https://zyncmaster.azurewebsites.net
 #
-# Until the /api/sync/run-due endpoint is deployed (Track B), the poke treats 404 as
-# "not deployed yet" and succeeds quietly, so the schedule never shows up red.
+# The /api/sync/run-due endpoint is deployed, so a 404 is a REAL failure (broken routing or a
+# stale deployment), not a "not deployed yet" state — the poke fails loudly on it. Only genuine
+# cold-start / gateway codes (000/502/503/504) are retried; everything else is an error.
 
 on:
   schedule:
@@ -64,7 +65,6 @@ jobs:
             echo "Attempt ${attempt}: HTTP ${status:-000}"
             case "$status" in
               200|204) break ;;            # ran (or nothing due)
-              404)     break ;;            # endpoint not deployed yet (Track B) — tolerate
               000|502|503|504)             # cold start / gateway — wait and retry
                        sleep 20 ;;
               401|403)                     # secret mismatch — fail loudly, don't retry
@@ -84,7 +84,11 @@ jobs:
               echo "Sync trigger OK (HTTP ${status})."
               ;;
             404)
-              echo "::notice::/api/sync/run-due returned 404 — endpoint not deployed yet (Track B). Treating as no-op."
+              # The endpoint exists; a 404 means routing is broken or a stale build is live. Fail
+              # loudly instead of masking it as a no-op so a real regression is visible (red).
+              echo "::error::/api/sync/run-due returned 404 — the endpoint is deployed, so this is broken routing or a stale deployment."
+              echo "$body"
+              exit 1
               ;;
             *)
               echo "::error::Sync trigger did not succeed after retries (last HTTP ${status:-000})."

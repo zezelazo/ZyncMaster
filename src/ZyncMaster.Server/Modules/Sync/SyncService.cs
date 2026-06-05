@@ -59,7 +59,12 @@ public sealed class SyncService
         else
         {
             var cals = await target.ListCalendarsAsync(ct).ConfigureAwait(false);
-            calendarId = cals.FirstOrDefault(c => c.IsDefault)?.Id ?? cals.First().Id;
+            // No calendar to mirror into (an empty enumeration): surface NoCalendar so the endpoint
+            // returns 409 no_calendar instead of cals.First() throwing InvalidOperationException -> 500.
+            var calendar = cals.FirstOrDefault(c => c.IsDefault) ?? cals.FirstOrDefault();
+            if (calendar is null)
+                return new SyncOutcome { NoCalendar = true };
+            calendarId = calendar.Id;
         }
 
         var mirror = new CalendarMirror(target, new ImportPlanBuilder(), new EventDraftBuilder(new ParticipantBodyRenderer()));

@@ -68,6 +68,14 @@ export function webRequestFor(action, data) {
     case 'listAccounts':    return { method: 'GET', path: '/api/accounts' };
     case 'listCalendars':   return { method: 'GET', path: `/api/accounts/${enc(data)}/calendars` };
     case 'unlinkAccount':   return { method: 'DELETE', path: `/api/accounts/${enc(data)}` };
+    case 'createCalendar': {
+      // {accountRef, name} → POST /api/accounts/{accountRef}/calendars with body {name}. The
+      // Add-pair destination step (allowCreate) calls this for ANY bridged transport, web
+      // included, so it must map to the real server endpoint rather than fall through to the
+      // "unmapped action" throw. The endpoint exists for the browser panel too.
+      const { accountRef, name } = data || {};
+      return { method: 'POST', path: `/api/accounts/${enc(accountRef)}/calendars`, body: { name } };
+    }
     default:
       if (INERT_ACTIONS.includes(action)) return null;
       throw new Error(`web transport: unmapped action "${action}"`);

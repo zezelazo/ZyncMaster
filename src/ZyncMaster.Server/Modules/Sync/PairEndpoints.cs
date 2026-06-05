@@ -219,11 +219,34 @@ public static class PairEndpoints
             CreatePairRequest req,
             ISyncPairStore store,
             ILegacyConnectedAccountAdapter adapter,
+            IEntitlementsService entitlements,
+            ICurrentUserAccessor currentUser,
             CancellationToken ct) =>
         {
             var validation = new CreatePairRequestValidator().Validate(req);
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
+
+            // Plan gate. Resolve the caller's EFFECTIVE entitlements (plan defaults intersected with
+            // their toggles). Today every cap is unlocked (MaxPairs = int.MaxValue, MinSyncInterval = 1),
+            // so this changes NO behaviour now — it wires the gate so a future PlanBasedEntitlementsService
+            // (one DI line) enforces real caps without touching this endpoint. The pair store is
+            // user-scoped, so ListAsync() already returns only the caller's pairs; we count the ones that
+            // still occupy a plan slot (anything not "disabled") and reject when the user is at the cap.
+            var effective = await entitlements.GetForUserAsync(currentUser.UserId, ct).ConfigureAwait(false);
+            var existingPairs = await store.ListAsync(ct).ConfigureAwait(false);
+            var activeCount = existingPairs.Count(p => !string.Equals(p.State, "disabled", StringComparison.Ordinal));
+            if (activeCount >= effective.MaxPairs)
+            {
+                return Results.Json(
+                    new { error = "plan_limit_reached", message = "You have reached the maximum number of sync pairs for your plan." },
+                    statusCode: StatusCodes.Status402PaymentRequired);
+            }
+
+            // Clamp the requested interval up to the plan's floor (MinSyncIntervalMinutes). Today the
+            // floor is 1 (no clamp); under a paid floor a request below it is raised to the floor rather
+            // than rejected, so creating a pair never hard-fails on interval alone.
+            var intervalMin = Math.Max(req.IntervalMin, effective.MinSyncIntervalMinutes);
 
             // Validate that any referenced connected account belongs to the current user.
             // Resolution goes through the adapter (pool-first, legacy fallback), so an explicit
@@ -256,7 +279,7 @@ public static class PairEndpoints
                 Name = req.Name!,
                 Source = req.Source!,
                 Destination = req.Destination!,
-                IntervalMin = req.IntervalMin,
+                IntervalMin = intervalMin,
                 State = "active",
             };
             await store.AddAsync(pair);

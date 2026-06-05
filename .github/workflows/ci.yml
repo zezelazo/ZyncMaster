@@ -1,0 +1,60 @@
+name: CI
+
+# Build + test on every push and pull request. Runs red when anything fails. No artifacts are
+# uploaded or stored: each job builds and tests in-process and discards its output.
+#
+# Two independent jobs:
+#   * dotnet — builds the whole solution in Release and runs every .NET test project. It runs on
+#     windows-latest because four projects target net10.0-windows (the desktop App's WebView2 and
+#     CalExport's Outlook COM interop), which cannot build on Linux. The tests need neither Outlook
+#     nor network access, so they run headless on the runner.
+#   * js — runs the dependency-free node unit tests for the web panel transport.
+
+on:
+  push:
+  pull_request:
+
+# Read-only: CI only needs the checkout, no cloud credentials or write scopes.
+permissions:
+  contents: read
+
+concurrency:
+  # One CI run per ref; cancel an in-flight run when a newer commit lands on the same branch/PR.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build (Release)
+        run: dotnet build -c Release
+
+      - name: Test (Release)
+        # --no-build reuses the build above; every test project in the solution runs.
+        run: dotnet test -c Release --no-build
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check the UI scripts
+        run: |
+          node --check ui/js/app.js
+          node --check ui/js/web-transport.js
+
+      - name: Run js-unit tests
+        run: node --test tests/js-unit/*.mjs

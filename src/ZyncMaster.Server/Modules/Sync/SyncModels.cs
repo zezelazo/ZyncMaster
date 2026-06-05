@@ -18,10 +18,12 @@ public sealed record SyncResponse
     public bool Partial { get; init; }
 }
 
-// Discriminated outcome for SyncService. NoAccount=true means the endpoint must
-// return 409 (no Microsoft account connected); otherwise Response carries the counts.
+// Discriminated outcome for SyncService. NoAccount=true means the endpoint must return 409
+// (no Microsoft account connected); NoCalendar=true means the account has no calendar to mirror
+// into (the endpoint returns 409 no_calendar); otherwise Response carries the counts.
 public sealed record SyncOutcome
 {
     public bool NoAccount { get; init; }
+    public bool NoCalendar { get; init; }
     public SyncResponse? Response { get; init; }
 }
