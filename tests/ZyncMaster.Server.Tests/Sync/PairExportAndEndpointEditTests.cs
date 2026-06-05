@@ -380,6 +380,62 @@ public class PairExportAndEndpointEditTests : IClassFixture<ServerTestFactory>
         root.GetProperty("id").GetString().Should().Be(id);
     }
 
+    // FIX D — a PATCH re-target must NOT race a run. A run persists the WHOLE pair row, so a PATCH
+    // concurrent with a run could be silently clobbered (losing the new destination -> orphans in the
+    // old destination forever). The PATCH now takes the per-pair run-lock, so while a run holds it the
+    // PATCH answers 409 run_in_progress and the destination is left UNCHANGED — never half-applied.
+    [Fact]
+    public async Task Patch_while_run_in_progress_returns_409_and_does_not_change_destination()
+    {
+        var reader = new FakeReader();
+        var factory = Build(reader);
+        var client = await AuthedClientAsync(factory);
+        var id = await CreatePairAsync(client, GraphPairBody());
+
+        // Simulate an in-progress run by holding the pair's run-lock (the same lock /run and /push
+        // take). The production EfSyncRunLock is registered; acquire it the way the endpoints do.
+        var runLock = factory.Services.GetRequiredService<ISyncRunLock>();
+        await using var handle = await runLock.TryAcquireAsync(id, TimeSpan.FromMinutes(8), owner: "run");
+        handle.Should().NotBeNull("the test must hold the lock to simulate an in-flight run");
+
+        var patch = await client.PatchAsJsonAsync($"/api/pairs/{id}", new
+        {
+            destination = new { provider = "MicrosoftGraph", accountRef = "default", calendarId = "cal-new", calendarName = "New" },
+        });
+
+        patch.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await patch.Content.ReadAsStringAsync()).Should().Contain("run_in_progress");
+
+        // The destination must be UNTOUCHED — the re-target was rejected wholesale, not half-applied.
+        var store = factory.Services.GetRequiredService<ISyncPairStore>();
+        var after = await store.GetAsync(id);
+        after!.Destination.CalendarId.Should().Be("cal1", "the rejected PATCH must not change the destination");
+    }
+
+    // FIX D — once the run releases the lock, the very same re-target PATCH succeeds and persists.
+    [Fact]
+    public async Task Patch_succeeds_after_run_lock_released()
+    {
+        var reader = new FakeReader();
+        var factory = Build(reader);
+        var client = await AuthedClientAsync(factory);
+        var id = await CreatePairAsync(client, GraphPairBody());
+
+        var runLock = factory.Services.GetRequiredService<ISyncRunLock>();
+        var handle = await runLock.TryAcquireAsync(id, TimeSpan.FromMinutes(8), owner: "run");
+        handle.Should().NotBeNull();
+        await handle!.DisposeAsync(); // run finished, lock released
+
+        var patch = await client.PatchAsJsonAsync($"/api/pairs/{id}", new
+        {
+            destination = new { provider = "MicrosoftGraph", accountRef = "default", calendarId = "cal-new", calendarName = "New" },
+        });
+
+        patch.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await patch.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("destination").GetProperty("calendarId").GetString().Should().Be("cal-new");
+    }
+
     [Fact]
     public async Task Patch_name_only_preserves_run_state_and_endpoints()
     {

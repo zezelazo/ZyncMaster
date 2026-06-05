@@ -27,13 +27,20 @@ public sealed class EngineHost : IDisposable
     // The multi-pair scheduler the App runs in the background instead of the single SyncLoop.
     public PairScheduler Scheduler { get; }
 
+    // FIX C — keeps the device's server-side lease alive while the App runs so the cron fallback
+    // skips this user's pairs (no double sync). Driven by the App alongside the scheduler.
+    public DeviceHeartbeatLoop HeartbeatLoop { get; }
+
     private readonly HttpClient _http;
 
-    private EngineHost(EngineActions actions, ISyncCycle syncCycle, PairScheduler scheduler, EngineSettings settings, HttpClient http)
+    private EngineHost(
+        EngineActions actions, ISyncCycle syncCycle, PairScheduler scheduler,
+        DeviceHeartbeatLoop heartbeatLoop, EngineSettings settings, HttpClient http)
     {
         Actions = actions;
         SyncCycle = syncCycle;
         Scheduler = scheduler;
+        HeartbeatLoop = heartbeatLoop;
         Settings = settings;
         _http = http;
     }
@@ -128,7 +135,11 @@ public sealed class EngineHost : IDisposable
         var scheduler = new PairScheduler(
             pairsClient, calendarSource, keyStore, identityTokenProvider, clock, engineSettings);
 
-        return new EngineHost(actions, syncEngine, scheduler, engineSettings, http);
+        // FIX C — the device-lease heartbeat. Uses the SAME pairs client + device key store as the
+        // scheduler; a tick with no device key (unpaired) is a clean no-op.
+        var heartbeatLoop = new DeviceHeartbeatLoop(pairsClient, keyStore);
+
+        return new EngineHost(actions, syncEngine, scheduler, heartbeatLoop, engineSettings, http);
     }
 
     public void Dispose()

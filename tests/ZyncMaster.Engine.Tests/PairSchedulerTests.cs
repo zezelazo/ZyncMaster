@@ -98,6 +98,8 @@ public sealed class PairSchedulerTests
         }
         public Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct)
             => Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<DateTimeOffset?> HeartbeatAsync(string apiKey, CancellationToken ct)
+            => Task.FromResult<DateTimeOffset?>(DateTimeOffset.UtcNow);
         public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
             => Task.FromResult(new DeviceInfo());
         public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct)

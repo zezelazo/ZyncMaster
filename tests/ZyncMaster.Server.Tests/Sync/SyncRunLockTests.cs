@@ -79,6 +79,54 @@ public sealed class SyncRunLockTests
         b.Should().NotBeNull("locks are per-pair; distinct pairs never contend");
     }
 
+    // FIX B — a tardy Dispose by a holder whose lock already EXPIRED and was legitimately stolen
+    // must NOT free the new owner's live lock (which would let two destructive mirrors run on the
+    // same calendar). The fencing token makes release match only the row the holder still owns.
+    [Fact]
+    public async Task Late_dispose_of_stolen_lock_does_not_release_new_owners_lock()
+    {
+        using var harness = new EfStoreTestHarness();
+        var sut = new EfSyncRunLock(harness.Factory);
+
+        // Owner A acquires with an already-elapsed TTL: its lock exists but is immediately expired.
+        var aHandle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMilliseconds(-1), owner: "A");
+        aHandle.Should().NotBeNull();
+
+        // Owner B legitimately STEALS the expired lock (the §B-1 `LockedUntil < now` gate) and holds
+        // it live. B now owns the row, with its own fence token.
+        var bHandle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "B");
+        bHandle.Should().NotBeNull("B may steal A's expired lock");
+
+        // A's late Dispose fires AFTER B stole the lock. It must be a no-op (its fence no longer
+        // matches), so B's live lock survives and a third executor still cannot acquire.
+        await aHandle!.DisposeAsync();
+
+        var thief = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "C");
+        thief.Should().BeNull("A's late Dispose must not free the lock B now holds");
+
+        await bHandle!.DisposeAsync();
+    }
+
+    // FIX B — in-memory store must enforce the same fencing semantics as the EF store.
+    [Fact]
+    public async Task InMemory_late_dispose_of_stolen_lock_does_not_release_new_owners_lock()
+    {
+        var sut = new InMemorySyncRunLock();
+
+        var aHandle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMilliseconds(-1), owner: "A");
+        aHandle.Should().NotBeNull();
+
+        var bHandle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "B");
+        bHandle.Should().NotBeNull();
+
+        await aHandle!.DisposeAsync();
+
+        var thief = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "C");
+        thief.Should().BeNull("A's late Dispose must not free the lock B now holds (in-memory)");
+
+        await bHandle!.DisposeAsync();
+    }
+
     [Fact]
     public async Task Concurrent_acquire_lets_exactly_one_win()
     {

@@ -100,11 +100,34 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
+            // FIX A — classify the failure so a throttle / server blip during a refresh is RETRIED,
+            // not surfaced to the user as "reconnect". A 429 or 5xx from the token endpoint is
+            // transient: throw a GraphRequestException with IsTransient=true (which
+            // SyncErrorClassifier maps to Transient, so the run retries and the export endpoints
+            // answer 503). Only a real OAuth failure (400/401 carrying invalid_grant /
+            // interaction_required / consent_required, or a 401/403 with no usable diagnostics)
+            // stays AuthenticationFailedException -> UserRecoverable ("the user must reconnect").
+            var status = (int)response.StatusCode;
+
             // SECURITY (M1): never embed the raw token-endpoint response body in the thrown
             // message — it can carry token material and leaks into logs/telemetry. Surface
             // only the status code plus, at most, the OAuth error/error_description fields
             // (which by spec are non-secret diagnostics), never any *_token value.
-            throw new AuthenticationFailedException(BuildFailureMessage(response.StatusCode, body));
+            var message = BuildFailureMessage(response.StatusCode, body);
+
+            if (IsTransientStatus(status))
+            {
+                // Respect Retry-After (delta or absolute date) so callers can honour the server's
+                // backoff hint; default to a small delay when the header is absent.
+                var retryAfter = ResolveRetryAfter(response);
+                throw new GraphRequestException(
+                    retryAfter is { } ra
+                        ? $"{message} (transient; retry after {(int)ra.TotalSeconds}s)"
+                        : $"{message} (transient)",
+                    isTransient: true);
+            }
+
+            throw new AuthenticationFailedException(message);
         }
 
         using var doc = JsonDocument.Parse(body);
@@ -166,6 +189,31 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
         {
             return prefix + ".";
         }
+    }
+
+    // Transient = retryable token-endpoint statuses. 429 (throttling) plus the gateway/5xx family.
+    // A 408 (request timeout) is also transient. Everything else (notably 400/401/403) is a real
+    // OAuth/auth failure the user must act on, so it stays UserRecoverable.
+    private static bool IsTransientStatus(int status)
+        => status is 429 or 408 or 500 or 502 or 503 or 504;
+
+    // Resolves the Retry-After hint from the response: a delta (seconds) directly, or an absolute
+    // date converted to a delta from now (never negative). Returns null when the header is absent
+    // or already in the past.
+    private static TimeSpan? ResolveRetryAfter(HttpResponseMessage response)
+    {
+        var ra = response.Headers.RetryAfter;
+        if (ra is null)
+            return null;
+        if (ra.Delta is { } delta && delta > TimeSpan.Zero)
+            return delta;
+        if (ra.Date is { } date)
+        {
+            var fromNow = date - DateTimeOffset.UtcNow;
+            if (fromNow > TimeSpan.Zero)
+                return fromNow;
+        }
+        return null;
     }
 
     private static string? GetString(JsonElement root, string name) =>

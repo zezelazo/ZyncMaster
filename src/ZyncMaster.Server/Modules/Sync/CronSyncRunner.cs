@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using ZyncMaster.Graph;
 using ZyncMaster.Server.Data;
 
 namespace ZyncMaster.Server;
@@ -170,21 +171,55 @@ public sealed class CronSyncRunner
         {
             var pair = ToDomain(row);
             var (from, to) = Window(now);
-            var outcome = await module.ExecuteAsync(pair, from, to, ct).ConfigureAwait(false);
 
-            // OutlookCom sources are filtered out before we get here, so NoServerReader should not
-            // occur; if it ever does, do NOT record a run (treat as a no-op, not a failure).
-            if (outcome.NoServerReader)
-                return false;
+            try
+            {
+                var outcome = await module.ExecuteAsync(pair, from, to, ct).ConfigureAwait(false);
 
-            await RecordRunAsync(row.Id, outcome.Result!, ct).ConfigureAwait(false);
-            return true;
+                // OutlookCom sources are filtered out before we get here, so NoServerReader should
+                // not occur; if it ever does, do NOT record a run (treat as a no-op, not a failure).
+                if (outcome.NoServerReader)
+                    return false;
+
+                await RecordRunAsync(row.Id, outcome.Result!, ct).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Batch cancellation — propagate so the caller stops; do NOT record (the run did not
+                // complete and the next batch should reconsider the pair as it was).
+                throw;
+            }
+            catch (Exception ex) when (Classify(ex) != SyncErrorKind.Transient)
+            {
+                // FIX E — a NON-transitory failure (a revoked/expired token surfacing as
+                // UserRecoverable, or a Fatal contract error) would otherwise leave LastRunUtc
+                // untouched, so the pair stays DUE and the cron hammers Graph/the IdP every tick.
+                // Record LastRunUtc + a failed result so the pair backs off to its normal interval.
+                // Only a TRULY transient escape (handled by the outer when-filter NOT matching)
+                // skips recording, so a genuine throttle still retries promptly.
+                await RecordRunAsync(row.Id, FailedRunResult(ex), ct).ConfigureAwait(false);
+
+                // Re-throw so the batch still counts this as Failed (RunDueAsync's catch). The
+                // LastRunUtc is now advanced, so the immediate next tick will not re-run the pair.
+                throw;
+            }
         }
         finally
         {
             _userOverride.Clear();
         }
     }
+
+    // Records a failed run as a non-partial MirrorResult carrying the error. Partial=false (this was
+    // NOT a transient short-read deferral — it is a hard failure that must back off to the interval),
+    // with the error surfaced in Failures so the panel can show why the last run did not apply.
+    private static MirrorResult FailedRunResult(Exception ex)
+        => new MirrorResult { Failures = new List<string> { $"Run failed: {ex.Message}" } };
+
+    // Thin wrapper over the shared classifier. Real cancellation is already filtered out by the
+    // earlier OperationCanceledException catch, so this only ever sees genuine run failures.
+    private static SyncErrorKind Classify(Exception ex) => SyncErrorClassifier.Classify(ex);
 
     // Records LastRunUtc (+ result) so a second immediate cron call sees the pair as no longer due.
     // Cross-user update by id: the cron context has no single owning user, so we update the row
