@@ -235,6 +235,16 @@ public sealed class HttpPairsClient : IPairsClient
         return ids;
     }
 
+    public async Task<DateTimeOffset?> HeartbeatAsync(string apiKey, CancellationToken ct)
+    {
+        if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
+
+        // The server reads the deviceId from the api key; the body is empty. Returns the renewed
+        // { leaseUntil } so the caller can pace the next heartbeat if it ever wants to.
+        var root = await SendAsync(HttpMethod.Post, "/api/devices/heartbeat", apiKey, new JObject(), ct) as JObject ?? new JObject();
+        return ParseDateTimeOffset(root["leaseUntil"]);
+    }
+
     public async Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
     {
         if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));

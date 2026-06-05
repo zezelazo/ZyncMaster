@@ -178,8 +178,11 @@ public class MicrosoftTokenServiceTests
     }
 
     [Fact]
-    public async Task NonSuccess_with_nonjson_body_throws_status_only()
+    public async Task NonSuccess_with_nonjson_5xx_body_throws_transient_status_only()
     {
+        // FIX A — a 5xx is a server blip, NOT a "reconnect" condition. It must surface as a TRANSIENT
+        // GraphRequestException (so the run retries / the export endpoints answer 503), and it must
+        // still never leak the raw body even when the body is non-JSON.
         var handler = new CapturingHandler(new HttpResponseMessage(HttpStatusCode.InternalServerError)
         {
             Content = new StringContent("upstream proxy error: token=LEAK"),
@@ -188,8 +191,85 @@ public class MicrosoftTokenServiceTests
 
         var act = async () => await service.ExchangeCodeAsync("bad-code");
 
-        var ex = await act.Should().ThrowAsync<AuthenticationFailedException>();
+        var ex = await act.Should().ThrowAsync<GraphRequestException>();
+        ex.Which.IsTransient.Should().BeTrue();
         ex.Which.Message.Should().Contain("500");
         ex.Which.Message.Should().NotContain("LEAK");
+    }
+
+    // FIX A — throttling (429) and the 5xx family during a token refresh are TRANSIENT, not
+    // "reconnect": the run must retry rather than telling the user to re-authenticate.
+    [Theory]
+    [InlineData(429)]
+    [InlineData(500)]
+    [InlineData(502)]
+    [InlineData(503)]
+    [InlineData(504)]
+    [InlineData(408)]
+    public async Task Transient_status_codes_throw_transient_GraphRequestException(int status)
+    {
+        var handler = new CapturingHandler(new HttpResponseMessage((HttpStatusCode)status)
+        {
+            Content = new StringContent(""),
+        });
+        var service = BuildService(handler);
+
+        var act = async () => await service.RefreshAsync("rt");
+
+        var ex = await act.Should().ThrowAsync<GraphRequestException>();
+        ex.Which.IsTransient.Should().BeTrue();
+        ex.Which.Message.Should().Contain(status.ToString());
+    }
+
+    // FIX A — a 429 carrying Retry-After is still transient AND the hint is reflected in the message
+    // so callers can honour the server's backoff.
+    [Fact]
+    public async Task Throttle_with_retry_after_is_transient_and_surfaces_the_hint()
+    {
+        var response = new HttpResponseMessage((HttpStatusCode)429)
+        {
+            Content = new StringContent("{\"error\":\"temporarily_unavailable\"}"),
+        };
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(42));
+        var handler = new CapturingHandler(response);
+        var service = BuildService(handler);
+
+        var act = async () => await service.RefreshAsync("rt");
+
+        var ex = await act.Should().ThrowAsync<GraphRequestException>();
+        ex.Which.IsTransient.Should().BeTrue();
+        ex.Which.Message.Should().Contain("retry after 42s");
+    }
+
+    // FIX A — a real OAuth failure (invalid_grant on a 400) stays AuthenticationFailedException so it
+    // maps to UserRecoverable ("the user must reconnect"), never to a transient retry.
+    [Fact]
+    public async Task Invalid_grant_400_stays_authentication_failed()
+    {
+        var handler = new CapturingHandler(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("{\"error\":\"invalid_grant\",\"error_description\":\"AADSTS700082\"}"),
+        });
+        var service = BuildService(handler);
+
+        var act = async () => await service.RefreshAsync("rt");
+
+        var ex = await act.Should().ThrowAsync<AuthenticationFailedException>();
+        ex.Which.Message.Should().Contain("invalid_grant");
+    }
+
+    // FIX A — a 401 (interaction_required) is likewise a reconnect condition, not transient.
+    [Fact]
+    public async Task Unauthorized_interaction_required_stays_authentication_failed()
+    {
+        var handler = new CapturingHandler(new HttpResponseMessage(HttpStatusCode.Unauthorized)
+        {
+            Content = new StringContent("{\"error\":\"interaction_required\"}"),
+        });
+        var service = BuildService(handler);
+
+        var act = async () => await service.RefreshAsync("rt");
+
+        await act.Should().ThrowAsync<AuthenticationFailedException>();
     }
 }

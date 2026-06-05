@@ -364,6 +364,39 @@ public sealed class SyncRunDueEndpointTests
             "u2's pair must run under u2's ambient identity, not the first pair's owner");
     }
 
+    // FIX E — a NON-transitory failure (revoked token / fatal error) must still advance LastRunUtc so
+    // the pair backs off to its interval instead of being re-attempted every single tick (hammering
+    // Graph / the IdP). First run: the writer throws -> Failed=1 but LastRunUtc is recorded. Second
+    // immediate run: the pair is no longer DUE (its 60m interval has not elapsed), so it does NOT run
+    // and does NOT fail again.
+    [Fact]
+    public async Task Non_transient_failure_advances_LastRunUtc_so_pair_is_not_immediately_retried()
+    {
+        var writer = new RecordingWriter { FailFor = { "dst-fail" } };
+        using var factory = Build(writer);
+        var pairId = await SeedAsync(factory, "u1", "dst-fail", intervalMin: 60);
+        var client = factory.CreateClient();
+
+        var first = await ParseSummary(await client.SendAsync(RunDue(Secret)));
+        first.ran.Should().Be(0);
+        first.failed.Should().Be(1, "the non-transient failure is counted as Failed");
+
+        // LastRunUtc must have advanced despite the failure.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+            var row = await db.SyncPairs.FirstAsync(p => p.Id == pairId);
+            row.LastRunUtc.Should().NotBeNull("a non-transient failure must still record the run");
+        }
+
+        // Immediately again: the pair is no longer due (60m interval), so it must NOT be retried.
+        var second = await ParseSummary(await client.SendAsync(RunDue(Secret)));
+        second.ran.Should().Be(0);
+        second.failed.Should().Be(0, "the pair backed off; it is not hammered on the next tick");
+        writer.Mirrored.Count(c => c == "dst-fail")
+            .Should().Be(1, "the failing pair is attempted once, then backs off to its interval");
+    }
+
     [Fact]
     public async Task Skips_paused_pair()
     {

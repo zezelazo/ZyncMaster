@@ -65,6 +65,21 @@ public sealed class PairRunReadFailureTests
     }
 
     [Fact]
+    public void Transient_token_failure_is_classified_transient_so_export_answers_503()
+    {
+        // FIX A — a 429/5xx on the Microsoft token exchange/refresh now throws a TRANSIENT
+        // GraphRequestException (instead of AuthenticationFailedException). That must classify as a
+        // transient read failure so the export endpoints (export-source-txt / managed-count) answer
+        // 503 (retry) rather than 500, and the sync run retries rather than telling the user to
+        // reconnect. This is the exact shape MicrosoftTokenService.PostAsync now produces.
+        var tokenTransient = new GraphRequestException(
+            "Microsoft token endpoint returned 429 (transient; retry after 42s)", isTransient: true);
+
+        PairEndpoints.IsTransientReadFailure(tokenTransient)
+            .Should().BeTrue("a throttled token refresh must be retried, surfacing 503 on export");
+    }
+
+    [Fact]
     public void PartialReadResult_has_partial_shape_with_zero_counts_and_the_error()
     {
         var ex = new GraphRequestException("Graph transient error after 3 attempts: 503. URL=...", isTransient: true);

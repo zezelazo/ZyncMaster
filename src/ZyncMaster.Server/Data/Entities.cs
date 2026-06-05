@@ -131,6 +131,13 @@ public sealed class SyncRunLockRow
     public string PairId { get; set; } = "";
     public DateTimeOffset LockedUntil { get; set; }
     public string? Owner { get; set; }
+
+    // FIX B — unique fencing token written on every acquire. Release matches on (PairId, FenceToken)
+    // so a holder whose lock already EXPIRED and was legitimately stolen by another executor cannot
+    // clobber the new owner's lock on its late Dispose. Without it a tardy Dispose ran an
+    // unconditional UPDATE that reset LockedUntil to the epoch, freeing a lock someone else now
+    // holds — and two destructive mirrors could then run concurrently on the same calendar.
+    public string? FenceToken { get; set; }
 }
 
 // Per-user feature toggles (Track C — plan/entitlements seam). One row per user, keyed by UserId.

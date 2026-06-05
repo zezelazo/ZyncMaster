@@ -182,6 +182,7 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.HasKey(x => x.PairId);
             e.Property(x => x.PairId).HasMaxLength(64);
             e.Property(x => x.Owner).HasMaxLength(128);
+            e.Property(x => x.FenceToken).HasMaxLength(64);
             // No FK to SyncPairs: the lock is keyed by the pair identifier the endpoints
             // use and must be acquirable even while the pair row is being read on another
             // connection; a stale lock row is harmless (it just expires).

@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ZyncMaster.Server.Data;
 
@@ -11,9 +12,11 @@ using ZyncMaster.Server.Data;
 namespace ZyncMaster.Server.Data.Migrations
 {
     [DbContext(typeof(ZyncMasterDbContext))]
-    partial class ZyncMasterDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260605074255_SyncRunLockFenceToken")]
+    partial class SyncRunLockFenceToken
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -430,9 +433,6 @@ namespace ZyncMaster.Server.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
-
-                    b.Property<string>("PendingCleanupJson")
-                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("SourceJson")
                         .IsRequired()

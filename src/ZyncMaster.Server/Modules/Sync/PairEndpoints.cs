@@ -278,12 +278,28 @@ public static class PairEndpoints
             string id,
             UpdatePairRequest req,
             ISyncPairStore store,
+            ISyncRunLock runLock,
             ILegacyConnectedAccountAdapter adapter,
+            Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
         {
             var validation = new UpdatePairRequestValidator().Validate(req);
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
+
+            // FIX D — serialize the PATCH read-modify-write with the per-pair run-lock. A /run or
+            // /push persists the WHOLE pair row (RecordRunAsync -> store.UpdateAsync rewrites every
+            // column), so a re-target PATCH racing a run could be silently clobbered — the new
+            // destination (and any future per-column queue) lost, orphaning events in the old
+            // destination forever. Holding the lock here makes PATCH and run mutually exclusive: if a
+            // run is in progress we answer 409 run_in_progress (the client retries) instead of
+            // racing. The lock is fast to hold (a synchronous read-modify-write, no Graph I/O), so it
+            // never wedges a run, and acquiring it before GetAsync guarantees we read the latest row.
+            await using var handle = await runLock
+                .TryAcquireAsync(id, LockTtl(opts.Value), owner: "patch", ct)
+                .ConfigureAwait(false);
+            if (handle is null)
+                return RunLockBusy();
 
             var existing = await store.GetAsync(id, ct);
             if (existing is null)
@@ -576,9 +592,11 @@ public static class PairEndpoints
         app.MapPost("/api/pairs/{id}/push", async (
             string id,
             PushRequest req,
+            HttpContext http,
             ISyncPairStore store,
             ISyncRunLock runLock,
             ProviderRegistry registry,
+            DeviceService devices,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
         {
@@ -587,6 +605,16 @@ public static class PairEndpoints
             var pair = await store.GetAsync(id, ct);
             if (pair is null)
                 return Results.NotFound();
+
+            // FIX C — a /push is the App's clearest "I am running and syncing" signal, so renew the
+            // calling device's lease (LeaseUntil + LastSeenUtc) here. Without this the lease set at
+            // register expires after DeviceLeaseTtlMinutes and the cron runner's `covered` set is
+            // always empty, so cron would double-run the user's pairs alongside the active App. Only
+            // an api-key (device) caller carries a deviceId claim; a cookie/identity-bearer caller
+            // (a human, not a running App) does not, so its push correctly does not extend any lease.
+            var deviceId = http.User.FindFirst("deviceId")?.Value;
+            if (!string.IsNullOrWhiteSpace(deviceId))
+                await devices.HeartbeatAsync(deviceId, ct).ConfigureAwait(false);
 
             // §B-1 — acquire the per-pair run lock INSIDE the endpoint before the destructive
             // mirror. If another executor (manual run, overlapping tick) holds it, skip with

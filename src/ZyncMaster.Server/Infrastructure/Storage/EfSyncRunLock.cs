@@ -32,26 +32,32 @@ public sealed class EfSyncRunLock : ISyncRunLock
         var now   = DateTimeOffset.UtcNow;
         var until = now.Add(ttl);
 
+        // FIX B — every acquire mints a fresh fencing token. The Handle remembers it and releases
+        // ONLY the row that still carries this exact token, so a late Dispose by a holder whose
+        // lock already expired and was stolen cannot free the new owner's lock.
+        var fence = Guid.NewGuid().ToString("N");
+
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        // Step 1: atomically steal a free/expired lock. The WHERE clause is the gate.
+        // Step 1: atomically steal a free/expired lock. The WHERE clause is the gate. The steal
+        // also overwrites FenceToken with ours, so the previous holder's fence no longer matches.
         var updated = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE SyncRunLocks SET LockedUntil = {until}, Owner = {owner} WHERE PairId = {pairId} AND LockedUntil < {now}",
+            $"UPDATE SyncRunLocks SET LockedUntil = {until}, Owner = {owner}, FenceToken = {fence} WHERE PairId = {pairId} AND LockedUntil < {now}",
             ct).ConfigureAwait(false);
 
         if (updated == 1)
-            return new Handle(_factory, pairId);
+            return new Handle(_factory, pairId, fence);
 
         // Step 2: no row was stolen — either the lock is live (held by someone else) or no
         // row exists yet. Try to create it; a unique-violation means a concurrent caller won.
         try
         {
             var inserted = await db.Database.ExecuteSqlInterpolatedAsync(
-                $"INSERT INTO SyncRunLocks (PairId, LockedUntil, Owner) VALUES ({pairId}, {until}, {owner})",
+                $"INSERT INTO SyncRunLocks (PairId, LockedUntil, Owner, FenceToken) VALUES ({pairId}, {until}, {owner}, {fence})",
                 ct).ConfigureAwait(false);
 
             if (inserted == 1)
-                return new Handle(_factory, pairId);
+                return new Handle(_factory, pairId, fence);
         }
         catch (DbUpdateException)
         {
@@ -82,12 +88,14 @@ public sealed class EfSyncRunLock : ISyncRunLock
     private sealed class Handle : ISyncRunLockHandle
     {
         private readonly IDbContextFactory<ZyncMasterDbContext> _factory;
+        private readonly string _fence;
         private bool _released;
 
-        public Handle(IDbContextFactory<ZyncMasterDbContext> factory, string pairId)
+        public Handle(IDbContextFactory<ZyncMasterDbContext> factory, string pairId, string fence)
         {
             _factory = factory;
             PairId = pairId;
+            _fence = fence;
         }
 
         public string PairId { get; }
@@ -97,13 +105,16 @@ public sealed class EfSyncRunLock : ISyncRunLock
             if (_released) return;
             _released = true;
 
-            // Release = push LockedUntil into the past so the next run re-acquires at once.
-            // Best-effort: a failure here just means the lock waits out its TTL.
+            // FIX B — release = push LockedUntil into the past so the next run re-acquires at once,
+            // but ONLY if this row is still OURS (FenceToken matches). If our lock had expired and
+            // another executor stole it (writing its own fence), the WHERE clause matches nothing
+            // and we leave the new owner's lock untouched — no double-mirror. Best-effort: a failure
+            // here just means the lock waits out its TTL.
             try
             {
                 await using var db = await _factory.CreateDbContextAsync().ConfigureAwait(false);
                 await db.Database.ExecuteSqlInterpolatedAsync(
-                    $"UPDATE SyncRunLocks SET LockedUntil = {Expired} WHERE PairId = {PairId}")
+                    $"UPDATE SyncRunLocks SET LockedUntil = {Expired} WHERE PairId = {PairId} AND FenceToken = {_fence}")
                     .ConfigureAwait(false);
             }
             catch

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -54,6 +55,12 @@ public interface IPairsClient
     Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct);
 
     Task<MirrorResult> RunPairAsync(string apiKey, string id, CancellationToken ct);
+
+    // Renews the calling device's lease (POST /api/devices/heartbeat). The App calls this on a
+    // PeriodicTimer well inside DeviceLeaseTtlMinutes so the server's cron fallback treats the
+    // device as "App running" and skips the user's pairs. The deviceId is resolved from the api
+    // key, so the body is empty. Returns the new LeaseUntil reported by the server.
+    Task<DateTimeOffset?> HeartbeatAsync(string apiKey, CancellationToken ct);
 
     // Device self-management. The server resolves the deviceId from the api key, so neither call
     // sends an id; a device can only ever read/rename ITSELF.

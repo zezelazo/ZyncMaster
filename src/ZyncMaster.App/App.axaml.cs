@@ -33,6 +33,13 @@ public partial class App : Application
     private RegisteredWaitHandle? _showWindowWait;
     private readonly CancellationTokenSource _shutdown = new();
 
+    // FIX G — the long-running background loops are kept in fields so Exit can cancel AND drain them
+    // (Task.WhenAll with a bounded wait) before disposing the EngineHost / HttpClient. Without this,
+    // a fire-and-forget loop could still be mid-request against a disposed HttpClient at shutdown.
+    private Task? _schedulerTask;
+    private Task? _statusTask;
+    private Task? _heartbeatTask;
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -95,6 +102,13 @@ public partial class App : Application
             desktop.Exit += (_, _) =>
             {
                 _shutdown.Cancel();
+
+                // FIX G — drain the background loops before disposing the host/HttpClient so an
+                // in-flight request can never hit a disposed HttpClient (ObjectDisposedException) or
+                // leave a truncated request. Bounded wait so a wedged loop cannot hang Exit; any
+                // task still running past the timeout is abandoned (the process is exiting anyway).
+                DrainBackgroundLoops(TimeSpan.FromSeconds(5));
+
                 _showWindowWait?.Unregister(null);
                 _tray?.Dispose();
                 _bridge = null;
@@ -144,16 +158,22 @@ public partial class App : Application
         // on its own cadence. After each tick we refresh status and push it to the UI + tray.
         var scheduler = _engineHost.Scheduler;
 
+        // FIX C — the device-lease heartbeat runs independently of the scheduler's startup delay so
+        // the lease is renewed promptly even before the first (delayed) sync tick. Tracked in a
+        // field so Exit can drain it.
+        _heartbeatTask = Task.Run(() => _engineHost.HeartbeatLoop.RunAsync(_shutdown.Token));
+
         // Delay the first tick so the heavy Outlook COM read + push does not compete with
-        // app/window startup (it would otherwise spike CPU/IO the moment the app opens).
-        _ = Task.Run(async () =>
+        // app/window startup (it would otherwise spike CPU/IO the moment the app opens). Tracked in
+        // a field (FIX G) so Exit cancels AND drains it before disposing the host.
+        _schedulerTask = Task.Run(async () =>
         {
             try { await Task.Delay(TimeSpan.FromSeconds(5), _shutdown.Token); }
             catch (OperationCanceledException) { return; }
 
             // Push status to the UI/tray after each scheduler tick by polling the engine's
             // recorded status on the same cadence as the scheduler runs in the background.
-            _ = Task.Run(() => PublishStatusLoopAsync(_shutdown.Token));
+            _statusTask = Task.Run(() => PublishStatusLoopAsync(_shutdown.Token));
 
             try
             {
@@ -167,6 +187,30 @@ public partial class App : Application
                 _bridge?.PushStatus(new AppStatus { Status = SyncStatus.Error, LastMessage = $"Sync scheduler stopped: {ex.Message}" });
             }
         });
+    }
+
+    // FIX G — cancel-then-drain the tracked background loops with a bounded wait. The CTS is already
+    // cancelled by the caller; here we WAIT for each loop to observe the cancellation and unwind
+    // (closing its in-flight HTTP request) before the host/HttpClient are disposed. Tasks that do
+    // not finish within the timeout are abandoned — the process is exiting, so a hung loop must not
+    // block shutdown. All exceptions (the loops complete with OperationCanceledException) are
+    // swallowed: this runs on the Exit path where throwing would be worse than a noisy log.
+    private void DrainBackgroundLoops(TimeSpan timeout)
+    {
+        var tasks = new[] { _schedulerTask, _statusTask, _heartbeatTask };
+        var pending = Array.FindAll(tasks, t => t is not null)!;
+        if (pending.Length == 0)
+            return;
+
+        try
+        {
+            Task.WhenAll(pending!).Wait(timeout);
+        }
+        catch
+        {
+            // Loops unwind via OperationCanceledException; a timeout or fault here is non-fatal at
+            // Exit. The bounded Wait guarantees shutdown proceeds regardless.
+        }
     }
 
     // Mirrors the scheduler's heartbeat onto the UI/tray. The scheduler itself has no

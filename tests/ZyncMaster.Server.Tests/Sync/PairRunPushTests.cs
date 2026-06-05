@@ -12,7 +12,9 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.EntityFrameworkCore;
 using ZyncMaster.Core;
+using ZyncMaster.Server.Data;
 using Xunit;
 
 namespace ZyncMaster.Server.Tests.Sync;
@@ -139,6 +141,56 @@ public class PairRunPushTests : IClassFixture<ServerTestFactory>
         var pair = await factory.Services.GetRequiredService<ISyncPairStore>().GetAsync(id);
         pair!.LastResult!.Created.Should().Be(2);
         pair.LastRunUtc.Should().NotBeNull();
+    }
+
+    // FIX C — a /push from a device renews that device's lease (LeaseUntil + LastSeenUtc). Without
+    // this the lease set at register lapses and the cron `covered` set is always empty, so cron
+    // would double-run the user's pairs alongside the active App. We register a real keyId.secret
+    // device, push under its key, and assert both fields advanced past their pre-push values.
+    [Fact]
+    public async Task Push_renews_calling_devices_lease_and_last_seen()
+    {
+        var writer = new RecordingWriter();
+        var factory = Build(null, writer);
+
+        // Register a device with a known id and a stale lease/last-seen so the renewal is observable.
+        var deviceId = Guid.NewGuid().ToString("N");
+        var generated = ApiKeyGenerator.GenerateKey();
+        var stale = DateTimeOffset.UtcNow.AddHours(-1);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+            db.Devices.Add(new DeviceRow
+            {
+                Id = deviceId,
+                UserId = DefaultCurrentUserAccessor.DefaultUserId,
+                Name = "Laptop",
+                ApiKeyHash = ApiKeyHasher.Hash(generated.Secret),
+                KeyId = generated.KeyId,
+                CreatedUtc = stale,
+                LastSeenUtc = stale,
+                LeaseUntil = stale,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", generated.ApiKey);
+        var id = await SeedPairAsync(factory, "OutlookCom");
+
+        var resp = await client.PostAsJsonAsync($"/api/pairs/{id}/push", new
+        {
+            events = new[] { MakeEvent("a") },
+        });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var verifyScope = factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        var row = await verifyDb.Devices.FirstAsync(d => d.Id == deviceId);
+        row.LeaseUntil.Should().NotBeNull();
+        row.LeaseUntil!.Value.Should().BeAfter(DateTimeOffset.UtcNow, "the push must extend the lease into the future");
+        row.LastSeenUtc.Should().NotBeNull();
+        row.LastSeenUtc!.Value.Should().BeAfter(stale, "the push must bump LastSeenUtc off its stale value");
     }
 
     [Fact]

@@ -93,6 +93,42 @@ public sealed class HttpPairsClientDeviceTests
     }
 
     [Fact]
+    public async Task Heartbeat_PostsEmptyBodyWithKeyAndParsesLeaseUntil()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK,
+            @"{ ""leaseUntil"": ""2026-06-05T12:00:00+00:00"" }");
+
+        var leaseUntil = await client.HeartbeatAsync(Key, CancellationToken.None);
+
+        stub.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/devices/heartbeat");
+        stub.LastApiKey.Should().Be(Key);
+        // The deviceId is resolved from the api key; the body must carry no id.
+        var body = JObject.Parse(stub.LastBody!);
+        body.ContainsKey("deviceId").Should().BeFalse();
+
+        leaseUntil.Should().Be(DateTimeOffset.Parse("2026-06-05T12:00:00+00:00",
+            System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public async Task Heartbeat_NullKey_Throws()
+    {
+        var (client, _) = Make(HttpStatusCode.OK, "{}");
+        Func<Task> act = () => client.HeartbeatAsync(null!, CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task Heartbeat_ServerError_Throws()
+    {
+        var (client, _) = Make(HttpStatusCode.Unauthorized, @"{ ""error"": ""nope"" }");
+        Func<Task> act = () => client.HeartbeatAsync(Key, CancellationToken.None);
+        (await act.Should().ThrowAsync<SyncClientException>())
+            .Which.Message.Should().Contain("401");
+    }
+
+    [Fact]
     public async Task RenameDevice_ServerError_Throws()
     {
         var (client, _) = Make(HttpStatusCode.BadRequest, @"{ ""error"": ""bad name"" }");
