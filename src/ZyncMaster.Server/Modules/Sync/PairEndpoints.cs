@@ -316,6 +316,23 @@ public static class PairEndpoints
                 !EndpointsEqual(effectiveSource, existing.Source) ||
                 !EndpointsEqual(effectiveDestination, existing.Destination);
 
+            // FIX 3 — when the DESTINATION changes, the OLD destination still holds the events this
+            // pair created (CalImportPairId == pair.Id). The opt-in /cleanup-destination call is the
+            // immediate path, but if the client never makes it (crash/close) those events would be
+            // orphaned forever. So record the old destination as a pending cleanup; the next run/push
+            // drains it idempotently server-side. Only Graph destinations carry server-managed events
+            // (OutlookCom has none), and we never enqueue the NEW current destination (it must not be
+            // swept). De-dup so repeated re-targets don't pile duplicate entries.
+            var destinationChanged = !EndpointsEqual(effectiveDestination, existing.Destination);
+            var pendingCleanup = existing.PendingCleanupDestinations is { Count: > 0 }
+                ? new List<Endpoint>(existing.PendingCleanupDestinations)
+                : new List<Endpoint>();
+            if (destinationChanged
+                && string.Equals(existing.Destination.Provider, ProviderRegistry.MicrosoftGraph, StringComparison.Ordinal))
+            {
+                EnqueuePendingCleanup(pendingCleanup, existing.Destination, effectiveDestination);
+            }
+
             var updated = existing with
             {
                 Name = req.Name ?? existing.Name,
@@ -325,6 +342,7 @@ public static class PairEndpoints
                 Destination = effectiveDestination,
                 LastRunUtc = endpointChanged ? null : existing.LastRunUtc,
                 LastResult = endpointChanged ? null : existing.LastResult,
+                PendingCleanupDestinations = pendingCleanup,
             };
             await store.UpdateAsync(updated, ct);
             return Results.Ok(updated);
@@ -526,6 +544,20 @@ public static class PairEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
+            // FIX 3 — the opt-in cleanup is the immediate path; once it succeeds with no failures the
+            // server-side pending-cleanup entry for this destination is satisfied and is dequeued so a
+            // later run does not re-enumerate it. A partial cleanup (some deletes failed) leaves the
+            // entry queued so the eventual server-side drain finishes it.
+            if (result.Failures.Count == 0
+                && pair.PendingCleanupDestinations is { Count: > 0 })
+            {
+                var trimmed = pair.PendingCleanupDestinations
+                    .Where(e => !EndpointsEqual(e, destination))
+                    .ToList();
+                if (trimmed.Count != pair.PendingCleanupDestinations.Count)
+                    await store.UpdateAsync(pair with { PendingCleanupDestinations = trimmed }, ct).ConfigureAwait(false);
+            }
+
             return Results.Ok(new { deleted = result.Deleted, failures = result.Failures });
         }).RequireCookieOrIdentityBearer();
 
@@ -565,6 +597,12 @@ public static class PairEndpoints
             if (handle is null)
                 return RunLockBusy();
 
+            // FIX 3 — drain any old destinations queued by a prior re-target BEFORE mirroring, so a
+            // client that never called /cleanup-destination still has its orphans removed eventually.
+            // The lock is held, so this never races another run/cleanup of the same pair.
+            var drained = await DrainPendingCleanupAsync(pair, registry, ct).ConfigureAwait(false);
+            pair = pair with { PendingCleanupDestinations = drained };
+
             var writer = registry.ResolveWriter(pair.Destination);
             var (from, to) = Window(opts.Value);
             var result = await writer
@@ -580,6 +618,7 @@ public static class PairEndpoints
             ISyncPairStore store,
             ISyncRunLock runLock,
             SyncModuleRegistry modules,
+            ProviderRegistry registry,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
         {
@@ -603,6 +642,12 @@ public static class PairEndpoints
             if (handle is null)
                 return RunLockBusy();
 
+            // FIX 3 — drain any old destinations queued by a prior re-target BEFORE the mirror, so a
+            // client that never called /cleanup-destination still has its orphans removed eventually.
+            // The lock is held, so this never races another run/cleanup of the same pair.
+            var drained = await DrainPendingCleanupAsync(pair, registry, ct).ConfigureAwait(false);
+            pair = pair with { PendingCleanupDestinations = drained };
+
             var (from, to) = Window(opts.Value);
 
             // Delegate the read + destructive mirror to the calendar module. The §A-3 transient
@@ -621,6 +666,66 @@ public static class PairEndpoints
             await RecordRunAsync(store, pair, outcome.Result!, ct).ConfigureAwait(false);
             return Results.Ok(outcome.Result);
         }).RequireCookieOrApiKey();
+    }
+
+    // FIX 3 — append `oldDestination` to the pending-cleanup list unless it is the same calendar as
+    // the NEW destination (never schedule a drain of the destination the pair now writes to) or is
+    // already queued. Identity is compared on the raw endpoint triple (provider/accountRef/calendar);
+    // the drain itself is keyed by pair.Id in the Graph layer so even a near-duplicate entry is a
+    // harmless no-op re-enumeration.
+    private static void EnqueuePendingCleanup(List<Endpoint> pending, Endpoint oldDestination, Endpoint newDestination)
+    {
+        if (EndpointsEqual(oldDestination, newDestination))
+            return;
+        if (pending.Any(e => EndpointsEqual(e, oldDestination)))
+            return;
+        pending.Add(oldDestination);
+    }
+
+    // FIX 3 — drain the pair's pending cleanup destinations idempotently at the start of a run/push.
+    // Each entry is a destination this pair previously wrote to and was re-targeted away from; the
+    // Graph cleanup deletes ONLY the events carrying CalImportPairId == pair.Id, so re-running a
+    // partially-completed drain only re-deletes what is still present. An entry that the pair now
+    // writes to again (it equals the CURRENT destination) is dropped WITHOUT deleting — those events
+    // are live again. A transient failure leaves the entry queued for the next run; a fully drained
+    // entry (no failures) is removed. Returns the updated pending list to persist.
+    //
+    // NOTE: the caller holds the per-pair run lock, so this never races a concurrent sync/cleanup of
+    // the same pair. It runs BEFORE the mirror so a re-targeted pair's old events are gone before new
+    // ones are written.
+    private static async Task<List<Endpoint>> DrainPendingCleanupAsync(
+        SyncPair pair, ProviderRegistry registry, CancellationToken ct)
+    {
+        if (pair.PendingCleanupDestinations is not { Count: > 0 })
+            return pair.PendingCleanupDestinations ?? new List<Endpoint>();
+
+        var remaining = new List<Endpoint>();
+        foreach (var dest in pair.PendingCleanupDestinations)
+        {
+            // Never clean the pair's CURRENT destination (events there are live again) and never
+            // clean a non-Graph endpoint (no server-managed events to remove): drop it silently.
+            if (EndpointsEqual(dest, pair.Destination)
+                || !string.Equals(dest.Provider, ProviderRegistry.MicrosoftGraph, StringComparison.Ordinal))
+                continue;
+
+            try
+            {
+                var writer = registry.ResolveWriter(dest);
+                var result = await writer.CleanupManagedAsync(dest.CalendarId, pair.Id, ct).ConfigureAwait(false);
+                // Any failure (transient or otherwise) means some managed events may remain; keep the
+                // entry queued so the next run re-enumerates and finishes the drain.
+                if (result.Failures.Count > 0)
+                    remaining.Add(dest);
+            }
+            catch
+            {
+                // A hard failure (e.g. token blip, transport drop) must not abort the whole run; keep
+                // the entry queued and let the next run retry. The mirror still proceeds.
+                remaining.Add(dest);
+            }
+        }
+
+        return remaining;
     }
 
     // Endpoint identity for the §F2 "did this side change?" check: a change to the provider,

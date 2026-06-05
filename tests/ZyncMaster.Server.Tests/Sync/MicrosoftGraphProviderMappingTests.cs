@@ -121,7 +121,9 @@ public class MicrosoftGraphProviderMappingTests
 
         var records = await ReadAsync(json);
 
-        records.Select(r => r.Id).Should().BeEquivalentTo(new[] { "keep" });
+        // The empty-id event is dropped; the kept one maps to its per-occurrence id (FIX 1).
+        records.Should().ContainSingle().Which.Id.Should()
+            .Be(OccurrenceId.For("keep", new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)));
     }
 
     [Fact]
@@ -181,6 +183,75 @@ public class MicrosoftGraphProviderMappingTests
         var records = await ReadAsync("""{ "value": [] }""");
 
         records.Should().BeEmpty();
+    }
+
+    // ── FIX 1 — recurring-series occurrences must NOT collapse onto one Id ──────────────────
+    // calendarView expands a recurring series into N occurrences that all share the SAME iCalUId
+    // (and the same series event id). Before the fix MapEvent set Id = iCalUId, so the N
+    // occurrences collapsed onto ONE AppointmentRecord.Id — losing N-1 events and making the
+    // downstream mirror UPDATE one destination event N times (orphaning the rest on the next run).
+    [Fact]
+    public async Task Recurring_occurrences_sharing_iCalUId_get_distinct_ids()
+    {
+        const string json = """
+        { "value": [
+          { "id": "occ-mon", "iCalUId": "SERIES-ABC", "subject": "Standup",
+            "start": { "dateTime": "2026-06-01T09:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-06-01T09:15:00.0000000", "timeZone": "UTC" } },
+          { "id": "occ-tue", "iCalUId": "SERIES-ABC", "subject": "Standup",
+            "start": { "dateTime": "2026-06-02T09:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-06-02T09:15:00.0000000", "timeZone": "UTC" } },
+          { "id": "occ-wed", "iCalUId": "SERIES-ABC", "subject": "Standup",
+            "start": { "dateTime": "2026-06-03T09:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-06-03T09:15:00.0000000", "timeZone": "UTC" } } ] }
+        """;
+
+        var records = await ReadAsync(json);
+
+        records.Should().HaveCount(3);
+        records.Select(r => r.Id).Distinct().Should().HaveCount(3,
+            "each occurrence of a recurring series must map to its own distinct upsert id");
+    }
+
+    [Fact]
+    public async Task Recurring_occurrence_id_is_stable_and_matches_the_COM_path()
+    {
+        // The same occurrence (same series id + same start) must resolve to the SAME id on every
+        // run (idempotent upsert), AND must equal what the COM path (OccurrenceId.For) produces so
+        // a Graph→Graph mirror and a COM→Graph mirror of the same source agree on the key.
+        const string json = """
+        { "value": [
+          { "id": "occ-1", "iCalUId": "SERIES-XYZ", "subject": "Weekly",
+            "start": { "dateTime": "2026-06-10T14:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-06-10T15:00:00.0000000", "timeZone": "UTC" } } ] }
+        """;
+
+        var first = await ReadAsync(json);
+        var second = await ReadAsync(json);
+
+        var start = new DateTimeOffset(2026, 6, 10, 14, 0, 0, TimeSpan.Zero);
+        var expected = OccurrenceId.For("SERIES-XYZ", start);
+
+        first.Single().Id.Should().Be(expected);
+        second.Single().Id.Should().Be(first.Single().Id, "the occurrence id must be stable across runs");
+    }
+
+    [Fact]
+    public async Task Event_without_iCalUId_folds_the_event_id_with_the_start()
+    {
+        // No iCalUId -> stableId falls back to the Graph event id, still folded with the start so a
+        // single (non-recurring) event keeps a deterministic, start-qualified key.
+        const string json = """
+        { "value": [
+          { "id": "single-1", "subject": "One-off",
+            "start": { "dateTime": "2026-06-11T08:00:00.0000000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-06-11T09:00:00.0000000", "timeZone": "UTC" } } ] }
+        """;
+
+        var records = await ReadAsync(json);
+
+        var expected = OccurrenceId.For("single-1", new DateTimeOffset(2026, 6, 11, 8, 0, 0, TimeSpan.Zero));
+        records.Single().Id.Should().Be(expected);
     }
 
     [Theory]

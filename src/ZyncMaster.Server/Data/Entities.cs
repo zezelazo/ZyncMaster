@@ -113,6 +113,11 @@ public sealed class SyncPairRow
     public string State { get; set; } = "active";
     public DateTimeOffset? LastRunUtc { get; set; }
     public string? LastResultJson { get; set; }
+
+    // JSON array of Endpoints this pair must still clean up after a re-target (FIX 3). Null/empty
+    // for the common case (no pending drains). Additive + nullable so the migration is purely
+    // additive and pre-FIX-3 rows keep working unchanged.
+    public string? PendingCleanupJson { get; set; }
 }
 
 // Server-side run lock for a sync pair (plan v2 §B-1). Exactly one row per pair, keyed by

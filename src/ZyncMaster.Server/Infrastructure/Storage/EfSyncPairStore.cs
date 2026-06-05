@@ -105,6 +105,11 @@ public sealed class EfSyncPairStore : ISyncPairStore
         row.State = pair.State;
         row.LastRunUtc = pair.LastRunUtc;
         row.LastResultJson = pair.LastResult is null ? null : PairJson.Serialize(pair.LastResult);
+        // Persist the pending-cleanup list only when non-empty; an empty list stores null so the
+        // common no-drain case leaves the column null (matching pre-FIX-3 rows).
+        row.PendingCleanupJson = pair.PendingCleanupDestinations is { Count: > 0 } pend
+            ? PairJson.Serialize(pend)
+            : null;
     }
 
     private static SyncPair ToDomain(SyncPairRow r) => new()
@@ -117,5 +122,8 @@ public sealed class EfSyncPairStore : ISyncPairStore
         State = r.State,
         LastRunUtc = r.LastRunUtc,
         LastResult = r.LastResultJson is null ? null : PairJson.Deserialize<MirrorResult>(r.LastResultJson),
+        PendingCleanupDestinations = string.IsNullOrEmpty(r.PendingCleanupJson)
+            ? new List<Endpoint>()
+            : PairJson.Deserialize<List<Endpoint>>(r.PendingCleanupJson),
     };
 }

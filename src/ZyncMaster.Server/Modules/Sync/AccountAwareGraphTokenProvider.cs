@@ -55,7 +55,30 @@ public sealed class AccountAwareGraphTokenProvider : IGraphTokenProvider
             if (refreshToken is null)
                 throw new AuthenticationFailedException("No Microsoft account is connected for this account id.");
 
-            var result = await _tokens.RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+            TokenResult result;
+            try
+            {
+                result = await _tokens.RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+            }
+            catch (AuthenticationFailedException ex) when (IsInvalidGrant(ex))
+            {
+                // FIX 4 — concurrent refresh-token rotation. The SAME Microsoft account can be the
+                // SOURCE of one provider and the DESTINATION of another (e.g. mirroring between two
+                // calendars of one mailbox). ResolveReader/ResolveWriter build SEPARATE provider
+                // instances with separate gates/caches, so both can call RefreshAsync at once. Azure
+                // AD rotates the refresh token on each use and INVALIDATES the prior one, so the
+                // second caller's token is now stale -> invalid_grant. The sibling that won the race
+                // has already PERSISTED the rotated token to the store, so re-reading it once and
+                // retrying recovers the loser without a destructive re-auth. If the store still holds
+                // the same (already-consumed) token, this was a genuine invalid_grant (revoked /
+                // expired consent) and the retry will fail the same way, surfacing the real error.
+                var rotated = await _adapter.ResolveRefreshTokenAsync(accountId, cancellationToken).ConfigureAwait(false);
+                if (rotated is null || string.Equals(rotated, refreshToken, StringComparison.Ordinal))
+                    throw;
+
+                refreshToken = rotated;
+                result = await _tokens.RefreshAsync(rotated, cancellationToken).ConfigureAwait(false);
+            }
 
             _cachedToken = result.AccessToken;
             _expiresUtc = result.ExpiresUtc;
@@ -71,4 +94,11 @@ public sealed class AccountAwareGraphTokenProvider : IGraphTokenProvider
             _gate.Release();
         }
     }
+
+    // The Microsoft token endpoint reports a stale/rotated/revoked refresh token as the OAuth
+    // error code "invalid_grant"; MicrosoftTokenService surfaces it inside the
+    // AuthenticationFailedException message. Match on that token so a concurrent-rotation race
+    // (recoverable) is told apart from any other auth failure (which must propagate as-is).
+    private static bool IsInvalidGrant(AuthenticationFailedException ex) =>
+        ex.Message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase);
 }
