@@ -85,6 +85,7 @@ public sealed class PairRunnerWindowTests
         public Task<int> CountManagedAsync(string bearer, string id, Endpoint destination, CancellationToken ct) => throw new NotImplementedException();
         public Task DeletePairAsync(string bearer, string id, CancellationToken ct) => throw new NotImplementedException();
         public Task<MirrorResult> RunPairAsync(string apiKey, string id, CancellationToken ct) => throw new NotImplementedException();
+        public Task<DateTimeOffset?> HeartbeatAsync(string apiKey, CancellationToken ct) => throw new NotImplementedException();
         public Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct) => throw new NotImplementedException();
         public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct) => throw new NotImplementedException();
         public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct) => throw new NotImplementedException();
