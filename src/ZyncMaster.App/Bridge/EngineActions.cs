@@ -43,8 +43,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly CalendarConnectService _calendarConnect;
     private readonly IOutlookComProbe _comProbe;
     private readonly ICalendarSource _comSource;
+    private readonly ICalExportRunner _calExportRunner;
     private readonly IClock _clock;
     private readonly HttpClient _http;
+    private readonly IAppLogger _logger;
     private readonly string _healthUrl;
 
     // One warm-up probe must fail fast, not hang on the App's default HttpClient timeout: the UI
@@ -76,8 +78,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
         CalendarConnectService calendarConnect,
         IOutlookComProbe comProbe,
         ICalendarSource comSource,
+        ICalExportRunner calExportRunner,
         IClock clock,
         HttpClient http,
+        IAppLogger logger,
         HttpClient? ownedHttp = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
@@ -97,8 +101,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _calendarConnect = calendarConnect ?? throw new ArgumentNullException(nameof(calendarConnect));
         _comProbe = comProbe ?? throw new ArgumentNullException(nameof(comProbe));
         _comSource = comSource ?? throw new ArgumentNullException(nameof(comSource));
+        _calExportRunner = calExportRunner ?? throw new ArgumentNullException(nameof(calExportRunner));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _http = http ?? throw new ArgumentNullException(nameof(http));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _healthUrl = $"{(_engineSettings.ServerBaseUrl ?? "").TrimEnd('/')}/health";
         _ownedHttp = ownedHttp;
     }
@@ -141,6 +147,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         }
         catch (HttpRequestException ex)
         {
+            _logger.Log(LogLevel.Warning, $"Server health check: unreachable ({_healthUrl}).", ex);
             return ServerHealth.Unreachable(ex.Message);
         }
     }
@@ -169,9 +176,19 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public async Task<SyncResult> SyncNowAsync(CancellationToken ct = default)
     {
         _status = SyncStatus.Syncing;
-        var result = await _sync.RunCycleAsync(ct);
-        RecordResult(result);
-        return result;
+        _logger.Log(LogLevel.Info, "Sync now: starting cycle.");
+        try
+        {
+            var result = await _sync.RunCycleAsync(ct);
+            RecordResult(result);
+            _logger.Log(LogLevel.Info, $"Sync now: finished ({_lastMessage}).");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Error, "Sync now: cycle failed.", ex);
+            throw;
+        }
     }
 
     public async Task<PairingOutcome> PairAsync(CancellationToken ct = default)
@@ -216,6 +233,20 @@ public sealed class EngineActions : IEngineActions, IDisposable
         if (accountRef == null) throw new ArgumentNullException(nameof(accountRef));
         var bearer = await RequireBearerAsync(ct);
         return await _pairs.ListCalendarsAsync(bearer, accountRef, ct);
+    }
+
+    public async Task<IReadOnlyList<string>> ListLocalCalendarsAsync(CancellationToken ct = default)
+    {
+        // COM-only: enumerating local Outlook calendars requires Outlook Classic. Gate on the same
+        // capability the UI uses to show the COM source tile, so a machine without Outlook gets a
+        // clear error instead of a process-launch failure.
+        if (!_comProbe.IsAvailable())
+            throw new InvalidOperationException("Outlook Classic is not available on this device.");
+
+        _logger.Log(LogLevel.Info, "List local calendars: enumerating Outlook Classic calendars via CalExport.");
+        var names = await _calExportRunner.ListCalendarsAsync(ct);
+        _logger.Log(LogLevel.Info, $"List local calendars: found {names.Count} calendar(s).");
+        return names;
     }
 
     public async Task<CalendarInfo> CreateCalendarAsync(string accountRef, string name, CancellationToken ct = default)
@@ -296,6 +327,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
     {
         if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
 
+        _logger.Log(LogLevel.Info, $"Sync now: requested for pair '{id}'.");
+
         // Run is dual-scheme on the server (RequireCookieOrApiKey); the device drives it under its
         // key, so this human "Sync now" path uses the device api key for the actual push/run.
         var key = await RequireKeyAsync(ct);
@@ -316,12 +349,26 @@ public sealed class EngineActions : IEngineActions, IDisposable
         }
 
         if (pair == null)
+        {
+            _logger.Log(LogLevel.Warning, $"Sync now: pair '{id}' was not found.");
             throw new InvalidOperationException($"Sync pair '{id}' was not found.");
+        }
 
         // PairRunner is the single source of truth for the COM-vs-Graph decision and the
         // [now, now + SyncWindowDays] read window, shared with PairScheduler.
-        return await PairRunner.RunOnceAsync(
-            _pairs, _comSource, pair, key, _clock.UtcNow, _engineSettings, ct);
+        try
+        {
+            var result = await PairRunner.RunOnceAsync(
+                _pairs, _comSource, pair, key, _clock.UtcNow, _engineSettings, ct, _logger);
+            _logger.Log(LogLevel.Info,
+                $"Sync now: pair '{id}' done (created {result.Created}, updated {result.Updated}, deleted {result.Deleted}, skipped {result.Skipped}).");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Error, $"Sync now: pair '{id}' failed.", ex);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
@@ -559,7 +606,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
     {
         var key = await _keys.LoadAsync(ct);
         if (string.IsNullOrEmpty(key))
+        {
+            _logger.Log(LogLevel.Warning, "Operation requires a paired device, but no device key is present.");
             throw new InvalidOperationException("This device is not paired yet. Pair it before managing sync pairs.");
+        }
         return key;
     }
 
@@ -571,7 +621,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
     {
         var tokens = await _identityCache.LoadAsync(ct);
         if (tokens is null || string.IsNullOrEmpty(tokens.AccessToken))
+        {
+            _logger.Log(LogLevel.Warning, "Operation requires sign-in, but no identity token is present.");
             throw new InvalidOperationException("You must be signed in to manage accounts and sync pairs.");
+        }
         return tokens.AccessToken;
     }
 
@@ -650,12 +703,21 @@ public sealed class EngineActions : IEngineActions, IDisposable
         [Newtonsoft.Json.JsonProperty("calendarId")] public string? CalendarId { get; set; }
         [Newtonsoft.Json.JsonProperty("calendarName")] public string? CalendarName { get; set; }
 
+        // Feature 2 source selection. Omitted by the UI for the destination and for a single-calendar
+        // source, so a null list / false flag preserves the legacy single-calendar behaviour.
+        [Newtonsoft.Json.JsonProperty("allCalendars")] public bool? AllCalendars { get; set; }
+        [Newtonsoft.Json.JsonProperty("calendarIds")] public System.Collections.Generic.List<string>? CalendarIds { get; set; }
+        [Newtonsoft.Json.JsonProperty("calendarNames")] public System.Collections.Generic.List<string>? CalendarNames { get; set; }
+
         public Endpoint ToEndpoint() => new()
         {
             Provider = Provider ?? "",
             AccountRef = AccountRef,
             CalendarId = CalendarId ?? "",
             CalendarName = CalendarName ?? "",
+            AllCalendars = AllCalendars ?? false,
+            CalendarIds = CalendarIds is { Count: > 0 } ? CalendarIds : null,
+            CalendarNames = CalendarNames is { Count: > 0 } ? CalendarNames : null,
         };
     }
 }

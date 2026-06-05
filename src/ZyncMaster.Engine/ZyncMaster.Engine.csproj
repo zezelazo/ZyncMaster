@@ -11,4 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ZyncMaster.Core\ZyncMaster.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ZyncMaster.Engine.Tests" />
+  </ItemGroup>
 </Project>

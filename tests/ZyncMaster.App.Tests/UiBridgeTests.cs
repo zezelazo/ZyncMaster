@@ -124,6 +124,16 @@ public class UiBridgeTests
             return CalendarsToReturn;
         }
 
+        public int ListLocalCalendarsCalls;
+        public IReadOnlyList<string> LocalCalendarsToReturn = new List<string> { "Calendar [me@x.com]", "Personal [me@x.com]" };
+
+        public async Task<IReadOnlyList<string>> ListLocalCalendarsAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            ListLocalCalendarsCalls++;
+            return LocalCalendarsToReturn;
+        }
+
         public string? CreateCalendarAccountRefArg;
         public string? CreateCalendarNameArg;
         public CalendarInfo CreatedCalendarToReturn = new() { Id = "new-cal", DisplayName = "Created", IsDefault = false };
@@ -585,6 +595,24 @@ public class UiBridgeTests
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
         var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
         payload[0].GetProperty("id").GetString().Should().Be("cal-1");
+    }
+
+    // Feature 2 — listLocalCalendars (no payload) returns the device's local Outlook calendar names.
+    [Fact]
+    public void ListLocalCalendars_calls_engine_and_returns_display_names()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("listLocalCalendars", "ref-9"));
+
+        engine.ListLocalCalendarsCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload[0].GetString().Should().Be("Calendar [me@x.com]");
+        payload[1].GetString().Should().Be("Personal [me@x.com]");
     }
 
     [Fact]

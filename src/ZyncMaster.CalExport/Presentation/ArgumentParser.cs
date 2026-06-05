@@ -14,9 +14,11 @@ public sealed class ArgumentParser
     {
         if (args == null) throw new ArgumentNullException(nameof(args));
 
-        bool    autoMode   = false;
-        string? configPath = null;
-        string? outputPath = null;
+        bool    autoMode      = false;
+        string? configPath    = null;
+        string? outputPath    = null;
+        bool    verbose       = false;
+        bool    listCalendars = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -41,6 +43,16 @@ public sealed class ArgumentParser
                     outputPath = args[++i];
                     break;
 
+                case "-v":
+                case "--verbose":
+                    verbose = true;
+                    break;
+
+                case "-l":
+                case "--list-calendars":
+                    listCalendars = true;
+                    break;
+
                 default:
                     throw new ArgumentParsingException($"Unknown argument '{args[i]}'.");
             }
@@ -48,9 +60,11 @@ public sealed class ArgumentParser
 
         return new ParsedArguments
         {
-            AutoMode   = autoMode,
-            ConfigPath = configPath,
-            OutputPath = outputPath,
+            AutoMode      = autoMode,
+            ConfigPath    = configPath,
+            OutputPath    = outputPath,
+            Verbose       = verbose,
+            ListCalendars = listCalendars,
         };
     }
 }

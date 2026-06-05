@@ -34,6 +34,10 @@ public class PairExportAndEndpointEditTests : IClassFixture<ServerTestFactory>
         public DateTimeOffset LastTo;
         public bool LastPreserveLocalTime;
         public Func<Exception>? ThrowFactory;
+        public List<CalendarOption> Calendars = new();
+
+        public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<CalendarOption>>(Calendars);
 
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
             string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,

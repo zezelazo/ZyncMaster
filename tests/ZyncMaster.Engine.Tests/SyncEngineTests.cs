@@ -27,11 +27,14 @@ public sealed class SyncEngineTests
         public IReadOnlyList<AppointmentRecord> Result { get; set; } = Array.Empty<AppointmentRecord>();
         public Exception? Throw { get; set; }
 
-        public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct)
+        public IReadOnlyList<string>? Selection { get; private set; }
+
+        public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, IReadOnlyList<string>? calendarNames, CancellationToken ct)
         {
             Called = true;
             FromUtc = fromUtc;
             ToUtc = toUtc;
+            Selection = calendarNames;
             if (Throw != null) throw Throw;
             return Task.FromResult(Result);
         }

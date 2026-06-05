@@ -30,6 +30,9 @@ public sealed class OutlookComSourceTests
 
         public Task ExportSimpleAsync(int year, int month, IReadOnlyList<string>? calendarNames, bool includeCancelled, string outputFilePath, CancellationToken ct)
             => Task.CompletedTask;
+
+        public Task<IReadOnlyList<string>> ListCalendarsAsync(CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<string>>(new List<string>());
     }
 
     private static string EmptyMonth(int year, int month) => $@"{{
@@ -79,7 +82,7 @@ public sealed class OutlookComSourceTests
         var from = new DateTimeOffset(2025, 5, 5, 0, 0, 0, TimeSpan.Zero);
         var to   = new DateTimeOffset(2025, 5, 20, 0, 0, 0, TimeSpan.Zero);
 
-        var result = await sut.ReadWindowAsync(from, to, CancellationToken.None);
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
 
         runner.Calls.Should().HaveCount(1);
         runner.Calls[0].Year.Should().Be(2025);
@@ -104,7 +107,7 @@ public sealed class OutlookComSourceTests
         var from = new DateTimeOffset(2025, 4, 28, 0, 0, 0, TimeSpan.Zero);
         var to   = new DateTimeOffset(2025, 5, 5, 0, 0, 0, TimeSpan.Zero);
 
-        var result = await sut.ReadWindowAsync(from, to, CancellationToken.None);
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
 
         runner.Calls.Select(c => (c.Year, c.Month)).Should().BeEquivalentTo(new[] { (2025, 4), (2025, 5) });
         result.Select(e => e.Subject).Should().BeEquivalentTo(new[] { "AprilInside", "MayInside" });
@@ -127,7 +130,7 @@ public sealed class OutlookComSourceTests
         var from = new DateTimeOffset(2025, 4, 1, 0, 0, 0, TimeSpan.Zero);
         var to   = new DateTimeOffset(2025, 5, 31, 0, 0, 0, TimeSpan.Zero);
 
-        var result = await sut.ReadWindowAsync(from, to, CancellationToken.None);
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
 
         result.Should().ContainSingle();
         result[0].Subject.Should().Be("FromApril");
@@ -145,7 +148,7 @@ public sealed class OutlookComSourceTests
         var from = new DateTimeOffset(2025, 5, 5, 0, 0, 0, TimeSpan.Zero);
         var to   = new DateTimeOffset(2025, 5, 20, 0, 0, 0, TimeSpan.Zero);
 
-        var result = await sut.ReadWindowAsync(from, to, CancellationToken.None);
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
 
         result.Select(e => e.Subject).Should().ContainSingle().Which.Should().Be("OnFrom");
     }
@@ -162,7 +165,7 @@ public sealed class OutlookComSourceTests
         var from = new DateTimeOffset(2025, 5, 10, 0, 0, 0, TimeSpan.Zero);
         var to   = new DateTimeOffset(2025, 5, 20, 0, 0, 0, TimeSpan.Zero);
 
-        var result = await sut.ReadWindowAsync(from, to, CancellationToken.None);
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
 
         result.Should().BeEmpty();
     }
@@ -179,7 +182,7 @@ public sealed class OutlookComSourceTests
         var from = new DateTimeOffset(2025, 5, 1, 0, 0, 0, TimeSpan.Zero);
         var to   = new DateTimeOffset(2025, 5, 31, 0, 0, 0, TimeSpan.Zero);
 
-        var result = await sut.ReadWindowAsync(from, to, CancellationToken.None);
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
 
         result.Select(e => e.Subject).Should().ContainInOrder("Early", "Late");
     }
@@ -194,10 +197,40 @@ public sealed class OutlookComSourceTests
         var from = new DateTimeOffset(2025, 5, 1, 0, 0, 0, TimeSpan.Zero);
         var to   = new DateTimeOffset(2025, 5, 2, 0, 0, 0, TimeSpan.Zero);
 
-        await sut.ReadWindowAsync(from, to, CancellationToken.None);
+        await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
 
         runner.Calls.Should().NotBeEmpty();
         runner.Calls[0].Calendars.Should().BeEquivalentTo(calendars);
+    }
+
+    // Feature 2 — a per-pair selection passed to ReadWindowAsync overrides the constructor default.
+    [Fact]
+    public async Task ReadWindow_PerCallSelection_OverridesConstructorDefault()
+    {
+        var runner = new FakeCalExportRunner(new());
+        var sut = BuildSut(runner, new[] { "DeviceDefault" });
+
+        var from = new DateTimeOffset(2025, 5, 1, 0, 0, 0, TimeSpan.Zero);
+        var to   = new DateTimeOffset(2025, 5, 2, 0, 0, 0, TimeSpan.Zero);
+
+        await sut.ReadWindowAsync(from, to, new[] { "Work", "Personal" }, CancellationToken.None);
+
+        runner.Calls[0].Calendars.Should().BeEquivalentTo(new[] { "Work", "Personal" });
+    }
+
+    // null selection + null constructor default => "all calendars" (the runner receives null).
+    [Fact]
+    public async Task ReadWindow_NullSelectionAndNoDefault_ReadsAll()
+    {
+        var runner = new FakeCalExportRunner(new());
+        var sut = BuildSut(runner, null);
+
+        var from = new DateTimeOffset(2025, 5, 1, 0, 0, 0, TimeSpan.Zero);
+        var to   = new DateTimeOffset(2025, 5, 2, 0, 0, 0, TimeSpan.Zero);
+
+        await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
+
+        runner.Calls[0].Calendars.Should().BeNull();
     }
 
     [Fact]

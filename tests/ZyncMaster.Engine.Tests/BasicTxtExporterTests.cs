@@ -36,6 +36,9 @@ public sealed class BasicTxtExporterTests
             OutputFilePath = outputFilePath;
             return Task.CompletedTask;
         }
+
+        public Task<IReadOnlyList<string>> ListCalendarsAsync(CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<string>>(new List<string>());
     }
 
     [Fact]

@@ -26,6 +26,7 @@ var exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? 
 var mode = "loop";
 int? intervalOverride = null;
 string? serverOverride = null;
+var verbose = string.Equals(Environment.GetEnvironmentVariable("ZYNCMASTER_VERBOSE"), "1", StringComparison.Ordinal);
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -37,6 +38,9 @@ for (var i = 0; i < args.Length; i++)
             break;
         case "--once":
             mode = "once";
+            break;
+        case "--verbose":
+            verbose = true;
             break;
         case "--interval":
             if (i + 1 >= args.Length || !int.TryParse(args[++i], out var minutes))
@@ -59,7 +63,7 @@ for (var i = 0; i < args.Length; i++)
         default:
             Console.Error.WriteLine($"Error: unknown argument '{arg}'.");
             Console.Error.WriteLine();
-            Console.Error.WriteLine("Usage: ZyncMaster.Cli [--pair | --once] [--interval <minutes>] [--server <url>]");
+            Console.Error.WriteLine("Usage: ZyncMaster.Cli [--pair | --once] [--interval <minutes>] [--server <url>] [--verbose]");
             Environment.Exit(1);
             return;
     }
@@ -107,6 +111,15 @@ catch (SettingsValidationException ex)
 // --- Composition root -------------------------------------------------------
 var clock = new SystemClock();
 
+// Device-side local logger: default Warning/Error, --verbose (or ZYNCMASTER_VERBOSE=1) -> Debug.
+// Logs the resolved per-day file path up front so the user knows where to look.
+var logger = new DailyFileLogger(
+    DailyFileLogger.DefaultLogDirectory(),
+    verbose ? LogLevel.Debug : LogLevel.Warning,
+    () => clock.UtcNow);
+logger.Log(LogLevel.Info, $"Logging to {logger.CurrentLogFilePath()} (verbose={verbose}).");
+Console.WriteLine($"Logging to {logger.CurrentLogFilePath()}");
+
 var keyStorePath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
     "ZyncMaster", "Cli", "device.key");
@@ -116,9 +129,9 @@ using var http = new HttpClient();
 var pairingClient = new HttpPairingClient(http, engineSettings.ServerBaseUrl);
 var syncClient = new HttpSyncClient(http, engineSettings.ServerBaseUrl);
 
-var calExportRunner = new CalExportRunner(engineSettings.CalExportPath);
+var calExportRunner = new CalExportRunner(engineSettings.CalExportPath, logger);
 var calendarReader = new CompleteCalendarReader();
-var calendarSource = new OutlookComSource(calExportRunner, calendarReader, engineSettings.CalendarNames);
+var calendarSource = new OutlookComSource(calExportRunner, calendarReader, engineSettings.CalendarNames, logger);
 
 var browser = new DefaultBrowserLauncher();
 var pairingService = new PairingService(pairingClient, browser, keyStore, engineSettings);

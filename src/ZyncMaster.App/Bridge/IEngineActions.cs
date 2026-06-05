@@ -26,6 +26,12 @@ public interface IEngineActions
     Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default);
 
+    // Feature 2 — enumerate the LOCAL Outlook Classic (COM) calendars of this device, so the wizard
+    // can offer a multi-select for an OutlookCom source. COM-only: throws when Outlook is unavailable
+    // (the UI gates this behind the same OutlookCom capability that shows the COM source tile).
+    // Returns the calendar display names (the "{Name} [{store}]" labels used by the source selection).
+    Task<IReadOnlyList<string>> ListLocalCalendarsAsync(CancellationToken ct = default);
+
     // Creates a new calendar in a connected account (POST /api/accounts/{accountRef}/calendars)
     // and returns it. Used by the wizard's per-account "+ New calendar" action.
     Task<CalendarInfo> CreateCalendarAsync(string accountRef, string name, CancellationToken ct = default);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -292,6 +293,13 @@ public sealed class HttpPairsClient : IPairsClient
             ["calendarName"] = e.CalendarName,
         };
         if (e.AccountRef != null) obj["accountRef"] = e.AccountRef;
+
+        // Feature 2 source selection. Omit when unset so legacy pairs round-trip byte-identically.
+        if (e.AllCalendars) obj["allCalendars"] = true;
+        if (e.CalendarIds is { Count: > 0 })
+            obj["calendarIds"] = new JArray(e.CalendarIds.Cast<object>().ToArray());
+        if (e.CalendarNames is { Count: > 0 })
+            obj["calendarNames"] = new JArray(e.CalendarNames.Cast<object>().ToArray());
         return obj;
     }
 
@@ -304,7 +312,24 @@ public sealed class HttpPairsClient : IPairsClient
             AccountRef = obj["accountRef"]?.Value<string>(),
             CalendarId = obj["calendarId"]?.Value<string>() ?? "",
             CalendarName = obj["calendarName"]?.Value<string>() ?? "",
+            AllCalendars = obj["allCalendars"]?.Value<bool>() ?? false,
+            CalendarIds = ParseStringArray(obj["calendarIds"]),
+            CalendarNames = ParseStringArray(obj["calendarNames"]),
         };
+    }
+
+    private static IReadOnlyList<string>? ParseStringArray(JToken? token)
+    {
+        if (token is not JArray arr || arr.Count == 0)
+            return null;
+        var list = new List<string>(arr.Count);
+        foreach (var item in arr)
+        {
+            var s = item?.Value<string>();
+            if (!string.IsNullOrEmpty(s))
+                list.Add(s);
+        }
+        return list.Count > 0 ? list : null;
     }
 
     private static SyncPair ParsePair(JObject obj) => new SyncPair

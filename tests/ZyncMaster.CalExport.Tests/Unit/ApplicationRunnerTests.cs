@@ -113,6 +113,47 @@ public sealed class ApplicationRunnerTests
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // RunListCalendars (--list-calendars headless enumeration, Feature 2)
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ListCalendars_NoOutput_WritesJsonToConsole_NeverExports()
+    {
+        _calSvc.Setup(c => c.GetCalendarFolders()).Returns(MakeFolders("Work [w@x.com]", "Personal [p@x.com]"));
+        string? written = null;
+        _console.Setup(c => c.WriteLine(It.IsAny<string>())).Callback<string>(s => written = s);
+
+        var sut = BuildSut();
+        sut.Run(new ParsedArguments { ListCalendars = true });
+
+        written.Should().NotBeNull();
+        var arr = JArray.Parse(written!);
+        arr.Select(t => t["displayName"]!.Value<string>())
+            .Should().BeEquivalentTo(new[] { "Work [w@x.com]", "Personal [p@x.com]" });
+        // List mode is read-only: settings are never loaded and no export ever runs.
+        _settingsRepo.Verify(r => r.LoadOrCreateDefault(It.IsAny<string>()), Times.Never);
+        _calSvc.Verify(c => c.GetAppointments(It.IsAny<ExportParameters>()), Times.Never);
+    }
+
+    [Fact]
+    public void ListCalendars_WithOutput_WritesCalendarsJsonFile()
+    {
+        _calSvc.Setup(c => c.GetCalendarFolders()).Returns(MakeFolders("Work [w@x.com]"));
+        _fs.Setup(f => f.DirectoryExists(It.IsAny<string>())).Returns(true);
+        string? path = null; string? content = null;
+        _fs.Setup(f => f.WriteAllText(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Encoding>()))
+           .Callback<string, string, Encoding>((p, c, _) => { path = p; content = c; });
+
+        var sut = BuildSut();
+        sut.Run(new ParsedArguments { ListCalendars = true, OutputPath = "D:\\out" });
+
+        path.Should().NotBeNull();
+        Path.GetFileName(path!).Should().Be("calendars.json");
+        JArray.Parse(content!).Should().HaveCount(1);
+        _calSvc.Verify(c => c.GetAppointments(It.IsAny<ExportParameters>()), Times.Never);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // RunAutoMode
     // ─────────────────────────────────────────────────────────────────────
 
@@ -915,8 +956,11 @@ public sealed class ApplicationRunnerTests
         BuildSut().Run(MakeArgs(autoMode: true));
 
         _console.Verify(c => c.WriteLine(It.Is<string?>(s => s != null && s.Contains("Warning") && s.Contains("Missing"))), Times.Once);
-        // No matches -> matcher returns null -> exports against all calendars.
-        _calSvc.Verify(c => c.GetAppointments(It.Is<ExportParameters>(p => p.SelectedFolders == null)), Times.Once);
+        // A selection WAS provided ("Missing") but matched nothing: the matcher returns an EMPTY
+        // list (NOT null), so the export targets zero calendars instead of silently falling back to
+        // ALL calendars. SelectedFolders must be non-null and empty.
+        _calSvc.Verify(c => c.GetAppointments(It.Is<ExportParameters>(
+            p => p.SelectedFolders != null && p.SelectedFolders.Count == 0)), Times.Once);
     }
 
     // ── Constructor null-guards ──────────────────────────────────────────

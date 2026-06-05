@@ -61,6 +61,12 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string accountRef, CancellationToken ct = default)
         => throw NotConfigured();
 
+    // No engine yet → no CalExport runner to enumerate local calendars. Report an empty list so the
+    // wizard's COM source step degrades to "no calendars" rather than throwing (it is gated by the
+    // OutlookCom capability, which is also off when unconfigured).
+    public Task<IReadOnlyList<string>> ListLocalCalendarsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>(new List<string>());
+
     public Task<CalendarInfo> CreateCalendarAsync(string accountRef, string name, CancellationToken ct = default)
         => throw NotConfigured();
 

@@ -39,11 +39,13 @@ public sealed class PairSchedulerTests
         public int ReadCount;
         public DateTimeOffset LastFrom;
         public DateTimeOffset LastTo;
-        public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct)
+        public IReadOnlyList<string>? LastSelection;
+        public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, IReadOnlyList<string>? calendarNames, CancellationToken ct)
         {
             Interlocked.Increment(ref ReadCount);
             LastFrom = fromUtc;
             LastTo = toUtc;
+            LastSelection = calendarNames;
             IReadOnlyList<AppointmentRecord> list = new[] { new AppointmentRecord { Id = "e1", Subject = "x" } };
             return Task.FromResult(list);
         }
@@ -68,9 +70,12 @@ public sealed class PairSchedulerTests
             => Task.FromResult(new CalendarInfo());
         public Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
             => Task.FromResult(new SyncPair());
+        public bool ThrowOnListPairs;
         public Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct)
         {
             LastListBearer = bearer;
+            if (ThrowOnListPairs)
+                throw new InvalidOperationException("server down");
             return Task.FromResult((IReadOnlyList<SyncPair>)Pairs.ToList());
         }
         public Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct, Endpoint? source = null, Endpoint? destination = null)
@@ -106,6 +111,17 @@ public sealed class PairSchedulerTests
             => Task.FromResult(new DeviceInfo { Name = name });
         public Task<bool> CheckDeviceNameAvailableAsync(string apiKey, string name, CancellationToken ct)
             => Task.FromResult(true);
+    }
+
+    private sealed class FakeAppLogger : IAppLogger
+    {
+        public readonly List<(LogLevel Level, string Message, Exception? Ex)> Entries = new();
+        private readonly object _gate = new();
+        public void Log(LogLevel level, string message, Exception? ex = null)
+        {
+            lock (_gate) Entries.Add((level, message, ex));
+        }
+        public bool IsEnabled(LogLevel level) => true;
     }
 
     private static SyncPair Pair(string id, string state, int intervalMin, string sourceProvider)
@@ -331,5 +347,44 @@ public sealed class PairSchedulerTests
         Func<Task> act = () => run;
         await act.Should().NotThrowAsync();
         client.RanPairIds.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task Tick_PerPairFailure_IsLoggedAsErrorWithPairId_AndOtherPairsStillRun()
+    {
+        var client = new FakePairsClient
+        {
+            Pairs =
+            {
+                Pair("bad", "active", 10, "MicrosoftGraph"),
+                Pair("good", "active", 10, "MicrosoftGraph"),
+            },
+            ThrowOnRunPairIds = { "bad" },
+        };
+        var logger = new FakeAppLogger();
+        var sched = new PairScheduler(
+            client, new FakeSource(), new FakeKeyStore("k"), new FakeIdentityTokenProvider("b"),
+            new MutableClock(), Settings(), logger);
+
+        await sched.TickAsync(CancellationToken.None);
+
+        // The bad pair's failure was logged at Error and mentions its id; the good pair still ran.
+        logger.Entries.Should().ContainSingle(e =>
+            e.Level == LogLevel.Error && e.Message.Contains("bad") && e.Ex != null);
+        client.RanPairIds.Should().Contain("good");
+    }
+
+    [Fact]
+    public async Task Tick_ServerUnreachable_LogsWarning()
+    {
+        var client = new FakePairsClient { ThrowOnListPairs = true };
+        var logger = new FakeAppLogger();
+        var sched = new PairScheduler(
+            client, new FakeSource(), new FakeKeyStore("k"), new FakeIdentityTokenProvider("b"),
+            new MutableClock(), Settings(), logger);
+
+        await sched.TickAsync(CancellationToken.None);
+
+        logger.Entries.Should().Contain(e => e.Level == LogLevel.Warning && e.Message.Contains("list pairs"));
     }
 }

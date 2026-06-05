@@ -10,6 +10,20 @@ public sealed record Endpoint
     public string? AccountRef { get; init; }
     public required string CalendarId { get; init; }
     public string CalendarName { get; init; } = "";
+
+    // Source-only multi-calendar selection (Feature 2). All three are null/false by default, which
+    // means "legacy single calendar" — read exactly CalendarId. They only apply to a pair's SOURCE;
+    // the destination is always a single CalendarId and these are ignored on it. Persisted inside
+    // SourceJson via PairJson (camelCase, NullValueHandling.Ignore), so legacy rows round-trip
+    // unchanged and NO EF schema migration is required.
+    //
+    //   AllCalendars  — true => read EVERY calendar of the source account (enumerate then read each).
+    //   CalendarIds   — Graph: the subset of calendarIds to read (when AllCalendars is false).
+    //   CalendarNames — COM display names (device-side only; the server never reads COM, but the field
+    //                   round-trips so the device push path and the UI keep their selection).
+    public bool AllCalendars { get; init; }
+    public IReadOnlyList<string>? CalendarIds { get; init; }
+    public IReadOnlyList<string>? CalendarNames { get; init; }
 }
 
 // A configured one-way mirror from Source to Destination. State is "active",

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -43,6 +44,9 @@ public sealed class CalendarSyncModuleTests
         public List<AppointmentRecord> Window { get; set; } = new();
         public Exception? Throw { get; set; }
         public List<(string calendarId, DateTimeOffset from, DateTimeOffset to)> Calls { get; } = new();
+
+        public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<CalendarOption>>(Array.Empty<CalendarOption>());
 
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
             string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
@@ -178,5 +182,279 @@ public sealed class CalendarSyncModuleTests
     {
         var (module, _, _) = BuildModule(null, new RecordingWriter());
         module.ModuleId.Should().Be("calendar");
+    }
+
+    // ---------------- Feature 2: multi-calendar source merge ----------------
+
+    // A reader that returns a DIFFERENT window per calendarId, and can be told to throw on one
+    // specific calendar to model a transient failure mid-merge.
+    private sealed class PerCalendarReader : ICalendarReader
+    {
+        public Dictionary<string, List<AppointmentRecord>> ByCalendar { get; } = new();
+        public string? ThrowOnCalendar { get; set; }
+        public Exception? Throw { get; set; }
+        public List<string> ReadCalendars { get; } = new();
+        // Calendars this SOURCE account exposes for the AllCalendars enumeration. The module must
+        // enumerate the ORIGIN here (this reader), never the destination writer.
+        public List<CalendarOption> Calendars { get; set; } = new();
+        public int ListCalendarsCallCount { get; private set; }
+
+        public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default)
+        {
+            ListCalendarsCallCount++;
+            return Task.FromResult<IReadOnlyList<CalendarOption>>(Calendars);
+        }
+
+        public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
+            string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
+            CancellationToken ct = default, bool preserveLocalTime = false)
+        {
+            ReadCalendars.Add(calendarId);
+            if (Throw is not null && ThrowOnCalendar == calendarId)
+                throw Throw;
+            return Task.FromResult<IReadOnlyList<AppointmentRecord>>(
+                ByCalendar.TryGetValue(calendarId, out var list) ? list : new List<AppointmentRecord>());
+        }
+    }
+
+    // A writer whose ListCalendarsAsync returns a configured set (for AllCalendars enumeration) and
+    // records the mirror calls, implementing the interface directly so the registry calls THIS
+    // ListCalendarsAsync (a `new` on a subclass would not dispatch through the interface).
+    private sealed class ListingWriter : ICalendarWriter
+    {
+        public List<CalendarOption> Calendars { get; set; } = new();
+        public List<(string calendarId, IReadOnlyList<AppointmentRecord> records, int reminder, DateTimeOffset from, DateTimeOffset to)> Calls { get; } = new();
+        public MirrorResult Next { get; set; } = new();
+        public int ListCalendarsCount { get; private set; }
+
+        public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default)
+        {
+            ListCalendarsCount++;
+            return Task.FromResult<IReadOnlyList<CalendarOption>>(Calendars);
+        }
+
+        public Task<CalendarOption> CreateCalendarAsync(string name, CancellationToken ct = default) =>
+            Task.FromResult(new CalendarOption { Id = "new", DisplayName = name });
+
+        public Task<MirrorResult> MirrorAsync(
+            string calendarId, IReadOnlyList<AppointmentRecord> records, int reminderMinutes,
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default, string pairId = "")
+        {
+            Calls.Add((calendarId, records, reminderMinutes, fromUtc, toUtc));
+            return Task.FromResult(Next);
+        }
+    }
+
+    private static SyncPair PairWithSource(Endpoint source) => new()
+    {
+        Id = "p1",
+        Name = "Pair",
+        Source = source,
+        Destination = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "default", CalendarId = "dst-cal" },
+        IntervalMin = 15,
+    };
+
+    [Fact]
+    public async Task ExecuteAsync_reads_and_merges_an_explicit_calendarIds_subset()
+    {
+        var reader = new PerCalendarReader();
+        reader.ByCalendar["c1"] = new() { MakeEvent("a"), MakeEvent("b") };
+        reader.ByCalendar["c2"] = new() { MakeEvent("c") };
+        reader.ByCalendar["c3"] = new() { MakeEvent("z") }; // NOT selected — must not be read
+
+        var writer = new RecordingWriter { Next = new MirrorResult { Created = 3 } };
+        var registry = new ProviderRegistry(readerFactory: _ => reader, writerFactory: _ => writer);
+        var module = new CalendarSyncModule(registry);
+
+        var source = new Endpoint
+        {
+            Provider = "MicrosoftGraph", AccountRef = "default", CalendarId = "c1",
+            CalendarIds = new[] { "c1", "c2" },
+        };
+
+        var outcome = await module.ExecuteAsync(PairWithSource(source), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(14));
+
+        outcome.NoServerReader.Should().BeFalse();
+        reader.ReadCalendars.Should().BeEquivalentTo(new[] { "c1", "c2" });
+        // The merged set is the union of c1 + c2, one writer call to the single destination.
+        writer.Calls.Should().ContainSingle();
+        writer.Calls[0].calendarId.Should().Be("dst-cal");
+        writer.Calls[0].records.Select(r => r.Id).Should().BeEquivalentTo(new[] { "a", "b", "c" });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_dedupes_the_same_event_across_source_calendars()
+    {
+        var reader = new PerCalendarReader();
+        // The SAME event id "dup" appears in both calendars: it must collapse to ONE destination event.
+        reader.ByCalendar["c1"] = new() { MakeEvent("dup"), MakeEvent("a") };
+        reader.ByCalendar["c2"] = new() { MakeEvent("dup"), MakeEvent("b") };
+
+        var writer = new RecordingWriter();
+        var registry = new ProviderRegistry(readerFactory: _ => reader, writerFactory: _ => writer);
+        var module = new CalendarSyncModule(registry);
+
+        var source = new Endpoint
+        {
+            Provider = "MicrosoftGraph", AccountRef = "default", CalendarId = "c1",
+            CalendarIds = new[] { "c1", "c2" },
+        };
+
+        await module.ExecuteAsync(PairWithSource(source), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(14));
+
+        writer.Calls.Should().ContainSingle();
+        writer.Calls[0].records.Select(r => r.Id).Should().BeEquivalentTo(new[] { "dup", "a", "b" });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allCalendars_enumerates_then_reads_every_calendar()
+    {
+        var reader = new PerCalendarReader
+        {
+            // AllCalendars enumerates the SOURCE account via the READER, not the destination writer.
+            Calendars = new()
+            {
+                new CalendarOption { Id = "c1", DisplayName = "One" },
+                new CalendarOption { Id = "c2", DisplayName = "Two" },
+            },
+        };
+        reader.ByCalendar["c1"] = new() { MakeEvent("a") };
+        reader.ByCalendar["c2"] = new() { MakeEvent("b") };
+
+        var writer = new ListingWriter();
+        var registry = new ProviderRegistry(readerFactory: _ => reader, writerFactory: _ => writer);
+        var module = new CalendarSyncModule(registry);
+
+        var source = new Endpoint
+        {
+            Provider = "MicrosoftGraph", AccountRef = "default", CalendarId = "c1",
+            AllCalendars = true,
+        };
+
+        await module.ExecuteAsync(PairWithSource(source), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(14));
+
+        reader.ListCalendarsCallCount.Should().Be(1, "AllCalendars must enumerate the SOURCE reader");
+        reader.ReadCalendars.Should().BeEquivalentTo(new[] { "c1", "c2" });
+        writer.Calls.Should().ContainSingle();
+        writer.Calls[0].records.Select(r => r.Id).Should().BeEquivalentTo(new[] { "a", "b" });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allCalendars_enumerates_the_SOURCE_account_not_the_destination()
+    {
+        // Regression: when source and destination are DISTINCT accounts, "All calendars" must
+        // enumerate (and read) the ORIGIN account's calendars — never the destination's. The reader
+        // is resolved against pair.Source.AccountRef ("src-account") and the writer against
+        // pair.Destination.AccountRef ("dst-account"); enumerating via the writer would read the
+        // wrong mailbox entirely.
+        var sourceReader = new PerCalendarReader
+        {
+            Calendars = new()
+            {
+                new CalendarOption { Id = "src-c1", DisplayName = "Source One" },
+                new CalendarOption { Id = "src-c2", DisplayName = "Source Two" },
+            },
+        };
+        sourceReader.ByCalendar["src-c1"] = new() { MakeEvent("s1") };
+        sourceReader.ByCalendar["src-c2"] = new() { MakeEvent("s2") };
+
+        // The DESTINATION writer exposes a completely different set of calendars; if the module ever
+        // enumerated the destination, the reader would be asked for "dst-c1"/"dst-c2" and the test
+        // would fail. We assert ListCalendarsAsync on the writer is never called.
+        var destWriter = new ListingWriter
+        {
+            Calendars = new()
+            {
+                new CalendarOption { Id = "dst-c1", DisplayName = "Dest One" },
+                new CalendarOption { Id = "dst-c2", DisplayName = "Dest Two" },
+            },
+        };
+
+        // Factories branch on accountRef so reader↔source and writer↔destination are wired to the
+        // RIGHT account, modelling ResolveReader(pair.Source) / ResolveWriter(pair.Destination).
+        var registry = new ProviderRegistry(
+            readerFactory: accountRef =>
+            {
+                accountRef.Should().Be("src-account", "the reader must resolve against the SOURCE account");
+                return sourceReader;
+            },
+            writerFactory: accountRef =>
+            {
+                accountRef.Should().Be("dst-account", "the writer must resolve against the DESTINATION account");
+                return destWriter;
+            });
+        var module = new CalendarSyncModule(registry);
+
+        var pair = new SyncPair
+        {
+            Id = "p1",
+            Name = "Pair",
+            Source = new Endpoint
+            {
+                Provider = "MicrosoftGraph", AccountRef = "src-account", CalendarId = "src-c1",
+                AllCalendars = true,
+            },
+            Destination = new Endpoint
+            {
+                Provider = "MicrosoftGraph", AccountRef = "dst-account", CalendarId = "dst-cal",
+            },
+            IntervalMin = 15,
+        };
+
+        await module.ExecuteAsync(pair, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(14));
+
+        // The ORIGIN account was enumerated and read; the destination's calendars never leaked in.
+        sourceReader.ListCalendarsCallCount.Should().Be(1);
+        sourceReader.ReadCalendars.Should().BeEquivalentTo(new[] { "src-c1", "src-c2" });
+        destWriter.ListCalendarsCount.Should().Be(0, "the destination writer must NOT be enumerated for source calendars");
+        // The destination still received the merged ORIGIN events on its single calendar.
+        destWriter.Calls.Should().ContainSingle();
+        destWriter.Calls[0].calendarId.Should().Be("dst-cal");
+        destWriter.Calls[0].records.Select(r => r.Id).Should().BeEquivalentTo(new[] { "s1", "s2" });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_transient_failure_on_one_calendar_aborts_before_mirror()
+    {
+        // §A-3 across N reads: a transient failure reading the SECOND source calendar must abort the
+        // whole run as Partial — the merged (short) set must never reach the destructive mirror.
+        var reader = new PerCalendarReader
+        {
+            ThrowOnCalendar = "c2",
+            Throw = new GraphRequestException("Graph transient: 503", isTransient: true),
+        };
+        reader.ByCalendar["c1"] = new() { MakeEvent("a") };
+
+        var writer = new RecordingWriter();
+        var registry = new ProviderRegistry(readerFactory: _ => reader, writerFactory: _ => writer);
+        var module = new CalendarSyncModule(registry);
+
+        var source = new Endpoint
+        {
+            Provider = "MicrosoftGraph", AccountRef = "default", CalendarId = "c1",
+            CalendarIds = new[] { "c1", "c2" },
+        };
+
+        var outcome = await module.ExecuteAsync(PairWithSource(source), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(14));
+
+        outcome.Result!.Partial.Should().BeTrue();
+        writer.Calls.Should().BeEmpty("a transient read mid-merge must not feed a short set into the sweep");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_legacy_single_calendar_reads_only_the_calendarId()
+    {
+        // No AllCalendars and no CalendarIds → legacy behaviour: read exactly Source.CalendarId.
+        var reader = new PerCalendarReader();
+        reader.ByCalendar["src-cal"] = new() { MakeEvent("a"), MakeEvent("b") };
+
+        var writer = new RecordingWriter();
+        var registry = new ProviderRegistry(readerFactory: _ => reader, writerFactory: _ => writer);
+        var module = new CalendarSyncModule(registry);
+
+        await module.ExecuteAsync(Pair("MicrosoftGraph"), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(14));
+
+        reader.ReadCalendars.Should().BeEquivalentTo(new[] { "src-cal" });
+        writer.Calls.Should().ContainSingle();
     }
 }

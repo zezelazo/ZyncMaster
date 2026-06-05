@@ -82,8 +82,10 @@ public class EngineActionsHealthTests
             calendarConnect,
             new Mock<IOutlookComProbe>().Object,
             new Mock<ICalendarSource>().Object,
+            new Mock<ICalExportRunner>().Object,
             new Mock<IClock>().Object,
-            http);
+            http,
+            ZyncMaster.Core.NullAppLogger.Instance);
     }
 
     [Fact]

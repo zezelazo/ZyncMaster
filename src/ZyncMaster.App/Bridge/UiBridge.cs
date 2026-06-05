@@ -132,6 +132,13 @@ public sealed class UiBridge
                 var calendars = await _engine.ListCalendarsAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(calendars, JsonOptions);
             }
+            case "listLocalCalendars":
+            {
+                // No payload: enumerate this device's local Outlook (COM) calendars for the wizard's
+                // COM source multi-select. Returns a JSON array of display-name strings.
+                var localCalendars = await _engine.ListLocalCalendarsAsync(ct);
+                return JsonSerializer.Serialize(localCalendars, JsonOptions);
+            }
             case "createPair":
             {
                 var pair = await _engine.CreatePairAsync(message.Payload ?? "", ct);

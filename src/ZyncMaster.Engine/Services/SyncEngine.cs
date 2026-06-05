@@ -34,7 +34,9 @@ public sealed class SyncEngine : ISyncCycle
         {
             var from = _clock.UtcNow;
             var to = from.AddDays(_settings.SyncWindowDays);
-            var events = await _source.ReadWindowAsync(from, to, ct);
+            // Legacy single-device push path (not pair-scoped): no per-pair selection, so pass null
+            // and let OutlookComSource fall back to the device's configured calendar names.
+            var events = await _source.ReadWindowAsync(from, to, null, ct);
             var push = await _client.PushAsync(key, events, ct);
             return new SyncResult { Push = push };
         }

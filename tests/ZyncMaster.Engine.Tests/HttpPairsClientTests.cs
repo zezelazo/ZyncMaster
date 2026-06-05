@@ -185,6 +185,54 @@ public sealed class HttpPairsClientTests
         result.Destination.AccountRef.Should().Be("a2");
     }
 
+    // Feature 2 — the source's multi-calendar selection round-trips on the wire (serialized on the
+    // request, parsed back from the response). Legacy single-calendar fields are omitted (the body
+    // never carries allCalendars/calendarIds when they are unset).
+    [Fact]
+    public async Task CreatePair_SerializesAndParsesSourceSelection()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK,
+            @"{ ""id"": ""p1"", ""name"": ""Mirror"", ""intervalMin"": 15, ""state"": ""active"",
+                ""source"": { ""provider"": ""MicrosoftGraph"", ""accountRef"": ""a1"", ""calendarId"": ""c1"", ""calendarName"": ""C1"", ""calendarIds"": [""c1"", ""c2""] },
+                ""destination"": { ""provider"": ""MicrosoftGraph"", ""accountRef"": ""a2"", ""calendarId"": ""d"" } }");
+
+        var source = new Endpoint
+        {
+            Provider = "MicrosoftGraph", AccountRef = "a1", CalendarId = "c1", CalendarName = "C1",
+            CalendarIds = new[] { "c1", "c2" },
+        };
+        var dest = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "a2", CalendarId = "d" };
+
+        var result = await client.CreatePairAsync(Bearerr, "Mirror", source, dest, 15, CancellationToken.None);
+
+        // Request: the selection is serialized; allCalendars (false) is omitted.
+        var body = JObject.Parse(stub.LastBody!);
+        body["source"]!["calendarIds"]!.Values<string>().Should().BeEquivalentTo(new[] { "c1", "c2" });
+        body["source"]!["allCalendars"].Should().BeNull();
+        body["destination"]!["calendarIds"].Should().BeNull("the destination never carries a selection");
+
+        // Response: the selection is parsed back onto the Endpoint.
+        result.Source.CalendarIds.Should().BeEquivalentTo(new[] { "c1", "c2" });
+        result.Source.AllCalendars.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreatePair_SerializesAllCalendarsFlag()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK,
+            @"{ ""id"": ""p1"", ""name"": ""M"", ""intervalMin"": 15, ""state"": ""active"",
+                ""source"": { ""provider"": ""OutlookCom"", ""calendarId"": ""local"", ""allCalendars"": true },
+                ""destination"": { ""provider"": ""MicrosoftGraph"", ""accountRef"": ""a"", ""calendarId"": ""d"" } }");
+
+        var source = new Endpoint { Provider = "OutlookCom", CalendarId = "local", AllCalendars = true };
+        var dest = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "a", CalendarId = "d" };
+
+        var result = await client.CreatePairAsync(Bearerr, "M", source, dest, 15, CancellationToken.None);
+
+        JObject.Parse(stub.LastBody!)["source"]!["allCalendars"]!.Value<bool>().Should().BeTrue();
+        result.Source.AllCalendars.Should().BeTrue();
+    }
+
     [Fact]
     public async Task ListPairs_GetsAndParsesListWithNestedResult()
     {

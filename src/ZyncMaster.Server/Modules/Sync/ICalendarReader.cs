@@ -8,6 +8,12 @@ namespace ZyncMaster.Server;
 // arrive via the push endpoint from a desktop device.
 public interface ICalendarReader
 {
+    // Enumerates every calendar of the SOURCE account this reader is bound to. Used by the
+    // "All calendars" source mode so the run reads from the ORIGIN account's calendars (the
+    // reader is resolved against pair.Source), never the destination's. Mirrors the writer's
+    // ListCalendarsAsync shape but is anchored to the source account.
+    Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default);
+
     // preserveLocalTime controls how the event's clock time is projected onto
     // AppointmentRecord.Start:
     //   * false (default — the SYNC/mirror path): events are normalized to UTC, so

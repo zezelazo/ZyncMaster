@@ -14,19 +14,32 @@ public sealed class OutlookComSource : ICalendarSource
 {
     private readonly ICalExportRunner _runner;
     private readonly CompleteCalendarReader _reader;
-    private readonly IReadOnlyList<string>? _calendarNames;
+    private readonly IReadOnlyList<string>? _defaultCalendarNames;
+    private readonly IAppLogger _logger;
 
-    public OutlookComSource(ICalExportRunner runner, CompleteCalendarReader reader, IReadOnlyList<string>? calendarNames)
+    public OutlookComSource(ICalExportRunner runner, CompleteCalendarReader reader, IReadOnlyList<string>? calendarNames, IAppLogger? logger = null)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        _calendarNames = calendarNames;
+        // Device-wide default selection (EngineSettings.CalendarNames). Used only as the fallback
+        // for a legacy pair whose source carries no per-pair selection; the per-pair selection is
+        // resolved by the caller (PairRunner) and passed to ReadWindowAsync.
+        _defaultCalendarNames = calendarNames;
+        _logger = logger ?? NullAppLogger.Instance;
     }
 
     public async Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
-        DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct)
+        DateTimeOffset fromUtc, DateTimeOffset toUtc, IReadOnlyList<string>? calendarNames, CancellationToken ct)
     {
-        var months = MonthsCovering(fromUtc, toUtc);
+        // The per-pair selection (calendarNames) is authoritative; when the caller passes null it
+        // falls back to the device default. A null effective selection means "all calendars".
+        var effective = calendarNames ?? _defaultCalendarNames;
+
+        var months = MonthsCovering(fromUtc, toUtc).ToList();
+
+        if (_logger.IsEnabled(LogLevel.Debug))
+            _logger.Log(LogLevel.Debug,
+                $"OutlookCom read window [{fromUtc:o} .. {toUtc:o}] spans {months.Count} month(s).");
 
         // Dedupe by Id, keeping the first occurrence seen (months iterate in order).
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -35,8 +48,9 @@ public sealed class OutlookComSource : ICalendarSource
         foreach (var (year, month) in months)
         {
             ct.ThrowIfCancellationRequested();
-            var json = await _runner.ExportMonthAsync(year, month, _calendarNames, ct);
+            var json = await _runner.ExportMonthAsync(year, month, effective, ct);
             var read = _reader.Parse(json);
+            _logger.Log(LogLevel.Debug, $"OutlookCom month {year}-{month:D2}: read {read.Events.Count} event(s).");
             foreach (var ev in read.Events)
             {
                 if (seen.Add(ev.Id))
@@ -44,10 +58,15 @@ public sealed class OutlookComSource : ICalendarSource
             }
         }
 
-        return collected
+        var filtered = collected
             .Where(e => e.StartOffset >= fromUtc && e.StartOffset <= toUtc)
             .OrderBy(e => e.StartOffset)
             .ToList();
+
+        _logger.Log(LogLevel.Debug,
+            $"OutlookCom read complete: {collected.Count} after dedupe, {filtered.Count} within window.");
+
+        return filtered;
     }
 
     // The local calendar works in wall-clock time, so the set of months that can

@@ -56,13 +56,19 @@
   <Target Name="CopyCalExport" AfterTargets="Build">
     <PropertyGroup>
       <CalExportBuildDir>$(MSBuildProjectDirectory)\..\ZyncMaster.CalExport\bin\$(Configuration)\net10.0-windows\</CalExportBuildDir>
+      <CalExportBundleDir>$(OutDir)CalExport\</CalExportBundleDir>
     </PropertyGroup>
     <ItemGroup>
       <CalExportFiles Include="$(CalExportBuildDir)**\*" />
     </ItemGroup>
+    <!-- Wipe the whole bundle subfolder first, then copy CalExport's fresh output verbatim. This
+         guarantees the bundle is ALWAYS an exact mirror of the current build output: any file that
+         CalExport stopped shipping (e.g. the now-excluded Outlook interop DLL) cannot linger across
+         incremental dev builds. RemoveDir tolerates an absent folder (clean checkout / first build).
+         No SkipUnchangedFiles — it is meaningless right after a full wipe and only adds fragility. -->
+    <RemoveDir Directories="$(CalExportBundleDir)" />
     <Copy SourceFiles="@(CalExportFiles)"
-          DestinationFiles="@(CalExportFiles->'$(OutDir)CalExport\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true"
+          DestinationFiles="@(CalExportFiles->'$(CalExportBundleDir)%(RecursiveDir)%(Filename)%(Extension)')"
           Condition="'@(CalExportFiles)' != ''" />
   </Target>
 

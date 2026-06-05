@@ -29,6 +29,7 @@ public sealed class PairScheduler
     private readonly IIdentityTokenProvider _identity;
     private readonly IClock _clock;
     private readonly EngineSettings _settings;
+    private readonly IAppLogger _logger;
     private readonly TimeSpan _tickInterval;
 
     // Per-pair next-due time. Pairs absent from the latest ListPairs are dropped.
@@ -41,6 +42,7 @@ public sealed class PairScheduler
         IIdentityTokenProvider identity,
         IClock clock,
         EngineSettings settings,
+        IAppLogger? logger = null,
         TimeSpan? tickInterval = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
@@ -49,6 +51,7 @@ public sealed class PairScheduler
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _logger = logger ?? NullAppLogger.Instance;
         _tickInterval = tickInterval ?? DefaultTickInterval;
         if (_tickInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(tickInterval), "Tick interval must be greater than zero.");
@@ -93,36 +96,47 @@ public sealed class PairScheduler
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             // Server unreachable this tick — keep the existing schedule and retry next tick.
+            _logger.Log(LogLevel.Warning, "Scheduler tick: could not list pairs (server unreachable?).", ex);
             return;
         }
 
         var now = _clock.UtcNow;
         var seen = new HashSet<string>();
 
+        _logger.Log(LogLevel.Info, $"Scheduler tick: {pairs.Count} pair(s) listed.");
+
         foreach (var pair in pairs)
         {
             seen.Add(pair.Id);
 
             if (!IsActive(pair.State))
+            {
+                _logger.Log(LogLevel.Debug, $"Pair '{pair.Id}': skip (state={pair.State}).");
                 continue;
+            }
 
             if (_nextRun.TryGetValue(pair.Id, out var due) && now < due)
+            {
+                _logger.Log(LogLevel.Debug, $"Pair '{pair.Id}': skip (not due until {due:o}).");
                 continue;
+            }
 
             try
             {
+                _logger.Log(LogLevel.Debug, $"Pair '{pair.Id}': due, running.");
                 await RunPairAsync(apiKey, pair, now, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 // Isolate per-pair failures so one bad pair never stops the others.
+                _logger.Log(LogLevel.Error, $"Pair '{pair.Id}' ({pair.Name}): sync failed.", ex);
             }
 
             // Schedule the next run regardless of success so a failing pair retries on its cadence.
@@ -134,7 +148,7 @@ public sealed class PairScheduler
     }
 
     private Task RunPairAsync(string apiKey, SyncPair pair, DateTimeOffset now, CancellationToken ct)
-        => PairRunner.RunOnceAsync(_client, _comSource, pair, apiKey, now, _settings, ct);
+        => PairRunner.RunOnceAsync(_client, _comSource, pair, apiKey, now, _settings, ct, _logger);
 
     private async Task TickSafelyAsync(CancellationToken ct)
     {
@@ -146,9 +160,10 @@ public sealed class PairScheduler
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             // Never let a tick kill the loop.
+            _logger.Log(LogLevel.Error, "Scheduler tick failed unexpectedly.", ex);
         }
     }
 

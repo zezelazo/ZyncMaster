@@ -73,8 +73,10 @@ public class EngineActionsExportAndCalendarTests
             calendarConnect,
             comProbe ?? new Mock<IOutlookComProbe>().Object,
             comSource ?? new Mock<ICalendarSource>().Object,
+            runner.Object,
             clock ?? new Mock<IClock>().Object,
-            new HttpClient());
+            new HttpClient(),
+            ZyncMaster.Core.NullAppLogger.Instance);
     }
 
     private static Mock<IIdentityTokenCache> SignedIn(string token = "bearer-1")
@@ -452,7 +454,7 @@ public class EngineActionsExportAndCalendarTests
 
         var events = (IReadOnlyList<AppointmentRecord>)new[] { new AppointmentRecord { Id = "e1", Subject = "x" } };
         var comSource = new Mock<ICalendarSource>();
-        comSource.Setup(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+        comSource.Setup(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(events);
 
         var pairs = new Mock<IPairsClient>();
@@ -478,7 +480,7 @@ public class EngineActionsExportAndCalendarTests
         // window lower bound (not the current instant `now` = 09:00). The clock is 2026-06-01 09:00Z,
         // so the read window is [2026-06-01 00:00Z, +14 days].
         var expectedFrom = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
-        comSource.Verify(s => s.ReadWindowAsync(expectedFrom, expectedFrom.AddDays(14), It.IsAny<CancellationToken>()), Times.Once);
+        comSource.Verify(s => s.ReadWindowAsync(expectedFrom, expectedFrom.AddDays(14), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()), Times.Once);
         pairs.Verify(p => p.PushPairAsync("device-key", "p1", events, It.IsAny<CancellationToken>()), Times.Once);
         pairs.Verify(p => p.RunPairAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -507,7 +509,7 @@ public class EngineActionsExportAndCalendarTests
         result.Updated.Should().Be(1);
         pairs.Verify(p => p.RunPairAsync("device-key", "p1", It.IsAny<CancellationToken>()), Times.Once);
         pairs.Verify(p => p.PushPairAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<AppointmentRecord>>(), It.IsAny<CancellationToken>()), Times.Never);
-        comSource.Verify(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Never);
+        comSource.Verify(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

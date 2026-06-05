@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using ZyncMaster.Core;
 
 namespace ZyncMaster.Engine;
 
@@ -34,7 +35,8 @@ public static class PairRunner
         string apiKey,
         DateTimeOffset now,
         EngineSettings settings,
-        CancellationToken ct)
+        CancellationToken ct,
+        IAppLogger? logger = null)
     {
         if (client == null) throw new ArgumentNullException(nameof(client));
         if (comSource == null) throw new ArgumentNullException(nameof(comSource));
@@ -42,15 +44,31 @@ public static class PairRunner
         if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));
         if (settings == null) throw new ArgumentNullException(nameof(settings));
 
+        var log = logger ?? NullAppLogger.Instance;
+
         if (IsOutlookCom(pair))
         {
             var (from, to) = ReadWindow(now, settings.SyncWindowDays);
-            var events = await comSource.ReadWindowAsync(from, to, ct);
-            return await client.PushPairAsync(apiKey, pair.Id, events, ct);
+            var selection = ResolveComSelection(pair, settings);
+            log.Log(LogLevel.Info,
+                $"Pair '{pair.Id}' ({pair.Name}): COM source, read window [{from:o} .. {to:o}], calendars={(selection == null ? "all" : string.Join(", ", selection))}.");
+            var events = await comSource.ReadWindowAsync(from, to, selection, ct);
+            log.Log(LogLevel.Info, $"Pair '{pair.Id}': read {events.Count} event(s) from COM; pushing.");
+            var pushed = await client.PushPairAsync(apiKey, pair.Id, events, ct);
+            log.Log(LogLevel.Info, $"Pair '{pair.Id}': push result {Describe(pushed)}.");
+            return pushed;
         }
 
-        return await client.RunPairAsync(apiKey, pair.Id, ct);
+        log.Log(LogLevel.Info, $"Pair '{pair.Id}' ({pair.Name}): server-side run (Graph).");
+        var ran = await client.RunPairAsync(apiKey, pair.Id, ct);
+        log.Log(LogLevel.Info, $"Pair '{pair.Id}': run result {Describe(ran)}.");
+        return ran;
     }
+
+    private static string Describe(MirrorResult r)
+        => r == null
+            ? "(none)"
+            : $"created {r.Created}, updated {r.Updated}, deleted {r.Deleted}, skipped {r.Skipped}";
 
     // The COM read window, snapped to the day boundary so its lower bound matches the server's
     // sweep window (PairEndpoints.Window): [today 00:00 UTC, today 00:00 UTC + windowDays].
@@ -64,4 +82,18 @@ public static class PairRunner
     public static bool IsOutlookCom(SyncPair pair)
         => pair != null
            && string.Equals(pair.Source.Provider, OutlookComProvider, StringComparison.OrdinalIgnoreCase);
+
+    // Resolves the COM calendar selection for a pair (Feature 2). Precedence:
+    //   1. Source.AllCalendars => null ("all calendars" — read every local Outlook calendar);
+    //   2. Source.CalendarNames with items => read ONLY those by display name;
+    //   3. legacy pair (no per-pair selection) => the device's configured names (settings.CalendarNames),
+    //      which may itself be null/empty => "all". This preserves every existing pair's behaviour.
+    public static IReadOnlyList<string>? ResolveComSelection(SyncPair pair, EngineSettings settings)
+    {
+        if (pair.Source.AllCalendars)
+            return null;
+        if (pair.Source.CalendarNames is { Count: > 0 })
+            return pair.Source.CalendarNames;
+        return settings.CalendarNames;
+    }
 }

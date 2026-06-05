@@ -46,14 +46,18 @@ public sealed class CalendarFolderMatcherTests
     }
 
     [Fact]
-    public void AllMissing_ReturnsNull_OnNotFoundCalledForEach()
+    public void AllMissing_ReturnsEmptyList_NotNull_OnNotFoundCalledForEach()
     {
+        // A selection WAS provided but nothing matched (e.g. every calendar renamed in Outlook):
+        // the result must be an EMPTY list, never null. Returning null would mean "all calendars"
+        // and export everything — the opposite of the user's intent.
         var available   = MakeFolders("Work", "Personal");
         var notFoundLog = new List<string>();
 
         var result = _sut.Match(new[] { "Gone", "Also Gone" }, available, notFoundLog.Add);
 
-        result.Should().BeNull();
+        result.Should().NotBeNull("a provided-but-unmatched selection must not fall back to all");
+        result!.Should().BeEmpty();
         notFoundLog.Should().BeEquivalentTo(new[] { "Gone", "Also Gone" });
     }
 
@@ -97,7 +101,9 @@ public sealed class CalendarFolderMatcherTests
 
         var result = _sut.Match(new[] { "Missing" }, available, onNotFound: null);
 
-        result.Should().BeNull();
+        // Provided selection, zero matches => empty list (not all), no exception when callback is null.
+        result.Should().NotBeNull();
+        result!.Should().BeEmpty();
     }
 
     [Fact]
@@ -132,13 +138,26 @@ public sealed class CalendarFolderMatcherTests
     }
 
     [Fact]
-    public void EmptyAvailableList_AllMissing_ReturnsNull()
+    public void EmptyAvailableList_AllMissing_ReturnsEmptyList_NotNull()
     {
         var available = MakeFolders();
 
         var result = _sut.Match(new[] { "Work" }, available);
 
-        result.Should().BeNull();
+        // Names requested but no calendars available to match => empty list, not "all".
+        result.Should().NotBeNull();
+        result!.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void EmptyRequestedNames_ReturnsNull_MeaningAllCalendars()
+    {
+        // The ONLY case that maps to "all calendars" (null) is an empty/absent selection.
+        var available = MakeFolders("Work", "Personal");
+
+        var result = _sut.Match(System.Array.Empty<string>(), available);
+
+        result.Should().BeNull("no selection at all is the intentional 'all calendars' contract");
     }
 
     [Fact]

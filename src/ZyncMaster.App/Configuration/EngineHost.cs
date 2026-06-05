@@ -18,11 +18,9 @@ public sealed class EngineHost : IDisposable
     public EngineActions Actions { get; }
     public EngineSettings Settings { get; }
 
-    // The raw sync cycle (SyncEngine) the background loop drives, wrapped by the app's
-    // StatusPushingCycle. Exposed separately from Actions because the loop needs the
-    // ISyncCycle, while the bridge needs the IEngineActions facade. The PairScheduler is
-    // built separately by the App from the pieces it needs.
-    public ISyncCycle SyncCycle { get; }
+    // The device-side local logger, exposed so App can log into the same per-day file from its
+    // own catch blocks (scheduler loop, SafeSyncNow, the status loop).
+    public IAppLogger Logger { get; }
 
     // The multi-pair scheduler the App runs in the background instead of the single SyncLoop.
     public PairScheduler Scheduler { get; }
@@ -34,15 +32,15 @@ public sealed class EngineHost : IDisposable
     private readonly HttpClient _http;
 
     private EngineHost(
-        EngineActions actions, ISyncCycle syncCycle, PairScheduler scheduler,
-        DeviceHeartbeatLoop heartbeatLoop, EngineSettings settings, HttpClient http)
+        EngineActions actions, PairScheduler scheduler,
+        DeviceHeartbeatLoop heartbeatLoop, EngineSettings settings, HttpClient http, IAppLogger logger)
     {
         Actions = actions;
-        SyncCycle = syncCycle;
         Scheduler = scheduler;
         HeartbeatLoop = heartbeatLoop;
         Settings = settings;
         _http = http;
+        Logger = logger;
     }
 
     // Builds the engine from settings.json next to the exe (created with defaults if
@@ -52,7 +50,7 @@ public sealed class EngineHost : IDisposable
     // saveDialog: shows a Save-As picker (the App supplies an Avalonia IStorageProvider
     // implementation) and returns the chosen path or null when cancelled.
     // autoStartExePath: the host executable registered for login auto-start.
-    public static EngineHost Create(Func<string, Task<string?>> saveDialog, string autoStartExePath)
+    public static EngineHost Create(Func<string, Task<string?>> saveDialog, string autoStartExePath, bool verbose = false)
     {
         var exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
                      ?? Directory.GetCurrentDirectory();
@@ -67,6 +65,17 @@ public sealed class EngineHost : IDisposable
 
         var clock = new SystemClock();
 
+        // Device-side local logger. Default level Warning/Error; verbose lowers it to Debug. Also
+        // honour ZYNCMASTER_VERBOSE=1 so the tray app can be made verbose without args. Log the
+        // resolved path up front (independent of level) so the user knows where to look.
+        var verboseEffective = verbose
+            || string.Equals(Environment.GetEnvironmentVariable("ZYNCMASTER_VERBOSE"), "1", StringComparison.Ordinal);
+        var logger = new DailyFileLogger(
+            DailyFileLogger.DefaultLogDirectory(),
+            verboseEffective ? LogLevel.Debug : LogLevel.Warning,
+            () => clock.UtcNow);
+        logger.Log(LogLevel.Info, $"Logging to {logger.CurrentLogFilePath()} (verbose={verboseEffective}).");
+
         var keyStorePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ZyncMaster", "App", "device.key");
@@ -78,9 +87,9 @@ public sealed class EngineHost : IDisposable
         var syncClient = new HttpSyncClient(http, engineSettings.ServerBaseUrl);
         var pairsClient = new HttpPairsClient(http, engineSettings.ServerBaseUrl);
 
-        var calExportRunner = new CalExportRunner(engineSettings.CalExportPath);
+        var calExportRunner = new CalExportRunner(engineSettings.CalExportPath, logger);
         var calendarReader = new CompleteCalendarReader();
-        var calendarSource = new OutlookComSource(calExportRunner, calendarReader, engineSettings.CalendarNames);
+        var calendarSource = new OutlookComSource(calExportRunner, calendarReader, engineSettings.CalendarNames, logger);
 
         var browser = new DefaultBrowserLauncher();
         var pairingService = new PairingService(pairingClient, browser, keyStore, engineSettings);
@@ -123,8 +132,10 @@ public sealed class EngineHost : IDisposable
             calendarConnect,
             comProbe,
             calendarSource,
+            calExportRunner,
             clock,
             http,
+            logger,
             ownedHttp: null);
 
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
@@ -133,13 +144,13 @@ public sealed class EngineHost : IDisposable
         // device api key, so it is given an IIdentityTokenProvider over the same identity cache.
         var identityTokenProvider = new IdentityTokenCacheProvider(identityCache);
         var scheduler = new PairScheduler(
-            pairsClient, calendarSource, keyStore, identityTokenProvider, clock, engineSettings);
+            pairsClient, calendarSource, keyStore, identityTokenProvider, clock, engineSettings, logger);
 
         // FIX C — the device-lease heartbeat. Uses the SAME pairs client + device key store as the
         // scheduler; a tick with no device key (unpaired) is a clean no-op.
-        var heartbeatLoop = new DeviceHeartbeatLoop(pairsClient, keyStore);
+        var heartbeatLoop = new DeviceHeartbeatLoop(pairsClient, keyStore, logger: logger);
 
-        return new EngineHost(actions, syncEngine, scheduler, heartbeatLoop, engineSettings, http);
+        return new EngineHost(actions, scheduler, heartbeatLoop, engineSettings, http, logger);
     }
 
     public void Dispose()

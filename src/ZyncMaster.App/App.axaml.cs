@@ -71,10 +71,14 @@ public partial class App : Application
             _tray = new TrayController(desktop, CreateWindow);
             _tray.Show();
 
+            // --verbose (or ZYNCMASTER_VERBOSE=1): lower the local log level to Debug. Parsed here
+            // off desktop.Args (the same place --silent is read) and passed into EngineHost.Create.
+            var verbose = IsVerboseLaunch(desktop.Args);
+
             // Build the engine and wire the bridge. If settings are missing/invalid the
             // app still runs (tray + web panel) so the user can configure it; the engine
             // pieces just stay null until a valid config is saved and the app relaunched.
-            TryWireEngine();
+            TryWireEngine(verbose);
 
             // --silent (used by login auto-start): stay in the tray, never surface a window.
             var silent = IsSilentLaunch(desktop.Args);
@@ -121,7 +125,7 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private void TryWireEngine()
+    private void TryWireEngine(bool verbose)
     {
         if (_webHost == null)
             return;
@@ -132,7 +136,7 @@ public partial class App : Application
         IEngineActions actions;
         try
         {
-            _engineHost = EngineHost.Create(ShowSaveTxtDialogAsync, HostExePath());
+            _engineHost = EngineHost.Create(ShowSaveTxtDialogAsync, HostExePath(), verbose);
             actions = _engineHost.Actions;
         }
         catch (SettingsValidationException)
@@ -184,6 +188,7 @@ public partial class App : Application
             {
                 // The scheduler should never throw out (per-pair failures are isolated), but
                 // if it does, surface it as a status message instead of a silent dead loop.
+                _engineHost?.Logger.Log(LogLevel.Error, "Sync scheduler stopped unexpectedly.", ex);
                 _bridge?.PushStatus(new AppStatus { Status = SyncStatus.Error, LastMessage = $"Sync scheduler stopped: {ex.Message}" });
             }
         });
@@ -234,9 +239,10 @@ public partial class App : Application
         {
             // Shutdown — exit cleanly.
         }
-        catch
+        catch (Exception ex)
         {
             // Never let status publishing crash the app.
+            _engineHost?.Logger.Log(LogLevel.Warning, "Status publish loop failed.", ex);
         }
     }
 
@@ -255,6 +261,19 @@ public partial class App : Application
             return false;
         foreach (var a in args)
             if (string.Equals(a, "--silent", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    private static bool IsVerboseLaunch(string[]? args)
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("ZYNCMASTER_VERBOSE"), "1", StringComparison.Ordinal))
+            return true;
+        if (args == null)
+            return false;
+        foreach (var a in args)
+            if (string.Equals(a, "--verbose", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(a, "-v", StringComparison.OrdinalIgnoreCase))
                 return true;
         return false;
     }
@@ -321,9 +340,10 @@ public partial class App : Application
             _bridge.PushStatus(status);
             Dispatch(() => _tray?.SetStatus(status.Status));
         }
-        catch
+        catch (Exception ex)
         {
             // Manual sync failures surface as the next status push; never crash the app.
+            _engineHost?.Logger.Log(LogLevel.Warning, "Manual sync (tray) failed.", ex);
         }
     }
 

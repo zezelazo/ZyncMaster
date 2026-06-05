@@ -49,6 +49,14 @@ public sealed class ApplicationRunner
     {
         if (args == null) throw new ArgumentNullException(nameof(args));
 
+        // --list-calendars: headless enumeration only. Connect to Outlook, emit the calendar
+        // folders as JSON and return WITHOUT touching any calendar or reading settings.
+        if (args.ListCalendars)
+        {
+            RunListCalendars(args);
+            return;
+        }
+
         var (settingsPath, settings, pendingCreatePath) = ResolveSettingsFile(args);
 
         var requestedOutput = !string.IsNullOrWhiteSpace(args.OutputPath)
@@ -268,6 +276,47 @@ public sealed class ApplicationRunner
         }
 
         DoExport(year, month, mode, inclCancelled, selectedFolders, outputDir);
+    }
+
+    // ── List-calendars (headless enumeration) ─────────────────────────────
+
+    // Connects to Outlook, enumerates the local calendar folders and emits them as a JSON array
+    // of { displayName, entryId, storeId }. With -o it writes "calendars.json" into that directory
+    // (the Engine reads it from the temp dir it controls); without -o it writes to stdout. Read-only:
+    // it never opens, exports or modifies any calendar.
+    private void RunListCalendars(ParsedArguments args)
+    {
+        var folders = GetCalendarFoldersOrExit();
+
+        var json = JsonConvert.SerializeObject(
+            folders.Select(f => new
+            {
+                displayName = f.DisplayName,
+                entryId     = f.EntryId,
+                storeId     = f.StoreId,
+            }),
+            Formatting.Indented);
+
+        if (!string.IsNullOrWhiteSpace(args.OutputPath))
+        {
+            var dir = Path.GetFullPath(args.OutputPath);
+            try
+            {
+                if (!_fileSystem.DirectoryExists(dir))
+                    _fileSystem.CreateDirectory(dir);
+                var path = Path.Combine(dir, "calendars.json");
+                _fileSystem.WriteAllText(path, json, System.Text.Encoding.UTF8);
+                _console.WriteLine($"Wrote {folders.Count} calendar(s) to {path}");
+            }
+            catch (Exception ex)
+            {
+                _terminator.ExitWithError($"Error: could not write calendars.json — {ex.Message}");
+            }
+        }
+        else
+        {
+            _console.WriteLine(json);
+        }
     }
 
     // ── Calendar selection ────────────────────────────────────────────────

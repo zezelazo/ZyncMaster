@@ -17,6 +17,35 @@ public sealed class ArgumentParserTests
         result.AutoMode.Should().BeFalse();
         result.ConfigPath.Should().BeNull();
         result.OutputPath.Should().BeNull();
+        result.Verbose.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShortVerboseFlag_SetsVerbose()
+    {
+        var result = _sut.Parse(new[] { "-v" });
+
+        result.Verbose.Should().BeTrue();
+        result.AutoMode.Should().BeFalse();
+    }
+
+    [Fact]
+    public void LongVerboseFlag_SetsVerbose()
+    {
+        var result = _sut.Parse(new[] { "--verbose" });
+
+        result.Verbose.Should().BeTrue();
+    }
+
+    [Fact]
+    public void VerboseCombinesWithOtherFlags()
+    {
+        var result = _sut.Parse(new[] { "-a", "-c", "my.json", "-o", "D:\\out", "-v" });
+
+        result.AutoMode.Should().BeTrue();
+        result.ConfigPath.Should().Be("my.json");
+        result.OutputPath.Should().Be("D:\\out");
+        result.Verbose.Should().BeTrue();
     }
 
     [Fact]
@@ -115,6 +144,37 @@ public sealed class ArgumentParserTests
 
         act.Should().Throw<ArgumentParsingException>()
            .WithMessage("*-o/--output*");
+    }
+
+    [Fact]
+    public void NoArgs_ListCalendarsIsFalse()
+    {
+        _sut.Parse(Array.Empty<string>()).ListCalendars.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShortListCalendarsFlag_SetsListCalendars()
+    {
+        var result = _sut.Parse(new[] { "-l" });
+
+        result.ListCalendars.Should().BeTrue();
+        result.AutoMode.Should().BeFalse();
+    }
+
+    [Fact]
+    public void LongListCalendarsFlag_SetsListCalendars()
+    {
+        _sut.Parse(new[] { "--list-calendars" }).ListCalendars.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ListCalendarsCombinesWithOutputAndVerbose()
+    {
+        var result = _sut.Parse(new[] { "-l", "-o", "D:\\out", "-v" });
+
+        result.ListCalendars.Should().BeTrue();
+        result.OutputPath.Should().Be("D:\\out");
+        result.Verbose.Should().BeTrue();
     }
 
     [Fact]

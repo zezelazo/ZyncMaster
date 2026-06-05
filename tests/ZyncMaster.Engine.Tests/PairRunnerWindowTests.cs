@@ -49,11 +49,14 @@ public sealed class PairRunnerWindowTests
         public DateTimeOffset LastTo;
         public required IReadOnlyList<AppointmentRecord> All;
 
+        public IReadOnlyList<string>? LastSelection;
+
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
-            DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct)
+            DateTimeOffset fromUtc, DateTimeOffset toUtc, IReadOnlyList<string>? calendarNames, CancellationToken ct)
         {
             LastFrom = fromUtc;
             LastTo = toUtc;
+            LastSelection = calendarNames;
             // Model the real OutlookComSource window filter: only events whose start is within
             // [from, to] are returned.
             IReadOnlyList<AppointmentRecord> inWindow = All

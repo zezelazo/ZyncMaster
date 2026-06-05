@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using ZyncMaster.Core;
 
 namespace ZyncMaster.Engine;
 
@@ -22,12 +23,14 @@ public sealed class DeviceHeartbeatLoop
 
     private readonly IPairsClient _client;
     private readonly IDeviceKeyStore _keys;
+    private readonly IAppLogger _logger;
     private readonly TimeSpan _interval;
 
-    public DeviceHeartbeatLoop(IPairsClient client, IDeviceKeyStore keys, TimeSpan? interval = null)
+    public DeviceHeartbeatLoop(IPairsClient client, IDeviceKeyStore keys, TimeSpan? interval = null, IAppLogger? logger = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
+        _logger = logger ?? NullAppLogger.Instance;
         _interval = interval ?? DefaultInterval;
         if (_interval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(interval), "Interval must be greater than zero.");
@@ -59,6 +62,7 @@ public sealed class DeviceHeartbeatLoop
         if (string.IsNullOrEmpty(apiKey))
             return;
 
+        _logger.Log(LogLevel.Debug, "Device heartbeat: renewing lease.");
         await _client.HeartbeatAsync(apiKey, ct).ConfigureAwait(false);
     }
 

@@ -28,6 +28,9 @@ public sealed class CronSyncRunnerEntitlementGateTests
 
     private sealed class RecordingReader : ICalendarReader
     {
+        public Task<IReadOnlyList<CalendarOption>> ListCalendarsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<CalendarOption>>(Array.Empty<CalendarOption>());
+
         public Task<IReadOnlyList<AppointmentRecord>> ReadWindowAsync(
             string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
             CancellationToken ct = default, bool preserveLocalTime = false) =>
