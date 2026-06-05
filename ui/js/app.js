@@ -114,7 +114,13 @@ const Bridge = (() => {
     while (true) {
       try {
         const res = await fetch('/__bridge/poll');
-        if (res.status === 200) handleInbound(await res.text());
+        if (res.status === 200) {
+          handleInbound(await res.text());
+          continue; // got a message: loop immediately to drain the next one (long-poll style).
+        }
+        // Any non-200 with no throw (204/404/408/empty timeout) must NOT re-enter the loop
+        // immediately, or it becomes a busy-loop hammering the host. Back off briefly first.
+        await new Promise((r) => setTimeout(r, 500));
       } catch (_) {
         await new Promise((r) => setTimeout(r, 1000));
       }
@@ -187,7 +193,16 @@ const Bridge = (() => {
     if (action === 'getStatus') {
       const me = await req('GET', '/api/me');
       let pairs = [];
-      try { pairs = await req('GET', '/api/pairs'); } catch (_) { pairs = []; }
+      try {
+        pairs = await req('GET', '/api/pairs');
+      } catch (err) {
+        // A 401 here means the session expired between /api/me and /api/pairs: do NOT swallow it
+        // and report a signed-in panel with 0 pairs. Re-throw so the sign-in gate fires
+        // deterministically (req() already invoked unauthorizedCb). Only a non-auth error (e.g. a
+        // transient 500) degrades to an empty pair list.
+        if (err && err.message === 'unauthorized') throw err;
+        pairs = [];
+      }
       return statusFromPairs(me, pairs);
     }
 
@@ -882,17 +897,21 @@ function pairAccordion(pair) {
 
       // Export .txt — per-pair export of the pair's SOURCE calendar. Routing is by source
       // provider, inside openExportTxtModal: a COM source exports the local Outlook via
-      // generateTxt (requires Outlook installed); a Graph source exports the online calendar via
-      // the server (exportSourceTxt, always available). For a COM source we disable the button
-      // when Outlook is not present on this device.
-      const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
-      const comBlocked = isCom && !comAvailable();
-      const txtBtn = el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
-        disabled: comBlocked,
-        title: comBlocked ? 'Outlook is not available on this device' : 'Export a month of this calendar to a .txt file',
-        onclick: (e) => { e.stopPropagation(); if (!comBlocked) openExportTxtModal(pair); } },
-        iconEl('folder', 12, 1.6), el('span', { style: 'font-size:12px', text: 'Export .txt' }));
-      controls.append(txtBtn);
+      // generateTxt (requires Outlook installed); a Graph source exports via the server, which then
+      // saves the .txt through a desktop save dialog. BOTH write to a local path, so the whole
+      // affordance is desktop-only — the browser panel has no save-to-disk channel (exportSourceTxt
+      // is inert in web mode and would falsely report "File saved."). Gate the button to
+      // Bridge.desktopApp so it never shows in the web panel.
+      if (Bridge.desktopApp) {
+        const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
+        const comBlocked = isCom && !comAvailable();
+        const txtBtn = el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
+          disabled: comBlocked,
+          title: comBlocked ? 'Outlook is not available on this device' : 'Export a month of this calendar to a .txt file',
+          onclick: (e) => { e.stopPropagation(); if (!comBlocked) openExportTxtModal(pair); } },
+          iconEl('folder', 12, 1.6), el('span', { style: 'font-size:12px', text: 'Export .txt' }));
+        controls.append(txtBtn);
+      }
 
       // Edit — open the wizard preloaded with this pair (F2). Reuses renderAddPairLive in edit mode.
       controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
@@ -1335,7 +1354,9 @@ function renderAddPairLive(root) {
     // The export reads the SAVED source from the server (the value before this edit's PATCH), so
     // while there are unsaved endpoint changes it would export the OLD source — confusing and wrong.
     // Disable it in that case with a clear "save first" hint; for a COM source it also needs Outlook.
-    if (editing) {
+    // Desktop-only: the export ends in a local save dialog (no save-to-disk channel in the web
+    // panel), so the affordance is hidden unless Bridge.desktopApp — same gate as the per-pair button.
+    if (editing && Bridge.desktopApp) {
       const srcCom = a.sourceKind === 'com';
       const unsavedEndpoints = editEndpointsChanged();
       const exportBlocked = unsavedEndpoints || (srcCom && !comAvailable());

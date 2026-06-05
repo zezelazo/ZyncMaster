@@ -65,6 +65,18 @@ test('unlinkAccount -> DELETE /api/accounts/{ref}', () => {
     { method: 'DELETE', path: '/api/accounts/me%40test' });
 });
 
+test('createCalendar -> POST /api/accounts/{ref}/calendars with {name}', () => {
+  const r = webRequestFor('createCalendar', { accountRef: 'me@test', name: 'Team' });
+  assert.equal(r.method, 'POST');
+  assert.equal(r.path, '/api/accounts/me%40test/calendars');
+  assert.deepEqual(r.body, { name: 'Team' });
+});
+
+test('createCalendar is not inert and does not throw as unmapped', () => {
+  assert.equal(isInertAction('createCalendar'), false);
+  assert.doesNotThrow(() => webRequestFor('createCalendar', { accountRef: 'a', name: 'b' }));
+});
+
 test('path params are URL-encoded', () => {
   assert.equal(webRequestFor('runPairNow', 'a/b c').path, '/api/pairs/a%2Fb%20c/run');
 });

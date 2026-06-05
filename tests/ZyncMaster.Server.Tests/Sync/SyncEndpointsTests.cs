@@ -234,6 +234,50 @@ public class SyncEndpointsTests : IClassFixture<ServerTestFactory>
     }
 
     [Fact]
+    public async Task Null_events_returns_400_bad_request()
+    {
+        var target = new RecordingCalendarTarget();
+        var factory = Build(target);
+        var (_, key, _) = await SeedDeviceAsync(factory);
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", key);
+
+        // {"events":null} must not blow up as a 500; it is a malformed body -> 400 bad_request.
+        var content = new StringContent("{\"events\":null}", System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/api/sync/calendar", content);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("error").GetString().Should().Be("bad_request");
+        target.Creates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Account_without_calendars_returns_409_no_calendar()
+    {
+        // A connected account that enumerates ZERO calendars must yield 409 no_calendar, not a 500
+        // from cals.First() on an empty list. The device has no explicit target calendar, so the
+        // service falls into the enumeration path.
+        var target = new RecordingCalendarTarget { Calendars = Array.Empty<CalendarTargetInfo>() };
+        var factory = Build(target);
+        var (_, key, _) = await SeedDeviceAsync(factory, targetCalendarId: null);
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", key);
+
+        var resp = await client.PostAsJsonAsync("/api/sync/calendar", new SyncRequest
+        {
+            Events = new List<AppointmentRecord> { MakeEvent("a", "First") },
+        });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("error").GetString().Should().Be("no_calendar");
+        target.Creates.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Partial_failure_returns_200_with_failures()
     {
         var target = new RecordingCalendarTarget();
