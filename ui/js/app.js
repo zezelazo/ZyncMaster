@@ -278,8 +278,8 @@ if (mql && mql.addEventListener) {
 // ---------------- App state ----------------
 // Product version shown in About + the Settings "About" row. Hardcoded because the web UI has
 // no channel to read the host's .NET assembly version; keep it in step with the published
-// release (currently 0.2.1, beta).
-const VERSION = '0.2.1';
+// release (currently 0.2.2, beta).
+const VERSION = '0.2.2';
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -2580,8 +2580,8 @@ function renderAbout(root) {
     el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
     el('div', { class: 'about-name', text: 'Zync Master' }),
     // Version is hardcoded: the web UI has no channel to read the .NET assembly version of the
-    // host. Keep this in step with the published release (currently 0.2.1, beta). No build number.
-    el('div', { class: 'about-version num', text: 'VERSION 0.2.1 · BETA' }),
+    // host. Keep this in step with the published release (currently 0.2.2, beta). No build number.
+    el('div', { class: 'about-version num', text: 'VERSION 0.2.2 · BETA' }),
     el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
     links,
   ));
