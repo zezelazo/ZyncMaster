@@ -214,4 +214,71 @@ public class ConnectEndpointsTests
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
+
+    // Drives the real /connect -> /connect/callback flow and returns nothing; the user is created
+    // as a side effect. Shared by the unification tests below.
+    private static async Task SignInThroughPanelAsync(WebApplicationFactory<Program> factory)
+    {
+        var client = NoRedirectClient(factory);
+        var connectResp = await client.GetAsync("/connect");
+        var state = ExtractStateFromLocation(connectResp.Headers.Location!);
+        var cookie = ExtractStateCookie(connectResp);
+
+        var callback = new HttpRequestMessage(
+            HttpMethod.Get, $"/connect/callback?code=abc&state={Uri.EscapeDataString(state)}");
+        callback.Headers.Add("Cookie", cookie);
+        var resp = await client.SendAsync(callback);
+        resp.StatusCode.Should().Be(HttpStatusCode.Redirect);
+    }
+
+    // FIX B — the panel sign-in door (/connect/callback) now routes through the unified
+    // UpsertByLoginAsync, so it writes an IdentityLoginRow (the legacy UpsertAsync never did). This
+    // is what makes every entry door converge on one IdentityLogins-keyed identity model.
+    [Fact]
+    public async Task Panel_callback_writes_an_identity_login_row()
+    {
+        using var factory = CreateFactory();
+
+        await SignInThroughPanelAsync(factory);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMaster.Server.Data.ZyncMasterDbContext>();
+        // Subject fell back to the UPN ("user@test"); the unified path stores provider/email lowercased.
+        var login = db.IdentityLogins.SingleOrDefault(
+            l => l.Provider == "microsoft" && l.ProviderSubject == "user@test");
+        login.Should().NotBeNull("the panel callback must record the login in IdentityLogins");
+        login!.EmailVerified.Should().BeFalse("Microsoft's email claim is not proof-of-possession");
+    }
+
+    // FIX B — the panel door and the modern sign-in door resolve to the SAME UserRow. The modern
+    // door (identity OAuth + magic-link) uses UpsertByLoginAsync directly; the panel callback now
+    // does too, so the same (provider, subject) cannot fork into two users. Previously the panel's
+    // UpsertAsync and the modern UpsertByLoginAsync could create two distinct UserRows for the same
+    // person, splitting their pairs/accounts/devices.
+    [Fact]
+    public async Task Panel_and_modern_door_resolve_to_the_same_user()
+    {
+        using var factory = CreateFactory();
+
+        // 1. Sign in through the panel door.
+        await SignInThroughPanelAsync(factory);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMaster.Server.Data.ZyncMasterDbContext>();
+        var panelUser = db.Users.Single(u => u.Provider == "microsoft" && u.Subject == "user@test");
+
+        // 2. The modern door for the SAME identity (same provider+subject) must return that user,
+        //    not mint a second one. UpsertByLoginAsync is exactly what both the modern Microsoft
+        //    callback and the magic-link callback call.
+        var users = factory.Services.GetRequiredService<IUserStore>();
+        var modernUser = await users.UpsertByLoginAsync(
+            "microsoft", "user@test", "user@test", emailVerified: false, "Test User");
+
+        modernUser.Id.Should().Be(panelUser.Id);
+
+        // Exactly one canonical user + one login for this identity — no fork.
+        db.ChangeTracker.Clear();
+        db.Users.Count(u => u.Provider == "microsoft" && u.Subject == "user@test").Should().Be(1);
+        db.IdentityLogins.Count(l => l.Provider == "microsoft" && l.ProviderSubject == "user@test").Should().Be(1);
+    }
 }

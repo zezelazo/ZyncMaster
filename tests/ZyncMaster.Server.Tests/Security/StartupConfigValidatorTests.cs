@@ -13,6 +13,10 @@ namespace ZyncMaster.Server.Tests.Security;
 // with empty config.
 public class StartupConfigValidatorTests
 {
+    // A non-empty secret stands in for what Program.cs reads from Microsoft:ClientSecret
+    // (user-secrets/env vars). The validator treats a blank/whitespace secret as fatal in production.
+    private const string Secret = "the-client-secret";
+
     private static ServerOptions FullyConfigured() => new()
     {
         MicrosoftClientId = "cid",
@@ -24,14 +28,16 @@ public class StartupConfigValidatorTests
     [Fact]
     public void Development_with_empty_config_does_not_throw()
     {
-        var act = () => StartupConfigValidator.ValidateOAuthConfig(new ServerOptions(), isDevelopment: true);
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            new ServerOptions(), isDevelopment: true, microsoftClientSecret: null);
         act.Should().NotThrow();
     }
 
     [Fact]
     public void Production_with_full_config_does_not_throw()
     {
-        var act = () => StartupConfigValidator.ValidateOAuthConfig(FullyConfigured(), isDevelopment: false);
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            FullyConfigured(), isDevelopment: false, microsoftClientSecret: Secret);
         act.Should().NotThrow();
     }
 
@@ -51,18 +57,45 @@ public class StartupConfigValidatorTests
             case "PublicBaseUrl": opts.PublicBaseUrl = ""; break;
         }
 
-        var act = () => StartupConfigValidator.ValidateOAuthConfig(opts, isDevelopment: false);
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            opts, isDevelopment: false, microsoftClientSecret: Secret);
 
         act.Should().Throw<InvalidOperationException>().WithMessage($"*{missing}*");
+    }
+
+    // FIX C — a blank Microsoft:ClientSecret in production must fail fast and name the secret in the
+    // 'missing' list. Without this guard ConfigurationSecretProvider silently returns "" and EVERY
+    // OAuth token exchange fails at runtime with an opaque AADSTS error.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Production_with_missing_client_secret_throws_naming_the_secret(string? secret)
+    {
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            FullyConfigured(), isDevelopment: false, microsoftClientSecret: secret);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Microsoft:ClientSecret*");
+    }
+
+    [Fact]
+    public void Development_with_missing_client_secret_does_not_throw()
+    {
+        // Development tolerates an absent secret (the OAuth flows are not exercised end-to-end).
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            FullyConfigured(), isDevelopment: true, microsoftClientSecret: null);
+        act.Should().NotThrow();
     }
 
     [Fact]
     public void Production_with_all_empty_lists_every_missing_setting()
     {
-        var act = () => StartupConfigValidator.ValidateOAuthConfig(new ServerOptions(), isDevelopment: false);
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            new ServerOptions(), isDevelopment: false, microsoftClientSecret: null);
 
         act.Should().Throw<InvalidOperationException>()
             .Where(e => e.Message.Contains("MicrosoftClientId")
+                && e.Message.Contains("Microsoft:ClientSecret")
                 && e.Message.Contains("IdentityRedirectUri")
                 && e.Message.Contains("CalendarRedirectUri")
                 && e.Message.Contains("PublicBaseUrl"));

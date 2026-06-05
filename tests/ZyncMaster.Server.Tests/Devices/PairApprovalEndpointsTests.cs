@@ -139,7 +139,7 @@ public class PairApprovalEndpointsTests
 
         // The pending row must remain unapproved — the anonymous request was rejected.
         var devices = factory.Services.GetRequiredService<IDeviceStore>();
-        var pending = await devices.GetPendingByCodeAsync("NOCOOK");
+        var pending = await devices.GetPendingByCodeAsync("NOCOOK", DateTimeOffset.MinValue);
         pending!.Approved.Should().BeFalse();
     }
 

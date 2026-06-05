@@ -63,11 +63,15 @@ if (string.IsNullOrWhiteSpace(connectionString))
 // Fail-fast on the OAuth / magic-link critical config — same discipline as the connection-string
 // guard above. Gated on !IsDevelopment() so the WebApplicationFactory test host and local dev
 // (both Development, with empty config) keep starting; in production a blank MicrosoftClientId /
-// redirect URI / PublicBaseUrl aborts host build with a clear, aggregated message rather than
-// serving a broken sign-in flow. Mailjet is NOT validated here (optional, falls back to logging).
+// ClientSecret / redirect URI / PublicBaseUrl aborts host build with a clear, aggregated message
+// rather than serving a broken sign-in flow. The secret is read from its own config key
+// (Microsoft:ClientSecret) because it lives in user-secrets/env vars, NOT the 'Server' section — a
+// blank secret would otherwise surface only as an opaque AADSTS error on the first token exchange.
+// Mailjet is NOT validated here (optional, falls back to logging).
 ZyncMaster.Server.Configuration.StartupConfigValidator.ValidateOAuthConfig(
     builder.Configuration.GetSection("Server").Get<ServerOptions>() ?? new ServerOptions(),
-    builder.Environment.IsDevelopment());
+    builder.Environment.IsDevelopment(),
+    builder.Configuration["Microsoft:ClientSecret"]);
 
 builder.Services.AddDbContextFactory<ZyncMasterDbContext>(o => o.UseSqlServer(connectionString));
 builder.Services.AddDbContext<ZyncMasterDbContext>(
@@ -151,6 +155,25 @@ builder.Services.AddRateLimiter(rl =>
         {
             PermitLimit = opts.MagicLinkMaxPerIp,
             Window = TimeSpan.FromMinutes(opts.MagicLinkRateLimitWindowMinutes),
+            QueueLimit = 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+        });
+    });
+
+    // FIX A — per-IP fixed window for the pairing endpoints (approve + pair/start + pair/complete).
+    // Mirrors the magic-link limiter: keyed on the (forwarded-header-resolved) remote IP, rejects
+    // excess with 429. This is the brute-force defense for the short pairing code — even with the
+    // raised entropy an unthrottled attacker could grind codes against /api/devices/approve, so the
+    // window bounds attempts. Anti-abuse only (never branches on whether a code exists), so it leaks
+    // nothing about valid codes/users.
+    rl.AddPolicy(DeviceEndpoints.PairingRateLimitPolicy, context =>
+    {
+        var opts = context.RequestServices.GetRequiredService<IOptions<ServerOptions>>().Value;
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter("pairing:" + ip, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = opts.PairingMaxPerIp,
+            Window = TimeSpan.FromMinutes(opts.PairingRateLimitWindowMinutes),
             QueueLimit = 0,
             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
         });

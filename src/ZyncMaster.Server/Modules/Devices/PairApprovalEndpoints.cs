@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Options;
 
 namespace ZyncMaster.Server;
 
@@ -16,7 +17,7 @@ public static class PairApprovalEndpoints
         // is sent through /connect first and returned here afterwards. This page is NOT
         // api-key protected — it is reached from a human's browser; the api key lives only
         // on the paired device.
-        app.MapGet("/pair", async (HttpContext context, IDeviceStore devices) =>
+        app.MapGet("/pair", async (HttpContext context, IDeviceStore devices, IOptions<ServerOptions> opts) =>
         {
             var code = context.Request.Query["code"].ToString();
 
@@ -35,7 +36,11 @@ public static class PairApprovalEndpoints
             if (string.IsNullOrWhiteSpace(code))
                 return Results.Content(Page("Pair a device", "<p>No pairing code supplied.</p>"), "text/html");
 
-            var pending = await devices.GetPendingByCodeAsync(code, context.RequestAborted);
+            // TTL-bounded lookup (FIX A): an expired code resolves to null, so the page shows the
+            // same "not valid or has expired" message rather than offering to approve a stale code.
+            var ttl = opts.Value.PendingPairingTtlMinutes <= 0 ? 15 : opts.Value.PendingPairingTtlMinutes;
+            var cutoff = DateTimeOffset.UtcNow.AddMinutes(-ttl);
+            var pending = await devices.GetPendingByCodeAsync(code, cutoff, context.RequestAborted);
             if (pending is null)
                 return Results.Content(Page("Pair a device",
                     "<p>That pairing code is not valid or has expired.</p>"), "text/html");

@@ -121,8 +121,80 @@ public class EfDeviceStoreTests
         await store.SavePendingAsync(SamplePending("pair-2", "CODE-B"));
 
         (await store.GetPendingAsync("pair-1"))!.Code.Should().Be("CODE-A");
-        (await store.GetPendingByCodeAsync("CODE-B"))!.PairingId.Should().Be("pair-2");
-        (await store.GetPendingByCodeAsync("MISSING")).Should().BeNull();
+        (await store.GetPendingByCodeAsync("CODE-B", DateTimeOffset.MinValue))!.PairingId.Should().Be("pair-2");
+        (await store.GetPendingByCodeAsync("MISSING", DateTimeOffset.MinValue)).Should().BeNull();
+    }
+
+    // FIX A — the TTL-bounded lookup must not resolve a code whose CreatedUtc is before the cutoff.
+    // Exercises the in-memory window filter over the EF store on SQLite.
+    [Fact]
+    public async Task GetPendingByCode_excludes_rows_older_than_cutoff()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfDeviceStore(h.Factory, h.CurrentUser);
+        var created = new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        await store.SavePendingAsync(SamplePending("pair-ttl", "TTLCODE") with { CreatedUtc = created });
+
+        // Cutoff after the row was created -> expired -> not resolved.
+        (await store.GetPendingByCodeAsync("TTLCODE", created.AddMinutes(1))).Should().BeNull();
+        // Cutoff at/before creation -> still live.
+        (await store.GetPendingByCodeAsync("TTLCODE", created)).Should().NotBeNull();
+    }
+
+    // FIX A — the atomic conditional claim. The first call wins (1 row), the second loses (0 rows):
+    // this is the EF raw-SQL UPDATE that prevents a double-approve, verified on SQLite.
+    [Fact]
+    public async Task TryMarkApproved_is_atomic_and_idempotent()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfDeviceStore(h.Factory, h.CurrentUser);
+        var created = DateTimeOffset.UtcNow;
+        await store.SavePendingAsync(SamplePending("pair-claim", "CLAIM01") with { CreatedUtc = created });
+        var cutoff = created.AddMinutes(-15);
+
+        var first = await store.TryMarkApprovedAsync("CLAIM01", cutoff, "dev-A", "key-A");
+        var second = await store.TryMarkApprovedAsync("CLAIM01", cutoff, "dev-B", "key-B");
+
+        first.Should().BeTrue();
+        second.Should().BeFalse("the row is already approved, so the conditional UPDATE affects 0 rows");
+
+        var pending = await store.GetPendingAsync("pair-claim");
+        pending!.Approved.Should().BeTrue();
+        pending.ApprovedDeviceId.Should().Be("dev-A", "the first claim's device id must not be overwritten");
+        pending.OneTimeApiKey.Should().Be("key-A", "the first claim's key must not be overwritten");
+    }
+
+    // FIX A — an expired code cannot be claimed even directly at the store layer.
+    [Fact]
+    public async Task TryMarkApproved_rejects_expired_code()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfDeviceStore(h.Factory, h.CurrentUser);
+        var created = DateTimeOffset.UtcNow.AddMinutes(-20);
+        await store.SavePendingAsync(SamplePending("pair-old", "OLD0001") with { CreatedUtc = created });
+
+        var cutoff = DateTimeOffset.UtcNow.AddMinutes(-15);
+        (await store.TryMarkApprovedAsync("OLD0001", cutoff, "dev-X", "key-X")).Should().BeFalse();
+        (await store.GetPendingAsync("pair-old"))!.Approved.Should().BeFalse();
+    }
+
+    // FIX A — set-based purge of expired pending pairings (the EF raw DELETE) on SQLite.
+    [Fact]
+    public async Task PurgeExpiredPending_deletes_only_rows_before_cutoff()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfDeviceStore(h.Factory, h.CurrentUser);
+        var now = DateTimeOffset.UtcNow;
+        await store.SavePendingAsync(SamplePending("old-1", "OLDA") with { CreatedUtc = now.AddMinutes(-30) });
+        await store.SavePendingAsync(SamplePending("old-2", "OLDB") with { CreatedUtc = now.AddMinutes(-16) });
+        await store.SavePendingAsync(SamplePending("fresh", "FRESH") with { CreatedUtc = now.AddMinutes(-1) });
+
+        var removed = await store.PurgeExpiredPendingAsync(now.AddMinutes(-15));
+
+        removed.Should().Be(2);
+        (await store.GetPendingAsync("old-1")).Should().BeNull();
+        (await store.GetPendingAsync("old-2")).Should().BeNull();
+        (await store.GetPendingAsync("fresh")).Should().NotBeNull();
     }
 
     [Fact]
@@ -168,7 +240,7 @@ public class EfDeviceStoreTests
         await store.SavePendingAsync(SamplePending("pair-global", "GLOB01"));
 
         currentUser.UserId = "signed-in-user";
-        (await store.GetPendingByCodeAsync("GLOB01"))!.PairingId.Should().Be("pair-global");
+        (await store.GetPendingByCodeAsync("GLOB01", DateTimeOffset.MinValue))!.PairingId.Should().Be("pair-global");
         (await store.GetPendingAsync("pair-global"))!.Code.Should().Be("GLOB01");
 
         await store.UpdatePendingAsync(SamplePending("pair-global", "GLOB01") with { Approved = true });

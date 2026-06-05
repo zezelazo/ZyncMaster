@@ -116,7 +116,7 @@ public class DeviceJourneyTests
         selfApprove.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
         var devices = h.Factory.Services.GetRequiredService<IDeviceStore>();
-        var pending = await devices.GetPendingByCodeAsync(code!);
+        var pending = await devices.GetPendingByCodeAsync(code!, DateTimeOffset.MinValue);
         pending!.Approved.Should().BeFalse();
     }
 }

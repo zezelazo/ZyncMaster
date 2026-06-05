@@ -118,4 +118,36 @@ public sealed class EphemeralPurgeServiceTests
 
         await act.Should().NotThrowAsync();
     }
+
+    // FIX A — pending pairings are now swept by the same purge sweep (previously they were NEVER
+    // purged or expired). With the default 15-minute TTL the cutoff is Now-15m = 11:45; rows older
+    // than that are deleted regardless of Approved, fresher rows survive.
+    [Fact]
+    public async Task PurgeOnceAsync_deletes_expired_pending_pairings_only()
+    {
+        using var harness = new EfStoreTestHarness();
+        await using (var db = harness.NewContext())
+        {
+            db.PendingPairings.Add(Pending("expired", Now.AddMinutes(-30)));
+            db.PendingPairings.Add(Pending("expired-approved", Now.AddMinutes(-20), approved: true));
+            db.PendingPairings.Add(Pending("fresh", Now.AddMinutes(-1)));
+            await db.SaveChangesAsync();
+        }
+
+        await NewService(harness).PurgeOnceAsync(Now);
+
+        await using var verify = harness.NewContext();
+        var ids = verify.PendingPairings.Select(p => p.PairingId).ToList();
+        ids.Should().BeEquivalentTo(new[] { "fresh" });
+    }
+
+    private static PendingPairingRow Pending(string id, DateTimeOffset created, bool approved = false) =>
+        new()
+        {
+            PairingId = id,
+            DeviceName = "Device " + id,
+            Code = "C-" + id,
+            Approved = approved,
+            CreatedUtc = created,
+        };
 }
