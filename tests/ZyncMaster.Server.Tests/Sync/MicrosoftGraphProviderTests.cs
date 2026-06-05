@@ -98,7 +98,9 @@ public class MicrosoftGraphProviderTests
 
         records.Should().HaveCount(1);
         var r = records[0];
-        r.Id.Should().Be("ical-1");
+        // FIX 1 — the id is the per-occurrence key (iCalUId folded with the occurrence start), not
+        // the raw iCalUId, so recurring occurrences sharing an iCalUId never collapse onto one id.
+        r.Id.Should().Be(OccurrenceId.For("ical-1", new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)));
         r.Subject.Should().Be("Standup");
         r.Description.Should().Be("Daily sync");
         r.OrganizerEmail.Should().Be("alice@test");
@@ -118,7 +120,10 @@ public class MicrosoftGraphProviderTests
 
         var records = await provider.ReadWindowAsync("cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1));
 
-        records.Should().ContainSingle().Which.Id.Should().Be("evt2");
+        // FIX 1 — no iCalUId, so the event id is the stable id, still folded with the occurrence
+        // start into the per-occurrence key.
+        records.Should().ContainSingle().Which.Id.Should()
+            .Be(OccurrenceId.For("evt2", new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)));
     }
 
     [Fact]
@@ -145,7 +150,10 @@ public class MicrosoftGraphProviderTests
 
         var records = await provider.ReadWindowAsync("cal1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(2));
 
-        records.Select(r => r.Id).Should().BeEquivalentTo(new[] { "a", "b" });
+        // One record per page, both followed; ids are now per-occurrence keys (FIX 1), so assert the
+        // subjects (and that pagination produced two distinct records) rather than the raw ids.
+        records.Select(r => r.Subject).Should().BeEquivalentTo(new[] { "A", "B" });
+        records.Select(r => r.Id).Distinct().Should().HaveCount(2);
         handler.RequestedUrls.Should().HaveCount(2);
         handler.RequestedUrls[1].Should().Be("https://graph.microsoft.com/v1.0/next-page");
     }

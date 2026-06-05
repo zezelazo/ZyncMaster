@@ -163,8 +163,12 @@ public sealed class PairSchedulerTests
         client.LastListBearer.Should().Be("b");
         client.LastPushApiKey.Should().Be("k");
         source.ReadCount.Should().Be(1);
-        source.LastFrom.Should().Be(clock.UtcNow);
-        source.LastTo.Should().Be(clock.UtcNow.AddDays(14));
+        // FIX 2 — the COM read-from is snapped to today 00:00 UTC so it matches the server's sweep
+        // window lower bound (PairEndpoints.Window), NOT the current instant. The clock is
+        // 2025-05-10 08:00Z, so the read floor is 2025-05-10 00:00Z and the upper bound is +14 days.
+        var expectedFrom = new DateTimeOffset(clock.UtcNow.UtcDateTime.Date, TimeSpan.Zero);
+        source.LastFrom.Should().Be(expectedFrom);
+        source.LastTo.Should().Be(expectedFrom.AddDays(14));
         client.PushedPairIds.Should().ContainSingle().Which.Should().Be("p1");
         client.RanPairIds.Should().BeEmpty();
     }

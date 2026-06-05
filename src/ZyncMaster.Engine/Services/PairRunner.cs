@@ -11,13 +11,22 @@ namespace ZyncMaster.Engine;
 // ICalendarSource and pushed; every other pair is mirrored entirely server-side via RunPair.
 //
 // Keeping this in one place avoids the two call sites drifting on the COM-vs-Graph
-// decision or the [now, now + SyncWindowDays] window.
+// decision or the read window.
 public static class PairRunner
 {
     public const string OutlookComProvider = "OutlookCom";
 
-    // Runs the given pair once and returns the server's MirrorResult. The window for a COM
-    // read is [now, now + settings.SyncWindowDays], matching the scheduler.
+    // Runs the given pair once and returns the server's MirrorResult.
+    //
+    // DATA-INTEGRITY CONTRACT (read-from == sweep-from): the server's destructive orphan sweep
+    // (PairEndpoints.Window) reconciles the window [today 00:00 UTC, +SyncWindowDays]. The COM
+    // read MUST cover that SAME lower bound, or any event that starts between 00:00 UTC and `now`
+    // would be inside the sweep window but absent from the pushed set — and the sweep would delete
+    // it from the destination even though it still exists at the source. So the COM window's lower
+    // bound is today's date at 00:00 UTC (NOT the current instant `now`), exactly matching the
+    // server's Window(). `now` is still the scheduling clock the callers pass; only the read floor
+    // is snapped to the day boundary. The upper bound stays today 00:00 UTC + SyncWindowDays so the
+    // whole [from, to] read window is identical to the server's sweep window.
     public static async Task<MirrorResult> RunOnceAsync(
         IPairsClient client,
         ICalendarSource comSource,
@@ -35,12 +44,21 @@ public static class PairRunner
 
         if (IsOutlookCom(pair))
         {
-            var to = now.AddDays(settings.SyncWindowDays);
-            var events = await comSource.ReadWindowAsync(now, to, ct);
+            var (from, to) = ReadWindow(now, settings.SyncWindowDays);
+            var events = await comSource.ReadWindowAsync(from, to, ct);
             return await client.PushPairAsync(apiKey, pair.Id, events, ct);
         }
 
         return await client.RunPairAsync(apiKey, pair.Id, ct);
+    }
+
+    // The COM read window, snapped to the day boundary so its lower bound matches the server's
+    // sweep window (PairEndpoints.Window): [today 00:00 UTC, today 00:00 UTC + windowDays].
+    // Public + static so a test can assert the floor without standing up the whole runner.
+    public static (DateTimeOffset from, DateTimeOffset to) ReadWindow(DateTimeOffset now, int windowDays)
+    {
+        var from = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        return (from, from.AddDays(windowDays));
     }
 
     public static bool IsOutlookCom(SyncPair pair)

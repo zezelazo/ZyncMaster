@@ -208,7 +208,15 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
 
         return new AppointmentRecord
         {
-            Id = stableId,
+            // Per-occurrence upsert key. calendarView EXPANDS a recurring series into N
+            // occurrences that all share the same iCalUId (and the same series event id),
+            // so using the raw stableId would collapse the whole series onto ONE
+            // AppointmentRecord.Id — losing N-1 occurrences and making the downstream mirror
+            // send N updates onto a single destination event (orphaning the rest). Folding the
+            // occurrence start into the id (exactly as the COM path does in CompleteCalendarReader
+            // via OccurrenceId.For) gives each occurrence its own stable, distinct id so the
+            // upsert + sweep treat each occurrence as its own event.
+            Id = OccurrenceId.For(stableId, startOffset),
             Subject = subject,
             Description = description,
             IsAllDay = isAllDay,

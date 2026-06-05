@@ -24,6 +24,17 @@ public sealed record SyncPair
     public string State { get; init; } = "active";
     public DateTimeOffset? LastRunUtc { get; init; }
     public MirrorResult? LastResult { get; init; }
+
+    // Destinations this pair previously wrote to and must still clean up (FIX 3). When a pair is
+    // re-targeted (PATCH changes Destination), the OLD destination still holds the events this
+    // pair created (CalImportPairId == pair.Id). The opt-in /cleanup-destination call is the
+    // immediate path, but if the client never calls it (crash/close) those events would be
+    // orphaned forever. So every old destination is recorded here and DRAINED idempotently at the
+    // start of the next run/push: ListManagedByPairAsync already filters by pair.Id, so re-running
+    // a partially-completed drain only re-deletes what is still present. Empty by default; the
+    // CURRENT destination is never added (it must not be swept). De-duplicated on (provider,
+    // accountRef, calendarId).
+    public List<Endpoint> PendingCleanupDestinations { get; init; } = new();
 }
 
 // Counts from a single mirror run, returned by push/run and stored as a pair's LastResult.

@@ -183,4 +183,74 @@ public sealed class AccountAwareGraphTokenProviderTests
         await provider.Invoking(p => p.GetAccessTokenAsync())
             .Should().ThrowAsync<AuthenticationFailedException>();
     }
+
+    // ── FIX 4 — concurrent refresh-token rotation of the SAME account by two providers ─────────
+    // The source and destination of a pair can be the same Microsoft account; ResolveReader and
+    // ResolveWriter build SEPARATE providers, so both can call RefreshAsync at once. Azure AD
+    // rotates+invalidates the refresh token on each use, so the loser gets invalid_grant on a now
+    // stale token. The winner has already PERSISTED the rotated token, so the loser must re-read it
+    // once and retry rather than fail with a destructive invalid_grant.
+    [Fact]
+    public async Task InvalidGrant_recovers_by_rereading_the_rotated_token_and_retrying_once()
+    {
+        var pool = new FakePool();
+        await pool.AddAsync(new CalendarAccount
+        {
+            Id = "pool-id", UserId = UserId, Kind = AccountKind.Graph, Provider = "microsoft",
+            AccountEmail = "p@test", Scope = AccountScope.ReadWrite, ConnectedAt = DateTimeOffset.UtcNow,
+        }, "stale-rt");
+
+        // Simulate the sibling provider having ALREADY rotated + persisted the new token to the
+        // store the instant before this provider's stale refresh is rejected. The token service
+        // rejects the stale token with invalid_grant but accepts the rotated one.
+        var rotatedPersisted = false;
+        var tokens = new FakeTokenService(rt =>
+        {
+            if (rt == "stale-rt")
+            {
+                if (!rotatedPersisted)
+                {
+                    rotatedPersisted = true;
+                    pool.UpdateRefreshTokenAsync("pool-id", "fresh-rt").GetAwaiter().GetResult();
+                }
+                throw new AuthenticationFailedException(
+                    "Microsoft token endpoint returned 400 (invalid_grant: AADSTS70008).");
+            }
+            return new TokenResult
+            {
+                AccessToken = "access-after-retry", RefreshToken = rt, ExpiresUtc = DateTimeOffset.UtcNow.AddHours(1),
+            };
+        });
+        var provider = new AccountAwareGraphTokenProvider(tokens, NewAdapter(pool, NewLegacy()), "pool-id");
+
+        var token = await provider.GetAccessTokenAsync();
+
+        token.Should().Be("access-after-retry", "the retry uses the rotated token the sibling persisted");
+        tokens.LastRefreshToken.Should().Be("fresh-rt");
+        tokens.RefreshCallCount.Should().Be(2, "exactly one retry after the invalid_grant");
+    }
+
+    [Fact]
+    public async Task InvalidGrant_propagates_when_the_stored_token_is_unchanged()
+    {
+        // A genuine revoked/expired consent: the store still holds the SAME token that was just
+        // rejected, so there is nothing new to retry — the error must surface (not loop).
+        var pool = new FakePool();
+        await pool.AddAsync(new CalendarAccount
+        {
+            Id = "pool-id", UserId = UserId, Kind = AccountKind.Graph, Provider = "microsoft",
+            AccountEmail = "p@test", Scope = AccountScope.ReadWrite, ConnectedAt = DateTimeOffset.UtcNow,
+        }, "revoked-rt");
+
+        var tokens = new FakeTokenService(_ =>
+            throw new AuthenticationFailedException(
+                "Microsoft token endpoint returned 400 (invalid_grant: AADSTS50173)."));
+        var provider = new AccountAwareGraphTokenProvider(tokens, NewAdapter(pool, NewLegacy()), "pool-id");
+
+        await provider.Invoking(p => p.GetAccessTokenAsync())
+            .Should().ThrowAsync<AuthenticationFailedException>();
+
+        // No re-read could change the outcome -> exactly one refresh attempt, no retry loop.
+        tokens.RefreshCallCount.Should().Be(1, "an unrecoverable invalid_grant must not retry");
+    }
 }

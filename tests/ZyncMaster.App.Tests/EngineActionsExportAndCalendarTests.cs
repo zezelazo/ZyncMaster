@@ -474,7 +474,11 @@ public class EngineActionsExportAndCalendarTests
         var result = await actions.RunPairNowAsync("p1", CancellationToken.None);
 
         result.Created.Should().Be(1);
-        comSource.Verify(s => s.ReadWindowAsync(now, now.AddDays(14), It.IsAny<CancellationToken>()), Times.Once);
+        // FIX 2 — the COM read-from is snapped to today 00:00 UTC so it matches the server's sweep
+        // window lower bound (not the current instant `now` = 09:00). The clock is 2026-06-01 09:00Z,
+        // so the read window is [2026-06-01 00:00Z, +14 days].
+        var expectedFrom = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        comSource.Verify(s => s.ReadWindowAsync(expectedFrom, expectedFrom.AddDays(14), It.IsAny<CancellationToken>()), Times.Once);
         pairs.Verify(p => p.PushPairAsync("device-key", "p1", events, It.IsAny<CancellationToken>()), Times.Once);
         pairs.Verify(p => p.RunPairAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }

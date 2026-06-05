@@ -350,6 +350,65 @@ public class PairDestinationCleanupTests : IClassFixture<ServerTestFactory>
         writer.CountCalls.Should().BeEmpty();
     }
 
+    // ── FIX 3 — eventual server-side drain of a re-targeted pair's old destination ────────────
+
+    private static async Task PatchPairAsync(HttpClient client, string id, object body)
+    {
+        var resp = await client.PatchAsync($"/api/pairs/{id}",
+            JsonContent.Create(body));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Retarget_then_run_without_client_cleanup_drains_the_old_destination_for_this_pair_only()
+    {
+        var writer = new RecordingWriter();
+        var factory = Build(writer);
+        var client = await AuthedClientAsync(factory);
+
+        // Pair's current destination is "cur-cal".
+        var id = await CreatePairAsync(client, GraphPairBody());
+
+        // Re-target the destination to "new-cal" WITHOUT ever calling /cleanup-destination
+        // (simulating a client crash/close right after the edit). The old "cur-cal" still holds the
+        // events this pair created.
+        await PatchPairAsync(client, id, new
+        {
+            destination = new { provider = "MicrosoftGraph", accountRef = "default", calendarId = "new-cal", calendarName = "New" },
+        });
+
+        writer.CleanupCalls.Should().BeEmpty("the PATCH only queues the cleanup; it does not delete");
+
+        // The next run drains the queued old destination idempotently, server-side, before mirroring.
+        var run = await client.PostAsync($"/api/pairs/{id}/run", content: null);
+        run.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        writer.CleanupCalls.Should().ContainSingle("the old destination is drained on the next run");
+        writer.CleanupCalls[0].calendarId.Should().Be("cur-cal", "only the OLD destination is cleaned");
+        writer.CleanupCalls[0].pairId.Should().Be(id, "the drain is scoped to THIS pair only");
+    }
+
+    [Fact]
+    public async Task Drained_old_destination_is_not_cleaned_again_on_a_subsequent_run()
+    {
+        var writer = new RecordingWriter();
+        var factory = Build(writer);
+        var client = await AuthedClientAsync(factory);
+        var id = await CreatePairAsync(client, GraphPairBody());
+
+        await PatchPairAsync(client, id, new
+        {
+            destination = new { provider = "MicrosoftGraph", accountRef = "default", calendarId = "new-cal", calendarName = "New" },
+        });
+
+        (await client.PostAsync($"/api/pairs/{id}/run", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsync($"/api/pairs/{id}/run", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // The first run drained it (no failures), so the entry is dequeued and the second run does
+        // NOT re-clean it.
+        writer.CleanupCalls.Should().ContainSingle("a fully drained entry must not be cleaned again");
+    }
+
     [Fact]
     public async Task ManagedCount_outlookcom_destination_returns_zero_without_resolving_writer()
     {
