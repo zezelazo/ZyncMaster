@@ -392,6 +392,9 @@ const live = {
   pairs: null,       // [SyncPair] from listPairs
   accounts: null,    // [AccountInfo] from listAccounts
   calendars: {},     // accountRef -> [CalendarInfo]
+  localCalendars: null,      // [string] local Outlook (COM) display names from listLocalCalendars (Feature 2)
+  localCalendarsLoading: false,
+  localCalendarsError: false,
   autoStart: null,   // bool from getAutoStart
   me: null,          // { email, displayName } from getStatus/api/me (web panel)
   device: null,      // { deviceId, name, platform } from getDevice (desktop App, lazy-loaded)
@@ -578,14 +581,44 @@ async function loadCalendars(accountRef) {
   }
 }
 
+// Feature 2 — enumerate this device's LOCAL Outlook (COM) calendars (display-name strings) for the
+// wizard's COM source multi-select. COM-only; a failure (no Outlook / launch error) sets the error
+// flag so the picker can degrade to "all calendars" with a notice instead of throwing.
+async function loadLocalCalendars() {
+  if (!Bridge.available) return null;
+  live.localCalendarsLoading = true;
+  live.localCalendarsError = false;
+  try {
+    const list = await Bridge.call('listLocalCalendars');
+    live.localCalendars = Array.isArray(list) ? list : [];
+    return live.localCalendars;
+  } catch (_) {
+    live.localCalendars = [];
+    live.localCalendarsError = true;
+    return live.localCalendars;
+  } finally {
+    live.localCalendarsLoading = false;
+  }
+}
+
 // Map a SyncPair (server shape) into the accordion view-model the renderer expects.
 function pairViewModel(p) {
-  const endpointLabel = (e) => {
+  const endpointLabel = (e, isSource) => {
     if (!e) return { svc: 'Outlook', acct: '', email: '' };
     const com = (e.provider || '').toLowerCase() === 'outlookcom';
+    // Feature 2 — a source mirroring multiple calendars shows a count/"All calendars" label rather
+    // than a single calendar name. The destination is always one calendar, so it keeps its name.
+    let acct = e.calendarName || (com ? 'Outlook (this PC)' : 'Calendar');
+    if (isSource) {
+      const ids = Array.isArray(e.calendarIds) ? e.calendarIds : [];
+      const names = Array.isArray(e.calendarNames) ? e.calendarNames : [];
+      const count = com ? names.length : ids.length;
+      if (e.allCalendars) acct = 'All calendars';
+      else if (count > 1) acct = `${count} calendars`;
+    }
     return {
       svc: com ? 'Outlook' : 'Outlook',
-      acct: e.calendarName || (com ? 'Outlook (this PC)' : 'Calendar'),
+      acct,
       email: com ? 'Local Outlook' : (e.accountRef || ''),
       provider: e.provider || '',
     };
@@ -604,8 +637,8 @@ function pairViewModel(p) {
     id: p.id,
     name: p.name,
     serverState: p.state, // active | paused | disabled
-    src: endpointLabel(p.source),
-    dst: endpointLabel(p.destination),
+    src: endpointLabel(p.source, true),
+    dst: endpointLabel(p.destination, false),
     state: p.state === 'active' ? 'ok' : 'paused',
     lastSync: p.lastRunUtc ? new Date(p.lastRunUtc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—',
     nextSync: (p.intervalMin || 10) * 60,
@@ -1017,11 +1050,17 @@ const addPairLive = {
   editId: null,               // null = creating; a pair id = editing that pair (F2)
   sourceKind: null,           // 'com' | 'online'
   srcAccountRef: null, srcCalendarId: null, srcCalendarName: null,
+  // Feature 2 — source multi-calendar selection. srcAllCalendars defaults ON ("all of the origin").
+  // srcCalendarNames: COM display names; srcCalendarIds: Graph calendar ids (subset when not all).
+  // The single srcCalendarId/srcCalendarName above are kept as the legacy/back-compat anchor (the
+  // server still requires a non-empty source.calendarId), and as the label for the preview.
+  srcAllCalendars: true, srcCalendarNames: [], srcCalendarIds: [],
   dstAccountRef: null, dstCalendarId: null, dstCalendarName: null,
   name: '', intervalMin: 15,
   // Originals captured on edit so step 3 can warn when source/destination changed (fresh start /
   // orphans left in the old destination). Unused when creating.
   origSourceKind: null, origSrcAccountRef: null, origSrcCalendarId: null,
+  origSrcAllCalendars: true, origSrcCalendarNames: [], origSrcCalendarIds: [],
   origDstAccountRef: null, origDstCalendarId: null,
   origDstCalendarName: null,
   // Opt-in cleanup of the PREVIOUS destination when the destination is re-targeted (F2). Default
@@ -1034,9 +1073,11 @@ function resetAddPairLive() {
   Object.assign(addPairLive, {
     step: 0, editId: null, sourceKind: null,
     srcAccountRef: null, srcCalendarId: null, srcCalendarName: null,
+    srcAllCalendars: true, srcCalendarNames: [], srcCalendarIds: [],
     dstAccountRef: null, dstCalendarId: null, dstCalendarName: null,
     name: '', intervalMin: 15,
     origSourceKind: null, origSrcAccountRef: null, origSrcCalendarId: null,
+    origSrcAllCalendars: true, origSrcCalendarNames: [], origSrcCalendarIds: [],
     origDstAccountRef: null, origDstCalendarId: null, origDstCalendarName: null,
     cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
   });
@@ -1052,6 +1093,13 @@ function startEditPair(id) {
   const src = pair.source || {};
   const dst = pair.destination || {};
   const com = (src.provider || '').toLowerCase() === 'outlookcom';
+  // Feature 2 — preload the source selection. A legacy pair has no allCalendars/calendarIds/
+  // calendarNames; treat the absence as "all" (the server's legacy fallback also reads everything
+  // configured), so an unedited legacy pair round-trips without forcing a subset.
+  const srcNames = Array.isArray(src.calendarNames) ? src.calendarNames.slice() : [];
+  const srcIds = Array.isArray(src.calendarIds) ? src.calendarIds.slice() : [];
+  const hasSubset = com ? srcNames.length > 0 : srcIds.length > 0;
+  const allCalendars = src.allCalendars === true || (!src.allCalendars && !hasSubset);
   Object.assign(addPairLive, {
     step: 0,
     editId: id,
@@ -1059,6 +1107,9 @@ function startEditPair(id) {
     srcAccountRef: com ? null : (src.accountRef || null),
     srcCalendarId: src.calendarId || (com ? 'local' : null),
     srcCalendarName: src.calendarName || (com ? 'Outlook (this PC)' : null),
+    srcAllCalendars: allCalendars,
+    srcCalendarNames: srcNames,
+    srcCalendarIds: srcIds,
     dstAccountRef: dst.accountRef || null,
     dstCalendarId: dst.calendarId || null,
     dstCalendarName: dst.calendarName || null,
@@ -1067,6 +1118,9 @@ function startEditPair(id) {
     origSourceKind: com ? 'com' : 'online',
     origSrcAccountRef: com ? null : (src.accountRef || null),
     origSrcCalendarId: src.calendarId || (com ? 'local' : null),
+    origSrcAllCalendars: allCalendars,
+    origSrcCalendarNames: srcNames.slice(),
+    origSrcCalendarIds: srcIds.slice(),
     origDstAccountRef: dst.accountRef || null,
     origDstCalendarId: dst.calendarId || null,
     origDstCalendarName: dst.calendarName || null,
@@ -1259,6 +1313,176 @@ function createCalendarFor(accountRef, name, onPick, onError) {
     .catch((e) => { if (onError) onError((e && e.message) || 'Could not create the calendar.'); });
 }
 
+// Feature 2 — the "All calendars" header row shared by both source multi-selects. A toggle that,
+// when ON, means "read every calendar of this origin"; when OFF, the per-calendar checkboxes below
+// drive the explicit subset.
+function allCalendarsRow(get, set) {
+  // The toggle gets the REAL setter (plus a rerender) so BOTH mouse click and keyboard
+  // (Space/Enter on the role=switch) flip the state and repaint. A no-op setter here would
+  // make keyboard activation move aria-checked without changing the actual selection.
+  const toggle = toggleLocal(get, (v) => { set(v); rerender(); }, 'All calendars');
+  // Plain div (not <label>) and no row-level click handler: a label+click wrapper around the
+  // switch double-fires on mouse (label click + toggle click) and bypasses the switch on keyboard.
+  // Clicking the text label area instead forwards to the toggle so the whole row stays clickable.
+  const row = el('div', { class: 'cal-multi__all' },
+    el('div', { class: 'cal-multi__all-text' },
+      el('div', { class: 'cal-item__name', text: 'All calendars' }),
+      el('div', { class: 'cal-item__sub', text: 'Mirror every calendar from this source into the destination' })),
+    toggle);
+  row.querySelector('.cal-multi__all-text').addEventListener('click', () => { set(!get()); rerender(); });
+  return row;
+}
+
+// A single multi-select calendar checkbox row (used for both COM names and Graph ids).
+function calCheckRow(label, sub, checked, onToggle) {
+  return el('button', { class: `cal-item${checked ? ' is-selected' : ''}`, type: 'button', onclick: () => { onToggle(); rerender(); } },
+    pairBadge('Outlook'),
+    el('div', null,
+      el('div', { class: 'cal-item__name', text: label }),
+      sub ? el('div', { class: 'cal-item__sub', text: sub }) : null),
+    el('div', { class: 'cal-item__check', html: checked ? icon('check', { size: 12, stroke: 2.6 }) : '' }));
+}
+
+// COM source multi-select: "All calendars" + a checkbox per local Outlook calendar (display names).
+// Lazy-loads the device's local calendars via the listLocalCalendars bridge action.
+function comSourceMultiSelect() {
+  const a = addPairLive;
+  const wrap = el('div', { class: 'glass glass--card cal-multi', style: 'padding:4px' });
+  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; }));
+
+  if (live.localCalendars === null) {
+    if (!live.localCalendarsLoading)
+      loadLocalCalendars().then(() => { if (state.view === 'add-pair') rerender(); });
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:8px 12px', text: 'Loading calendars…' }));
+    return wrap;
+  }
+
+  if (live.localCalendarsError) {
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:8px 12px', text: 'Could not list local calendars. Outlook may not be available; "All calendars" will be used.' }));
+    return wrap;
+  }
+
+  if (a.srcAllCalendars) return wrap; // subset list is hidden while "All" is on
+
+  if (live.localCalendars.length === 0) {
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:8px 12px', text: 'No local calendars found.' }));
+    return wrap;
+  }
+
+  const list = el('div', { class: 'cal-list' });
+  live.localCalendars.forEach((name) => {
+    const checked = a.srcCalendarNames.includes(name);
+    list.append(calCheckRow(name, 'Local Outlook', checked, () => {
+      if (checked) a.srcCalendarNames = a.srcCalendarNames.filter((n) => n !== name);
+      else a.srcCalendarNames = a.srcCalendarNames.concat([name]);
+    }));
+  });
+  wrap.append(list);
+  return wrap;
+}
+
+// Online source multi-select: "All calendars" + a checkbox per calendar across the connected
+// accounts. Selecting calendars records their Graph ids in srcCalendarIds and pins srcAccountRef to
+// the account of the first selected calendar (a source pair targets ONE account's calendars).
+function onlineSourceMultiSelect() {
+  const a = addPairLive;
+  const wrap = el('div', { class: 'glass glass--card cal-multi', style: 'padding:4px' });
+  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; }));
+
+  const accounts = live.accounts || [];
+  if (accounts.length === 0) {
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts. Connect one on the server first.' }));
+    return wrap;
+  }
+
+  const list = el('div', { class: 'cal-list' });
+  accounts.forEach((acc) => {
+    list.append(el('div', { class: 'route__label', style: 'padding:8px 10px 2px', text: acc.displayName || acc.accountRef }));
+    const cals = live.calendars[acc.accountRef];
+    if (!cals) {
+      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
+      loadCalendars(acc.accountRef).then(() => { if (state.view === 'add-pair') rerender(); });
+      return;
+    }
+    if (cals.length === 0) {
+      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
+      return;
+    }
+
+    // While "All" is on, individual calendar checkboxes do NOT apply — "All" already covers every
+    // calendar of the chosen account. Instead of faking each calendar as checked (confusing: a tap
+    // re-pins the same account with no real change), pick the ACCOUNT explicitly and render its
+    // calendars as a read-only, informative list so it is clear what "All" will include.
+    if (a.srcAllCalendars) {
+      const accountChosen = a.srcAccountRef === acc.accountRef;
+      list.append(calCheckRow(
+        acc.displayName || acc.accountRef,
+        accountChosen ? 'Source account — All calendars below will be mirrored' : 'Use this account as the source',
+        accountChosen,
+        () => {
+          a.srcAccountRef = acc.accountRef;
+          // Anchor the legacy fields on the account's first calendar (server requires a calendarId).
+          const first = cals[0];
+          a.srcCalendarId = first ? first.id : null;
+          a.srcCalendarName = first ? (first.displayName || first.id) : null;
+        }));
+      cals.forEach((c) => {
+        const item = el('div', { class: `cal-item is-readonly${accountChosen ? '' : ' is-muted'}`, 'aria-disabled': 'true' },
+          pairBadge('Outlook'),
+          el('div', null,
+            el('div', { class: 'cal-item__name', text: c.displayName || c.id }),
+            el('div', { class: 'cal-item__sub', text: accountChosen ? 'Included by “All calendars”' : 'Pick this account to include' })));
+        list.append(item);
+      });
+      return;
+    }
+
+    // Subset mode: each calendar is an independently selectable checkbox.
+    cals.forEach((c) => {
+      const accountChosen = a.srcAccountRef === acc.accountRef;
+      const checked = accountChosen && a.srcCalendarIds.includes(c.id);
+      list.append(calCheckRow(c.displayName || c.id, acc.displayName || acc.accountRef, checked, () => {
+        // Changing account resets the selection so a pair targets ONE account.
+        if (a.srcAccountRef !== acc.accountRef) { a.srcAccountRef = acc.accountRef; a.srcCalendarIds = []; }
+        if (a.srcCalendarIds.includes(c.id)) a.srcCalendarIds = a.srcCalendarIds.filter((x) => x !== c.id);
+        else a.srcCalendarIds = a.srcCalendarIds.concat([c.id]);
+        // Keep the legacy anchor pointing at the first selected calendar (server requires calendarId).
+        const first = a.srcCalendarIds[0];
+        const fc = first ? cals.find((x) => x.id === first) : null;
+        a.srcCalendarId = first || null;
+        a.srcCalendarName = fc ? (fc.displayName || fc.id) : null;
+      }));
+    });
+  });
+  wrap.append(list);
+  return wrap;
+}
+
+// Human label for the source selection on the configure/preview step.
+function sourceSelectionLabel() {
+  const a = addPairLive;
+  if (a.srcAllCalendars) return 'All calendars';
+  if (a.sourceKind === 'com') {
+    const n = a.srcCalendarNames.length;
+    return n === 0 ? '(no calendars selected)' : (n === 1 ? a.srcCalendarNames[0] : `${n} calendars`);
+  }
+  const n = a.srcCalendarIds.length;
+  return n === 0 ? '(no calendars selected)' : (n === 1 ? (a.srcCalendarName || '1 calendar') : `${n} calendars`);
+}
+
+// True when the source selection is complete enough to continue.
+function sourceSelectionReady() {
+  const a = addPairLive;
+  if (!a.sourceKind) return false;
+  if (a.srcAllCalendars) {
+    // COM all-calendars needs nothing else; online all-calendars needs an account pinned.
+    return a.sourceKind === 'com' || !!a.srcAccountRef;
+  }
+  return a.sourceKind === 'com'
+    ? a.srcCalendarNames.length > 0
+    : (!!a.srcAccountRef && a.srcCalendarIds.length > 0);
+}
+
 function renderAddPairLive(root) {
   const labels = ['Source', 'Destination', 'Configure'];
   const a = addPairLive;
@@ -1293,13 +1517,15 @@ function renderAddPairLive(root) {
       el('div', { class: 'provider-tile__sub', text: 'outlook.com · via the server' })));
     root.append(kinds);
 
-    if (a.sourceKind === 'online') {
-      root.append(onlineCalendarPicker(a.srcCalendarId, (acc, c) => {
-        a.srcAccountRef = acc.accountRef; a.srcCalendarId = c.id; a.srcCalendarName = c.displayName || c.id; rerender();
-      }));
+    // Feature 2 — once a source kind is chosen, show the multi-calendar selection for THAT origin:
+    // "All calendars" (default) or an explicit subset. The destination (step 1) stays single.
+    if (a.sourceKind === 'com') {
+      root.append(comSourceMultiSelect());
+    } else if (a.sourceKind === 'online') {
+      root.append(onlineSourceMultiSelect());
     }
 
-    const srcReady = a.sourceKind === 'com' || (a.sourceKind === 'online' && a.srcCalendarId);
+    const srcReady = sourceSelectionReady();
     root.append(el('div', { class: 'wizard-foot' },
       el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => { resetAddPairLive(); navigate('calendar'); } }),
       el('button', { class: 'btn btn--primary', disabled: !srcReady, onclick: () => { a.step = 1; rerender(); } },
@@ -1315,14 +1541,14 @@ function renderAddPairLive(root) {
       el('button', { class: 'btn btn--primary', disabled: !a.dstCalendarId, onclick: () => { a.step = 2; rerender(); } },
         el('span', { text: 'Continue' }), iconEl('arrowright', 14, 1.8))));
   } else if (a.step === 2) {
-    if (!a.name) a.name = `${a.srcCalendarName} → ${a.dstCalendarName}`;
+    if (!a.name) a.name = `${sourceSelectionLabel()} → ${a.dstCalendarName}`;
     root.append(el('div', { class: 'wizard-title', text: editing ? 'Edit the sync' : 'Configure the sync' }));
     root.append(el('div', { class: 'wizard-sub', text: 'Review the pair and tune how often it runs.' }));
 
     const col = (label, name, sub) => el('div', { class: 'pair-preview__col' },
       el('div', { class: 'route__label', text: label }), el('div', { class: 'pair-preview__name', text: name }), el('div', { class: 'pair-preview__email', text: sub }));
     root.append(el('div', { class: 'glass glass--card pair-preview' },
-      pairBadge('Outlook'), col('SOURCE', a.srcCalendarName, a.sourceKind === 'com' ? 'Local Outlook' : a.srcAccountRef),
+      pairBadge('Outlook'), col('SOURCE', sourceSelectionLabel(), a.sourceKind === 'com' ? 'Local Outlook' : (a.srcAccountRef || '')),
       el('span', { style: 'color:var(--ink-3);display:inline-flex', html: icon('arrowright', { size: 14, stroke: 1.8 }) }),
       pairBadge('Outlook'), col('DESTINATION', a.dstCalendarName, a.dstAccountRef)));
 
@@ -1382,9 +1608,19 @@ function renderAddPairLive(root) {
 function editEndpointsChanged() {
   const a = addPairLive;
   if (!a.editId) return false;
+  // Compare a sorted copy so reordering selections is not treated as a change.
+  const sameSet = (x, y) => {
+    const ax = (x || []).slice().sort();
+    const ay = (y || []).slice().sort();
+    return ax.length === ay.length && ax.every((v, i) => v === ay[i]);
+  };
+  const selectionChanged = (!!a.srcAllCalendars !== !!a.origSrcAllCalendars)
+    || !sameSet(a.srcCalendarNames, a.origSrcCalendarNames)
+    || !sameSet(a.srcCalendarIds, a.origSrcCalendarIds);
   const srcChanged = a.sourceKind !== a.origSourceKind
     || a.srcCalendarId !== a.origSrcCalendarId
-    || ((a.srcAccountRef || null) !== (a.origSrcAccountRef || null));
+    || ((a.srcAccountRef || null) !== (a.origSrcAccountRef || null))
+    || selectionChanged;
   const dstChanged = a.dstCalendarId !== a.origDstCalendarId
     || ((a.dstAccountRef || null) !== (a.origDstAccountRef || null));
   return srcChanged || dstChanged;
@@ -1478,9 +1714,22 @@ function editPairForModal() {
 
 function completeAddPairLive() {
   const a = addPairLive;
+  // Feature 2 — carry the source multi-calendar selection. allCalendars=true => read every calendar
+  // of the origin; otherwise the typed subset (calendarNames for COM, calendarIds for Graph). The
+  // single calendarId stays as the server-required anchor (a non-empty calendarId). The destination
+  // is always a single calendar and never carries the selection fields.
   const source = a.sourceKind === 'com'
-    ? { provider: 'OutlookCom', calendarId: 'local', calendarName: 'Outlook (this PC)' }
-    : { provider: 'MicrosoftGraph', accountRef: a.srcAccountRef, calendarId: a.srcCalendarId, calendarName: a.srcCalendarName };
+    ? {
+        provider: 'OutlookCom', calendarId: 'local', calendarName: 'Outlook (this PC)',
+        allCalendars: !!a.srcAllCalendars,
+        calendarNames: a.srcAllCalendars ? [] : a.srcCalendarNames.slice(),
+      }
+    : {
+        provider: 'MicrosoftGraph', accountRef: a.srcAccountRef,
+        calendarId: a.srcCalendarId, calendarName: a.srcCalendarName,
+        allCalendars: !!a.srcAllCalendars,
+        calendarIds: a.srcAllCalendars ? [] : a.srcCalendarIds.slice(),
+      };
   const destination = { provider: 'MicrosoftGraph', accountRef: a.dstAccountRef, calendarId: a.dstCalendarId, calendarName: a.dstCalendarName };
 
   // Decide cleanup BEFORE the save mutates state: only when editing, the destination changed, the

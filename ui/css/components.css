@@ -733,6 +733,25 @@
 .cal-new__create, .cal-new__cancel { height: 32px; flex: none; }
 .cal-new__feedback { margin-top: 5px; }
 
+/* Feature 2 — source multi-calendar select. The "All calendars" header row sits above the
+   per-calendar checkbox list (which reuses .cal-list / .cal-item). */
+.cal-multi {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--ctrl-stroke);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.cal-multi__all {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ctrl-stroke);
+}
+.cal-multi__all-text { min-width: 0; cursor: pointer; }
+
+/* Read-only calendar rows shown while "All calendars" is on: informative, not selectable. */
+.cal-item.is-readonly { cursor: default; }
+.cal-item.is-muted { opacity: 0.55; }
+
 /* Consolidated identity hint (Signed-in chip + email on one line). */
 .identity-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
 .identity-hint__email { color: var(--ink-2); }
