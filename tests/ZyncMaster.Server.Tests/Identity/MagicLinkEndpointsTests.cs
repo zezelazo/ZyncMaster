@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -190,26 +191,127 @@ public class MagicLinkEndpointsTests
         second.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // Single-use under concurrency. This is intentionally a DB-level test rather than an HTTP one.
+    //
+    // The guarantee under test is the atomic conditional UPDATE in the callback:
+    //     UPDATE MagicLinks SET ConsumedAt = now WHERE TokenHash = @hash AND ConsumedAt IS NULL
+    // Exactly one of two concurrent claims of the SAME token must affect one row (the winner) and
+    // the other must affect zero (the loser) — that is what maps, at the endpoint, to one 302 and
+    // one 400. The assertion below ("exactly one row claimed, exactly one zero-row claim") is the
+    // strict, undiluted form of "1 success + 1 failure"; it is NOT a weakened check.
+    //
+    // Why not the HTTP harness: the shared ServerTestFactory keeps ONE SqliteConnection open for the
+    // whole factory, and the callback's two contexts both run their commands over that single
+    // connection. Under the suite's parallel load that single connection serializes the two commands
+    // in a scheduler-dependent order, so the race the UPDATE is meant to win was never exercised
+    // deterministically (and occasionally both reads observed ConsumedAt == null before either
+    // committed, producing two redirects — the CI flake "found 0 failures"). Production never shares
+    // a connection: each request gets its own pooled connection with READ COMMITTED, exactly what
+    // the two independent connections below model.
+    //
+    // Determinism comes from a barrier: both tasks open their own connection, then wait on a gate so
+    // they reach the consume point together before either runs its UPDATE. SQLite's writer lock then
+    // serializes the two autocommit UPDATEs — the winner consumes the row, the loser sees
+    // ConsumedAt != null and updates zero rows. No retries, no Skip, no sleep; the gate forces the
+    // overlap every run. (We do NOT wrap the UPDATE in an explicit transaction: shared-cache SQLite
+    // grants the writer lock at BeginTransaction, which would block the second task before it could
+    // reach the barrier. ExecuteUpdateAsync is already a single atomic autocommit statement — the
+    // exact production semantics.)
     [Fact]
-    public async Task Callback_two_concurrent_clicks_of_same_token_only_one_succeeds()
+    public async Task Concurrent_claims_of_same_magic_link_token_consume_exactly_one_row()
+    {
+        // Shared-cache in-memory SQLite so two independent connections see the same database, just
+        // like a connection pool over one server-side store. A keep-alive connection keeps the
+        // shared in-memory db alive for the duration of the test.
+        const string connectionString = "DataSource=file:magic-link-race?mode=memory&cache=shared";
+        using var keepAlive = new SqliteConnection(connectionString);
+        keepAlive.Open();
+
+        var options = new DbContextOptionsBuilder<ZyncMasterDbContext>()
+            .UseSqlite(connectionString)
+            .Options;
+
+        await using (var seed = new ZyncMasterDbContext(options))
+        {
+            await seed.Database.EnsureCreatedAsync();
+            seed.MagicLinks.Add(new MagicLinkRow
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                TokenHash = "race-token-hash",
+                Email = "race@example.com",
+                Port = 51820,
+                Nonce = "n-race",
+                CreatedAt = DateTimeOffset.UtcNow,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
+                ConsumedAt = null,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        // Barrier: both tasks signal arrival, then both await the release before issuing the UPDATE.
+        using var arrived = new CountdownEvent(2);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<int> ClaimAsync()
+        {
+            // Each task gets its own connection — the per-request isolation production gets from the
+            // pool. Open it eagerly so the barrier gates the UPDATE, not connection setup.
+            await using var db = new ZyncMasterDbContext(options);
+            await db.Database.OpenConnectionAsync();
+
+            arrived.Signal();
+            await release.Task;
+
+            // The EXACT conditional UPDATE the callback runs (hash match AND still unconsumed),
+            // as a single atomic autocommit statement. SQLite serializes the two writers.
+            return await db.MagicLinks
+                .Where(r => r.TokenHash == "race-token-hash" && r.ConsumedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.ConsumedAt, now));
+        }
+
+        var first = Task.Run(ClaimAsync);
+        var second = Task.Run(ClaimAsync);
+
+        // Hold both at the consume point, then release them together.
+        arrived.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("both claims must reach the consume point");
+        release.SetResult();
+
+        var affected = await Task.WhenAll(first, second);
+
+        // Strict single-use: one claim updated exactly one row (the winner), the other updated zero
+        // (the loser). This is "1 success + 1 failure" with no relaxation.
+        affected.Count(a => a == 1).Should().Be(1);
+        affected.Count(a => a == 0).Should().Be(1);
+
+        // And the row ended up consumed exactly once.
+        await using var verify = new ZyncMasterDbContext(options);
+        var consumedRows = await verify.MagicLinks
+            .Where(r => r.TokenHash == "race-token-hash" && r.ConsumedAt != null)
+            .CountAsync();
+        consumedRows.Should().Be(1);
+    }
+
+    // Belt-and-suspenders at the HTTP layer: a SEQUENTIAL second click of an already-consumed token
+    // must fail. Deterministic (no race), proving the endpoint wires the single-use UPDATE result to
+    // a 400 — complementing the concurrency proof above.
+    [Fact]
+    public async Task Callback_second_sequential_click_of_same_token_fails_single_use()
     {
         var sender = new CapturingEmailSender();
         using var factory = CreateFactory(sender);
-        // Shared client is fine: HttpClient is thread-safe for concurrent requests.
         var client = NoRedirectClient(factory);
 
         await client.PostAsJsonAsync("/identity/magic-link", Body("race@example.com", nonce: "n-race"));
         var token = sender.LastToken!;
         var url = $"/identity/magic-link/callback?token={Uri.EscapeDataString(token)}";
 
-        // Fire BOTH callbacks for the SAME token in parallel. The atomic conditional UPDATE must
-        // let exactly one win: one 302 (loopback redirect), one 400 (single-use already claimed).
-        var responses = await Task.WhenAll(client.GetAsync(url), client.GetAsync(url));
+        var firstResp = await client.GetAsync(url);
+        var secondResp = await client.GetAsync(url);
 
-        var redirects = responses.Count(r => r.StatusCode == HttpStatusCode.Redirect);
-        var failures = responses.Count(r => r.StatusCode == HttpStatusCode.BadRequest);
-        redirects.Should().Be(1);
-        failures.Should().Be(1);
+        firstResp.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        secondResp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
