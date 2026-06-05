@@ -92,7 +92,26 @@ public sealed class ServerOptions
 
     // Interval (hours) between ephemeral-table purge sweeps (§A/§D hygiene). The background
     // EphemeralPurgeService set-deletes expired identity access/refresh tokens, expired/consumed
-    // magic-links and expired run-locks every this-many hours. Low-frequency by design: these
-    // rows are tiny and self-expiring, so 6h keeps the tables tidy without adding write pressure.
+    // magic-links, expired run-locks AND expired pending pairings every this-many hours.
+    // Low-frequency by design: these rows are tiny and self-expiring, so 6h keeps the tables tidy
+    // without adding write pressure.
     public int EphemeralPurgeIntervalHours { get; set; } = 6;
+
+    // Device-pairing code TTL (FIX A). A PendingPairing whose CreatedUtc + this-many minutes has
+    // passed is treated as expired: GetPendingByCodeAsync no longer resolves it (so an expired code
+    // can neither be viewed at /pair nor approved) and the ephemeral purge deletes it. Short by
+    // design — the human approves within a couple of minutes of the device showing the code — but
+    // generous enough for a distracted user. The same TTL bounds the brute-force window: combined
+    // with the increased code entropy and the per-IP rate limiter, an attacker has only this long
+    // to guess a live code.
+    public int PendingPairingTtlMinutes { get; set; } = 15;
+
+    // Per-IP fixed-window rate limit for the pairing endpoints (FIX A) — /api/devices/approve,
+    // /api/pair/start and /api/pair/complete. Caps raw guessing/abuse from one client address per
+    // PairingRateLimitWindowMinutes; excess is rejected with 429. This is the brute-force defense
+    // for the wider pairing code: even with the larger alphabet an unthrottled attacker could grind
+    // codes, so the limiter bounds attempts per window. Anti-abuse only (does not branch on whether
+    // a code exists), so it leaks nothing.
+    public int PairingMaxPerIp { get; set; } = 20;
+    public int PairingRateLimitWindowMinutes { get; set; } = 15;
 }

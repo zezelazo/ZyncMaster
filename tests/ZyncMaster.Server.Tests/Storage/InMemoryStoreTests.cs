@@ -106,7 +106,7 @@ public class InMemoryDeviceStoreTests
         await store.SavePendingAsync(SamplePending("pair-1", "CODE-A"));
         await store.SavePendingAsync(SamplePending("pair-2", "CODE-B"));
 
-        var fetched = await store.GetPendingByCodeAsync("CODE-B");
+        var fetched = await store.GetPendingByCodeAsync("CODE-B", DateTimeOffset.MinValue);
 
         fetched.Should().NotBeNull();
         fetched!.PairingId.Should().Be("pair-2");
@@ -118,7 +118,7 @@ public class InMemoryDeviceStoreTests
         var store = new InMemoryDeviceStore();
         await store.SavePendingAsync(SamplePending());
 
-        var fetched = await store.GetPendingByCodeAsync("MISSING");
+        var fetched = await store.GetPendingByCodeAsync("MISSING", DateTimeOffset.MinValue);
 
         fetched.Should().BeNull();
     }
@@ -161,7 +161,7 @@ public class InMemoryDeviceStoreTests
         await store.RemovePendingAsync("pair-1");
 
         (await store.GetPendingAsync("pair-1")).Should().BeNull();
-        (await store.GetPendingByCodeAsync("ABC123")).Should().BeNull();
+        (await store.GetPendingByCodeAsync("ABC123", DateTimeOffset.MinValue)).Should().BeNull();
     }
 }
 

@@ -28,6 +28,7 @@ public sealed class EphemeralPurgeService : BackgroundService
     private readonly IDbContextFactory<ZyncMasterDbContext> _factory;
     private readonly ILogger<EphemeralPurgeService> _logger;
     private readonly TimeSpan _interval;
+    private readonly int _pendingPairingTtlMinutes;
 
     public EphemeralPurgeService(
         IDbContextFactory<ZyncMasterDbContext> factory,
@@ -38,6 +39,8 @@ public sealed class EphemeralPurgeService : BackgroundService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         var hours = options?.Value.EphemeralPurgeIntervalHours ?? 6;
         _interval = TimeSpan.FromHours(hours <= 0 ? 6 : hours);
+        var ttl = options?.Value.PendingPairingTtlMinutes ?? 15;
+        _pendingPairingTtlMinutes = ttl <= 0 ? 15 : ttl;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -65,8 +68,9 @@ public sealed class EphemeralPurgeService : BackgroundService
     }
 
     // Runs exactly one purge pass against `now`. Returns the total number of rows deleted across
-    // all four tables. Public + parameterised on `now` so the deletion policy is unit-testable
-    // with no timer and a deterministic clock. See the class doc for the token-table safety rule.
+    // all five ephemeral tables. Public + parameterised on `now` so the deletion policy is
+    // unit-testable with no timer and a deterministic clock. See the class doc for the token-table
+    // safety rule.
     //
     // Deletes are issued as parameterised, set-based SQL (ExecuteSqlInterpolatedAsync) rather than
     // a LINQ ExecuteDeleteAsync: the predicates compare a DateTimeOffset column to `now`, and that
@@ -95,6 +99,15 @@ public sealed class EphemeralPurgeService : BackgroundService
         var locks = await db.Database.ExecuteSqlInterpolatedAsync(
             $"DELETE FROM SyncRunLocks WHERE LockedUntil <= {now}", ct).ConfigureAwait(false);
 
-        return access + refresh + magic + locks;
+        // Pending pairings (FIX A): a pairing whose CreatedUtc + TTL has passed is dead — its code can
+        // no longer be viewed at /pair, approved, or completed — so the row is swept here. Previously
+        // PendingPairings was NEVER purged: an approved-but-uncompleted (or never-approved) row lived
+        // forever, leaving stale codes and (briefly) a live OneTimeApiKey in the table. The cutoff is
+        // now - PendingPairingTtlMinutes; rows older than that are removed regardless of Approved.
+        var pairingCutoff = now.AddMinutes(-_pendingPairingTtlMinutes);
+        var pairings = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"DELETE FROM PendingPairings WHERE CreatedUtc < {pairingCutoff}", ct).ConfigureAwait(false);
+
+        return access + refresh + magic + locks + pairings;
     }
 }

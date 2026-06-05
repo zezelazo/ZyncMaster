@@ -94,14 +94,25 @@ public static class ConnectEndpoints
 
             var result = await tokenService.ExchangeCodeAsync(code);
 
-            // Upsert the ZyncMaster user from the id_token identity. Fall back to the UPN
-            // for subject when the provider omitted oid/sub so we always have a stable key.
+            // Resolve the canonical user via the SAME multi-provider path the modern sign-in
+            // (identity OAuth + magic-link) uses — UpsertByLoginAsync, keyed on IdentityLogins —
+            // so every entry door converges on ONE UserRow per identity and applies the same
+            // emailVerified/conflict-detection policy. The legacy UpsertAsync only matched on
+            // (Provider, Subject) and never touched IdentityLogins, so the same person signing in
+            // here vs. through the modern flow could fork into two distinct users, splitting their
+            // pairs/accounts/devices and weakening the anti-takeover policy.
+            //
+            // emailVerified:false on purpose — identical to the modern Microsoft callback
+            // (IdentityConnectEndpoints): Microsoft's email claim is NOT proof-of-possession, so it
+            // must never auto-link by email into a pre-existing local/verified account (account
+            // takeover). The login only ever resolves to its own (provider, subject) or a new user.
             var subject = string.IsNullOrEmpty(result.Subject)
                 ? (result.UserPrincipalName ?? "")
                 : result.Subject;
             var email = result.Email ?? result.UserPrincipalName ?? "";
             var displayName = result.DisplayName ?? email;
-            var user = await users.UpsertAsync("microsoft", subject, email, displayName, context.RequestAborted);
+            var user = await users.UpsertByLoginAsync(
+                "microsoft", subject, email, emailVerified: false, displayName, context.RequestAborted);
 
             // The cookie issued below is not active within THIS request, so the ambient
             // ICurrentUserAccessor would still resolve "default". Pin the just-created user

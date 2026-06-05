@@ -1,9 +1,15 @@
 ﻿using FluentValidation;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ZyncMaster.Server;
 
 public static class DeviceEndpoints
 {
+    // FIX A — per-IP rate-limit policy name for the pairing endpoints. Registered in Program.cs
+    // (AddRateLimiter) and attached below via RequireRateLimiting; RequireRateLimiting is a no-op if
+    // the limiter middleware is not wired, so this is safe under any host.
+    public const string PairingRateLimitPolicy = "pairing-ip";
+
     public static void MapDeviceEndpoints(this WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -16,7 +22,7 @@ public static class DeviceEndpoints
 
             var result = await service.StartPairingAsync(req.Name);
             return Results.Ok(result);
-        });
+        }).RequireRateLimiting(PairingRateLimitPolicy);
 
         app.MapPost("/api/pair/complete", async (PairCompleteRequest req, DeviceService service) =>
         {
@@ -26,8 +32,11 @@ public static class DeviceEndpoints
 
             var result = await service.CompletePairingAsync(req.PairingId);
             return Results.Ok(result);
-        });
+        }).RequireRateLimiting(PairingRateLimitPolicy);
 
+        // §A — approve is cookie-gated AND rate-limited per IP: the cookie proves the approver is
+        // signed in, the limiter caps brute-forcing of the pairing code (which the cookie alone does
+        // nothing to slow — a signed-in attacker could otherwise grind codes against this endpoint).
         app.MapPost("/api/devices/approve", async (ApproveRequest req, DeviceService service) =>
         {
             var validation = new ApproveRequestValidator().Validate(req);
@@ -36,7 +45,7 @@ public static class DeviceEndpoints
 
             var approved = await service.ApproveAsync(req.Code);
             return Results.Ok(new { approved });
-        }).RequireCookie();
+        }).RequireCookie().RequireRateLimiting(PairingRateLimitPolicy);
 
         // §A-2 — brokered registration. The owner is the identity-bearer token's user (read from
         // the principal by the user-scoped DeviceService), NEVER a userId from the body. A body

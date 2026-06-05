@@ -11,7 +11,14 @@ namespace ZyncMaster.Server.Configuration;
 // — it is optional and falls back to LoggingEmailSender when unconfigured.
 public static class StartupConfigValidator
 {
-    public static void ValidateOAuthConfig(ServerOptions options, bool isDevelopment)
+    // Validates the OAuth / magic-link critical config at startup. `microsoftClientSecret` is the
+    // value resolved from the secret store (Microsoft:ClientSecret) — passed in rather than read
+    // off ServerOptions because the secret deliberately does NOT live in the 'Server' config
+    // section (it stays in user-secrets/env vars). A blank secret is just as fatal as a blank
+    // ClientId: every OAuth token exchange would fail at runtime with an opaque AADSTS error —
+    // exactly the failure mode this fail-fast exists to prevent — so it is validated here too.
+    public static void ValidateOAuthConfig(
+        ServerOptions options, bool isDevelopment, string? microsoftClientSecret = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -22,6 +29,7 @@ public static class StartupConfigValidator
 
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(options.MicrosoftClientId)) missing.Add("MicrosoftClientId");
+        if (string.IsNullOrWhiteSpace(microsoftClientSecret)) missing.Add("Microsoft:ClientSecret");
         if (string.IsNullOrWhiteSpace(options.IdentityRedirectUri)) missing.Add("IdentityRedirectUri");
         if (string.IsNullOrWhiteSpace(options.CalendarRedirectUri)) missing.Add("CalendarRedirectUri");
         if (string.IsNullOrWhiteSpace(options.PublicBaseUrl)) missing.Add("PublicBaseUrl");
@@ -32,8 +40,9 @@ public static class StartupConfigValidator
         throw new InvalidOperationException(
             "Missing required OAuth / magic-link configuration in a non-Development environment: " +
             string.Join(", ", missing) + ". " +
-            "Set them per-environment under the 'Server' section (e.g. the app settings " +
+            "Set the 'Server'-section values per-environment (e.g. the app settings " +
             "Server__MicrosoftClientId, Server__IdentityRedirectUri, Server__CalendarRedirectUri, " +
-            "Server__PublicBaseUrl). Secrets such as Microsoft:ClientSecret stay in user-secrets/env vars.");
+            "Server__PublicBaseUrl). The secret Microsoft:ClientSecret stays in user-secrets/env vars " +
+            "(set it via 'Microsoft__ClientSecret'), NOT in the committed 'Server' section.");
     }
 }

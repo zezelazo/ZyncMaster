@@ -15,8 +15,15 @@ public sealed class DeviceNameTakenException : Exception
 
 public sealed class DeviceService
 {
+    // Crockford-style 32-char alphabet (no I/L/O/U to avoid look-alikes). At CodeLength chars the
+    // entropy is CodeLength * log2(32) = CodeLength * 5 bits.
     private const string CodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-    private const int CodeLength = 6;
+
+    // FIX A — raised from 6 to 8 chars: 8 * 5 = 40 bits of entropy (was 30). Combined with the
+    // pairing-code TTL and the per-IP rate limiter, this makes online brute-forcing a live code
+    // infeasible. Exposed internally so the entropy can be asserted by tests.
+    internal const int CodeLength = 8;
+    internal const int CodeEntropyBits = CodeLength * 5;
 
     // A few register retries are enough to step past a same-user collision on the generated name: a
     // single user racing several nameless registrations at once is rare, and each retry regenerates
@@ -50,6 +57,12 @@ public sealed class DeviceService
 
     private int LeaseTtlMinutes => _options.DeviceLeaseTtlMinutes <= 0 ? 10 : _options.DeviceLeaseTtlMinutes;
 
+    private int PendingPairingTtlMinutes =>
+        _options.PendingPairingTtlMinutes <= 0 ? 15 : _options.PendingPairingTtlMinutes;
+
+    // Cutoff before which a pending pairing is expired (CreatedUtc must be >= this to be live).
+    private DateTimeOffset PairingCutoff(DateTimeOffset now) => now.AddMinutes(-PendingPairingTtlMinutes);
+
     public async Task<PairStartResult> StartPairingAsync(string deviceName, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(deviceName))
@@ -71,19 +84,45 @@ public sealed class DeviceService
         return new PairStartResult { PairingId = pairingId, Code = code };
     }
 
+    // FIX A — atomic, idempotent approve. Two defects are closed here:
+    //   * EXPIRY: the code is resolved through the TTL-bounded lookup, so an expired code is rejected.
+    //   * DOUBLE-APPROVE: the row is claimed with an atomic conditional UPDATE
+    //     (Approved 0 -> 1) BEFORE the device is created; the device is only persisted when THIS
+    //     call won the claim. A second approve of the same code (concurrent or sequential) loses the
+    //     claim and returns true WITHOUT creating a second DeviceRow or overwriting the live
+    //     OneTimeApiKey — so the historical phantom-device / key-clobber bug cannot happen.
     public async Task<bool> ApproveAsync(string code, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(code))
             return false;
 
-        var pending = await _store.GetPendingByCodeAsync(code, ct);
+        var now = DateTimeOffset.UtcNow;
+        var cutoff = PairingCutoff(now);
+
+        // Resolve the row (TTL-checked) to recover the device name and reject expired/unknown codes
+        // up front. The actual claim is the atomic conditional UPDATE below.
+        var pending = await _store.GetPendingByCodeAsync(code, cutoff, ct);
         if (pending is null)
             return false;
 
+        // Already approved -> idempotent success: do NOT create another device or re-issue a key.
+        if (pending.Approved)
+            return true;
+
         var generated = ApiKeyGenerator.GenerateKey();
+        var deviceId = Guid.NewGuid().ToString("N");
+
+        // Atomic claim FIRST. Only the winner (exactly one row updated) proceeds to create the
+        // device. A racing/repeat approve gets `false` and creates nothing.
+        var claimed = await _store.TryMarkApprovedAsync(code, cutoff, deviceId, generated.ApiKey, ct);
+        if (!claimed)
+            // Lost the race (another approve already claimed it) or it expired between the read and
+            // the update. Idempotent: report success when the row is now approved, false otherwise.
+            return (await _store.GetPendingByCodeAsync(code, cutoff, ct))?.Approved ?? false;
+
         var device = new Device
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = deviceId,
             // §A-2 — bind the device to the REAL approving user from the ambient identity, not to
             // the seeded "default". Approve runs under the panel cookie, so _currentUser.UserId is
             // the signed-in approver. This fixes the historical bug where a device created here had
@@ -92,17 +131,9 @@ public sealed class DeviceService
             Name = pending.DeviceName,
             ApiKeyHash = ApiKeyHasher.Hash(generated.Secret),
             KeyId = generated.KeyId,
-            CreatedUtc = DateTimeOffset.UtcNow,
+            CreatedUtc = now,
         };
         await _store.AddAsync(device, ct);
-
-        var updated = pending with
-        {
-            Approved = true,
-            ApprovedDeviceId = device.Id,
-            OneTimeApiKey = generated.ApiKey,
-        };
-        await _store.UpdatePendingAsync(updated, ct);
 
         return true;
     }
@@ -371,6 +402,11 @@ public sealed class DeviceService
         if (pending is null || !pending.Approved)
             return new PairCompleteResult { Approved = pending?.Approved ?? false };
 
+        // The one-time key is handed out exactly once: cleared in place so a second complete is
+        // idempotent (Approved=true, ApiKey=null) — the App may legitimately re-poll. The now-spent
+        // row carries no live secret; it is reaped by the TTL-bounded ephemeral purge (FIX A), which
+        // closes the cycle without breaking that re-poll idempotency. (Deleting the row here instead
+        // would make a re-poll report "not approved", which the App treats as a failed pairing.)
         var key = pending.OneTimeApiKey;
         var updated = pending with { OneTimeApiKey = null };
         await _store.UpdatePendingAsync(updated, ct);

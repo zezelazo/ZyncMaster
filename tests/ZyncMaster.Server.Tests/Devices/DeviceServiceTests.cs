@@ -138,6 +138,104 @@ public class DeviceServiceTests
         device.UserId.Should().Be("real-user");
     }
 
+    // FIX A — pairing code entropy. The code must carry at least the new 40-bit floor (8 chars over a
+    // 32-symbol alphabet), so an online attacker cannot feasibly guess a live code within the TTL.
+    [Fact]
+    public async Task StartPairing_code_meets_minimum_entropy()
+    {
+        var (svc, _) = Build();
+
+        var start = await svc.StartPairingAsync("Laptop");
+
+        // Length floor (8) and the per-char alphabet (32 -> 5 bits) give >= 40 bits.
+        start.Code.Length.Should().BeGreaterThanOrEqualTo(8);
+        DeviceService.CodeEntropyBits.Should().BeGreaterThanOrEqualTo(40);
+        start.Code.Should().MatchRegex("^[0-9A-HJKMNP-TV-Z]{8,}$");
+    }
+
+    // FIX A — idempotent approve. Approving the same code twice must yield exactly ONE device and a
+    // single live one-time key; the second call is a no-op success (no phantom device, no key
+    // re-issue / overwrite).
+    [Fact]
+    public async Task Approve_twice_same_code_creates_one_device_and_is_idempotent()
+    {
+        var (svc, store) = Build(user: new FixedUser("real-user"));
+        var start = await svc.StartPairingAsync("Phone");
+
+        var first = await svc.ApproveAsync(start.Code);
+        var pendingAfterFirst = await store.GetPendingAsync(start.PairingId);
+        var firstKey = pendingAfterFirst!.OneTimeApiKey;
+        var firstDeviceId = pendingAfterFirst.ApprovedDeviceId;
+
+        var second = await svc.ApproveAsync(start.Code);
+
+        first.Should().BeTrue();
+        second.Should().BeTrue("a repeat approve is idempotent, not a failure");
+
+        // Exactly one device — no phantom second DeviceRow.
+        (await store.ListAsync()).Should().HaveCount(1);
+
+        // The one-time key and approved device id were NOT overwritten by the second call.
+        var pendingAfterSecond = await store.GetPendingAsync(start.PairingId);
+        pendingAfterSecond!.OneTimeApiKey.Should().Be(firstKey);
+        pendingAfterSecond.ApprovedDeviceId.Should().Be(firstDeviceId);
+    }
+
+    // FIX A — concurrent approve race. Two simultaneous approves of the same code must still leave
+    // exactly one device and one live key (the atomic conditional claim serialises them).
+    [Fact]
+    public async Task Approve_concurrent_same_code_creates_one_device()
+    {
+        var (svc, store) = Build(user: new FixedUser("real-user"));
+        var start = await svc.StartPairingAsync("Phone");
+
+        var results = await Task.WhenAll(
+            svc.ApproveAsync(start.Code),
+            svc.ApproveAsync(start.Code),
+            svc.ApproveAsync(start.Code));
+
+        results.Should().OnlyContain(r => r == true);
+        (await store.ListAsync()).Should().HaveCount(1, "the atomic claim admits exactly one winner");
+    }
+
+    // FIX A — expired code is rejected at approval. A pending row older than the TTL must not approve
+    // and must not create a device.
+    [Fact]
+    public async Task Approve_expired_code_returns_false_and_creates_no_device()
+    {
+        var options = new ServerOptions { PendingPairingTtlMinutes = 15 };
+        var (svc, store) = Build(user: new FixedUser("real-user"), options: options);
+
+        // Seed a pending row created 20 minutes ago — past the 15-minute TTL.
+        await store.SavePendingAsync(new PendingPairing
+        {
+            PairingId = "old-1",
+            DeviceName = "Stale Phone",
+            Code = "OLDCODE1",
+            CreatedUtc = DateTimeOffset.UtcNow.AddMinutes(-20),
+        });
+
+        var ok = await svc.ApproveAsync("OLDCODE1");
+
+        ok.Should().BeFalse();
+        (await store.ListAsync()).Should().BeEmpty();
+        // The row stays unapproved (the claim was rejected on the TTL predicate).
+        (await store.GetPendingAsync("old-1"))!.Approved.Should().BeFalse();
+    }
+
+    // FIX A — a fresh code within the TTL still approves normally (guards against an off-by-one that
+    // would reject live codes).
+    [Fact]
+    public async Task Approve_fresh_code_within_ttl_succeeds()
+    {
+        var options = new ServerOptions { PendingPairingTtlMinutes = 15 };
+        var (svc, store) = Build(user: new FixedUser("real-user"), options: options);
+        var start = await svc.StartPairingAsync("Phone");
+
+        (await svc.ApproveAsync(start.Code)).Should().BeTrue();
+        (await store.ListAsync()).Should().HaveCount(1);
+    }
+
     [Fact]
     public async Task Register_binds_device_to_token_user_and_sets_lease_and_key()
     {

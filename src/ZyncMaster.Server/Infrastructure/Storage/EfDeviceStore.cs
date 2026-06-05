@@ -98,13 +98,46 @@ public sealed class EfDeviceStore : IDeviceStore
         return row is null ? null : ToDomain(row);
     }
 
-    public async Task<PendingPairing?> GetPendingByCodeAsync(string code, CancellationToken ct = default)
+    public async Task<PendingPairing?> GetPendingByCodeAsync(
+        string code, DateTimeOffset notBefore, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(code);
         await using var db = await _factory.CreateDbContextAsync(ct);
+        // Match by code in the query (translatable everywhere) but enforce the TTL window in memory.
+        // A DateTimeOffset relational compare (CreatedUtc >= notBefore) is NOT translatable by every
+        // provider through LINQ — SQLite throws — so we evaluate it after materialising the single
+        // matched row, exactly as the magic-link window and the EphemeralPurgeService do. An expired
+        // row (CreatedUtc < notBefore) resolves to null so it cannot be viewed or approved.
         var row = await db.PendingPairings.AsNoTracking()
             .FirstOrDefaultAsync(p => p.Code == code, ct);
-        return row is null ? null : ToDomain(row);
+        if (row is null || row.CreatedUtc < notBefore)
+            return null;
+        return ToDomain(row);
+    }
+
+    public async Task<bool> TryMarkApprovedAsync(
+        string code, DateTimeOffset notBefore, string approvedDeviceId, string oneTimeApiKey,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(code);
+        ArgumentNullException.ThrowIfNull(approvedDeviceId);
+        ArgumentNullException.ThrowIfNull(oneTimeApiKey);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+
+        // Atomic, idempotent claim: a single conditional UPDATE that flips Approved 0 -> 1 and
+        // stamps the approved device + one-time key ONLY when the row is the matching code, still
+        // unapproved, and unexpired. The Approved=0 guard makes a second approve a no-op (0 rows),
+        // so it can never create a phantom device or overwrite the live OneTimeApiKey. Issued as
+        // parameterised set-based SQL (injection-safe via interpolation) so the DateTimeOffset
+        // compare is translated by BOTH SQL Server (prod) and SQLite (tests) — the same reason the
+        // EphemeralPurgeService uses raw SQL for its DateTimeOffset predicates. Column + table names
+        // mirror the ZyncMasterDbContext mapping. The bit literals 1/0 work on both providers.
+        var affected = await db.Database.ExecuteSqlInterpolatedAsync(
+            $@"UPDATE PendingPairings
+               SET Approved = 1, ApprovedDeviceId = {approvedDeviceId}, OneTimeApiKey = {oneTimeApiKey}
+               WHERE Code = {code} AND Approved = 0 AND CreatedUtc >= {notBefore}", ct);
+
+        return affected >= 1;
     }
 
     public async Task UpdatePendingAsync(PendingPairing pairing, CancellationToken ct = default)
@@ -131,6 +164,17 @@ public sealed class EfDeviceStore : IDeviceStore
         await db.PendingPairings
             .Where(p => p.PairingId == pairingId)
             .ExecuteDeleteAsync(ct);
+    }
+
+    public async Task<int> PurgeExpiredPendingAsync(DateTimeOffset cutoff, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        // Set-based delete of every pending pairing older than the TTL cutoff. Raw parameterised SQL
+        // for the DateTimeOffset compare (not LINQ-translatable on SQLite — see GetPendingByCodeAsync
+        // / EphemeralPurgeService). Approved-but-not-yet-completed rows are also swept: once expired,
+        // the device can no longer complete the (TTL-bounded) handshake, so the row is dead weight.
+        return await db.Database.ExecuteSqlInterpolatedAsync(
+            $"DELETE FROM PendingPairings WHERE CreatedUtc < {cutoff}", ct);
     }
 
     private DeviceRow ToRow(Device d) => new()
