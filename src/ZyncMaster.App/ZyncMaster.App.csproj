@@ -35,7 +35,37 @@
   <ItemGroup>
     <ProjectReference Include="..\ZyncMaster.Engine\ZyncMaster.Engine.csproj" />
     <ProjectReference Include="..\ZyncMaster.Core\ZyncMaster.Core.csproj" />
+
+    <!-- CalExport is launched as a separate process by path at run time (the App never links its
+         assembly — that would drag the Outlook COM interop in). This ProjectReference exists ONLY to
+         order the build: it forces ZyncMaster.CalExport to build before the App so the CopyCalExport
+         target below finds its fresh output. ReferenceOutputAssembly="false" + Private="false" keep
+         it a build-order dependency with no compile/runtime link and no automatic copy of the exe. -->
+    <ProjectReference Include="..\ZyncMaster.CalExport\ZyncMaster.CalExport.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
   </ItemGroup>
+
+  <!-- Bundle CalExport next to the App so it is found at run time both from a Visual Studio build
+       (this target) and from the release zip (the publish step in .github/workflows/release-app.yml).
+       Copies CalExport's whole build output (exe + dlls + runtimeconfig.json + deps.json) into an
+       $(OutDir)CalExport\ subfolder. AppContext.BaseDirectory + "CalExport\ZyncMaster.CalExport.exe"
+       is the default the App resolves (AppSettingsResolver). Runs after build; depends on the
+       ProjectReference above for ordering so the source folder is already populated. A
+       ProjectReference does not copy another project's exe, so this explicit target is required. -->
+  <Target Name="CopyCalExport" AfterTargets="Build">
+    <PropertyGroup>
+      <CalExportBuildDir>$(MSBuildProjectDirectory)\..\ZyncMaster.CalExport\bin\$(Configuration)\net10.0-windows\</CalExportBuildDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <CalExportFiles Include="$(CalExportBuildDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(CalExportFiles)"
+          DestinationFiles="@(CalExportFiles->'$(OutDir)CalExport\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(CalExportFiles)' != ''" />
+  </Target>
+
   <ItemGroup>
     <!-- Bundle the canonical web UI (repo-root ui/) next to the exe so the embedded
          WebView2 / loopback host can resolve it at runtime. Linked rather than copied

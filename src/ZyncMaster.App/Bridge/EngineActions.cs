@@ -42,6 +42,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly IdentityLoginService _identity;
     private readonly CalendarConnectService _calendarConnect;
     private readonly IOutlookComProbe _comProbe;
+    private readonly ICalendarSource _comSource;
+    private readonly IClock _clock;
     private readonly HttpClient _http;
     private readonly string _healthUrl;
 
@@ -73,6 +75,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
         IdentityLoginService identity,
         CalendarConnectService calendarConnect,
         IOutlookComProbe comProbe,
+        ICalendarSource comSource,
+        IClock clock,
         HttpClient http,
         HttpClient? ownedHttp = null)
     {
@@ -92,6 +96,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _calendarConnect = calendarConnect ?? throw new ArgumentNullException(nameof(calendarConnect));
         _comProbe = comProbe ?? throw new ArgumentNullException(nameof(comProbe));
+        _comSource = comSource ?? throw new ArgumentNullException(nameof(comSource));
+        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _healthUrl = $"{(_engineSettings.ServerBaseUrl ?? "").TrimEnd('/')}/health";
         _ownedHttp = ownedHttp;
@@ -289,10 +295,33 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public async Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+
         // Run is dual-scheme on the server (RequireCookieOrApiKey); the device drives it under its
-        // key, so this human "Sync now" path keeps using the device api key.
+        // key, so this human "Sync now" path uses the device api key for the actual push/run.
         var key = await RequireKeyAsync(ct);
-        return await _pairs.RunPairAsync(key, id, ct);
+
+        // We need the pair's Source.Provider to decide the data path: the server has no local COM
+        // reader, so a COM-sourced pair must be read here (Outlook COM) and PUSHED, exactly like
+        // the background PairScheduler does. Listing pairs is human-only, so it uses the bearer.
+        var bearer = await RequireBearerAsync(ct);
+        var pairs = await _pairs.ListPairsAsync(bearer, ct);
+        SyncPair? pair = null;
+        foreach (var p in pairs)
+        {
+            if (string.Equals(p.Id, id, StringComparison.Ordinal))
+            {
+                pair = p;
+                break;
+            }
+        }
+
+        if (pair == null)
+            throw new InvalidOperationException($"Sync pair '{id}' was not found.");
+
+        // PairRunner is the single source of truth for the COM-vs-Graph decision and the
+        // [now, now + SyncWindowDays] read window, shared with PairScheduler.
+        return await PairRunner.RunOnceAsync(
+            _pairs, _comSource, pair, key, _clock.UtcNow, _engineSettings, ct);
     }
 
     public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)

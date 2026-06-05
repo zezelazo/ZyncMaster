@@ -24,11 +24,14 @@ public class EngineActionsExportAndCalendarTests
         Mock<IIdentityTokenCache> identityCache,
         Func<string, Task<string?>> saveDialog,
         EngineSettings? settings = null,
-        IOutlookComProbe? comProbe = null)
+        IOutlookComProbe? comProbe = null,
+        IDeviceKeyStore? keyStore = null,
+        ICalendarSource? comSource = null,
+        IClock? clock = null)
     {
         settings ??= new EngineSettings { ServerBaseUrl = "https://server.test" };
 
-        var keys = new Mock<IDeviceKeyStore>().Object;
+        var keys = keyStore ?? new Mock<IDeviceKeyStore>().Object;
         var pairing = new PairingService(
             new Mock<IPairingClient>().Object,
             new Mock<IBrowserLauncher>().Object,
@@ -69,6 +72,8 @@ public class EngineActionsExportAndCalendarTests
             identity,
             calendarConnect,
             comProbe ?? new Mock<IOutlookComProbe>().Object,
+            comSource ?? new Mock<ICalendarSource>().Object,
+            clock ?? new Mock<IClock>().Object,
             new HttpClient());
     }
 
@@ -414,5 +419,122 @@ public class EngineActionsExportAndCalendarTests
 
         var caps = await actions.GetCapabilitiesAsync(CancellationToken.None);
         caps.OutlookCom.Should().BeFalse();
+    }
+
+    // ---------------- GAP 2: RunPairNowAsync COM-vs-Graph data path ----------------
+
+    private static Mock<IDeviceKeyStore> KeyStore(string? key)
+    {
+        var keys = new Mock<IDeviceKeyStore>();
+        keys.Setup(k => k.LoadAsync(It.IsAny<CancellationToken>())).ReturnsAsync(key);
+        return keys;
+    }
+
+    private static SyncPair Pair(string id, string sourceProvider)
+        => new SyncPair
+        {
+            Id = id,
+            Name = id,
+            State = "active",
+            IntervalMin = 10,
+            Source = new Endpoint { Provider = sourceProvider, CalendarId = "c", CalendarName = "C" },
+            Destination = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "a", CalendarId = "d", CalendarName = "D" },
+        };
+
+    [Fact]
+    public async Task RunPairNow_ComPair_ReadsWindowAndPushes_NotRun()
+    {
+        var settings = new EngineSettings { ServerBaseUrl = "https://server.test", SyncWindowDays = 14 };
+        var now = new DateTimeOffset(2026, 6, 1, 9, 0, 0, TimeSpan.Zero);
+
+        var clock = new Mock<IClock>();
+        clock.SetupGet(c => c.UtcNow).Returns(now);
+
+        var events = (IReadOnlyList<AppointmentRecord>)new[] { new AppointmentRecord { Id = "e1", Subject = "x" } };
+        var comSource = new Mock<ICalendarSource>();
+        comSource.Setup(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(events);
+
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.ListPairsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<SyncPair>)new[] { Pair("p1", "OutlookCom") });
+        pairs.Setup(p => p.PushPairAsync("device-key", "p1", events, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MirrorResult { Created = 1 });
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            pairs,
+            SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            settings: settings,
+            keyStore: KeyStore("device-key").Object,
+            comSource: comSource.Object,
+            clock: clock.Object);
+
+        var result = await actions.RunPairNowAsync("p1", CancellationToken.None);
+
+        result.Created.Should().Be(1);
+        comSource.Verify(s => s.ReadWindowAsync(now, now.AddDays(14), It.IsAny<CancellationToken>()), Times.Once);
+        pairs.Verify(p => p.PushPairAsync("device-key", "p1", events, It.IsAny<CancellationToken>()), Times.Once);
+        pairs.Verify(p => p.RunPairAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunPairNow_GraphPair_CallsRunPair_NotPush()
+    {
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.ListPairsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<SyncPair>)new[] { Pair("p1", "MicrosoftGraph") });
+        pairs.Setup(p => p.RunPairAsync("device-key", "p1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MirrorResult { Updated = 1 });
+
+        var comSource = new Mock<ICalendarSource>();
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            pairs,
+            SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            keyStore: KeyStore("device-key").Object,
+            comSource: comSource.Object);
+
+        var result = await actions.RunPairNowAsync("p1", CancellationToken.None);
+
+        result.Updated.Should().Be(1);
+        pairs.Verify(p => p.RunPairAsync("device-key", "p1", It.IsAny<CancellationToken>()), Times.Once);
+        pairs.Verify(p => p.PushPairAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<AppointmentRecord>>(), It.IsAny<CancellationToken>()), Times.Never);
+        comSource.Verify(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunPairNow_UnknownPair_Throws()
+    {
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.ListPairsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<SyncPair>)Array.Empty<SyncPair>());
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            pairs,
+            SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            keyStore: KeyStore("device-key").Object);
+
+        Func<Task> act = () => actions.RunPairNowAsync("missing", CancellationToken.None);
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task RunPairNow_NotPaired_Throws()
+    {
+        var actions = Build(
+            new Mock<ICalExportRunner>(),
+            new Mock<IPairsClient>(),
+            SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            keyStore: KeyStore(null).Object);
+
+        Func<Task> act = () => actions.RunPairNowAsync("p1", CancellationToken.None);
+        await act.Should().ThrowAsync<InvalidOperationException>();
     }
 }

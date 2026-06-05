@@ -115,6 +115,8 @@ public sealed class EngineHost : IDisposable
             identityLogin,
             calendarConnect,
             comProbe,
+            calendarSource,
+            clock,
             http,
             ownedHttp: null);
 
