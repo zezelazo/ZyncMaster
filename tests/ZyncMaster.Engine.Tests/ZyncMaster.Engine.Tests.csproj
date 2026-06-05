@@ -21,6 +21,5 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ZyncMaster.Engine\ZyncMaster.Engine.csproj" />
     <ProjectReference Include="..\..\src\ZyncMaster.Core\ZyncMaster.Core.csproj" />
-    <ProjectReference Include="..\..\src\ZyncMaster.Cli\ZyncMaster.Cli.csproj" />
   </ItemGroup>
 </Project>
