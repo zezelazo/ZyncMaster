@@ -246,6 +246,24 @@ public sealed class HttpPairsClient : IPairsClient
         return ParseDateTimeOffset(root["leaseUntil"]);
     }
 
+    public async Task<DeviceRegistration> RegisterDeviceAsync(string bearer, string deviceName, CancellationToken ct)
+    {
+        if (bearer == null) throw new ArgumentNullException(nameof(bearer));
+        if (deviceName == null) throw new ArgumentNullException(nameof(deviceName));
+
+        // HUMAN-only surface: the server reads the owning user from the identity bearer, so the body
+        // carries ONLY the device name. The server returns { deviceId, apiKey, leaseUntil }.
+        var body = new JObject { ["name"] = deviceName };
+        var root = await SendBearerAsync(HttpMethod.Post, "/api/devices/register", bearer, body, ct) as JObject ?? new JObject();
+
+        return new DeviceRegistration
+        {
+            DeviceId = root["deviceId"]?.Value<string>() ?? "",
+            ApiKey = root["apiKey"]?.Value<string>() ?? "",
+            LeaseUntil = ParseDateTimeOffset(root["leaseUntil"]),
+        };
+    }
+
     public async Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
     {
         if (apiKey == null) throw new ArgumentNullException(nameof(apiKey));

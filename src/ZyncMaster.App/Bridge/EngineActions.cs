@@ -602,13 +602,91 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return Task.CompletedTask;
     }
 
+    // Auto-registers THIS device against the server using the signed-in identity bearer, so the
+    // device has an api key for every later device-key-gated call (Sync now, heartbeat, getDevice,
+    // rename). Idempotent and best-effort:
+    //   * if a device key is already stored -> no-op (we register ONCE per installation; registering
+    //     again would create a second server-side device for the same machine);
+    //   * if there is no signed-in identity (no bearer) -> silent no-op (the App calls this after a
+    //     successful sign-in, but a stray call before sign-in must not throw);
+    //   * any failure (network, 401, server error) -> logged as a Warning and swallowed, so it can
+    //     never break App boot or the post-login flow. The next call simply retries.
+    // Returns the freshly persisted key, or null when nothing was registered.
+    public async Task<string?> EnsureDeviceRegisteredAsync(CancellationToken ct = default)
+    {
+        // Idempotent: a device that already has a key is already registered.
+        var existing = await _keys.LoadAsync(ct);
+        if (!string.IsNullOrEmpty(existing))
+            return existing;
+
+        // Registration is brokered by the signed-in user's identity bearer. With no identity we
+        // simply cannot register yet — that is the normal "not signed in" state, not an error.
+        var tokens = await _identityCache.LoadAsync(ct);
+        if (tokens is null || string.IsNullOrEmpty(tokens.AccessToken))
+            return null;
+
+        try
+        {
+            var deviceName = ResolveDeviceName();
+            var registration = await _pairs.RegisterDeviceAsync(tokens.AccessToken, deviceName, ct);
+
+            if (string.IsNullOrEmpty(registration.ApiKey))
+            {
+                _logger.Log(LogLevel.Warning, "Device registration returned no api key; device is not registered.");
+                return null;
+            }
+
+            await _keys.SaveAsync(registration.ApiKey, ct);
+            _logger.Log(LogLevel.Info, $"Device registered (deviceId={registration.DeviceId}).");
+            return registration.ApiKey;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Shutdown — let the caller observe the cancellation.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Never break boot / post-login on a transient failure; the next call retries.
+            _logger.Log(LogLevel.Warning, "Device registration failed; the device will retry later.", ex);
+            return null;
+        }
+    }
+
+    // The friendly device name used at registration: the user-configured name when set, else the
+    // machine's hostname. EngineSettings.DeviceName already defaults to Environment.MachineName via
+    // the resolver, so this is just a defensive fallback for an empty/whitespace value.
+    private string ResolveDeviceName()
+    {
+        var name = _engineSettings.DeviceName;
+        return string.IsNullOrWhiteSpace(name) ? Environment.MachineName : name.Trim();
+    }
+
     private async Task<string> RequireKeyAsync(CancellationToken ct)
     {
         var key = await _keys.LoadAsync(ct);
+
+        // Self-heal: a signed-in device with no key is the exact bug this fix closes — the device
+        // was never registered after sign-in. Try to register it ONCE here and reload, so "Sync
+        // now" / getDevice / rename / heartbeat auto-cure instead of failing with "no device key".
         if (string.IsNullOrEmpty(key))
         {
+            key = await EnsureDeviceRegisteredAsync(ct);
+        }
+
+        if (string.IsNullOrEmpty(key))
+        {
+            // Distinguish "not signed in" (register first by signing in) from "signed in but the
+            // registration is not available yet" (a transient server/network failure).
+            var tokens = await _identityCache.LoadAsync(ct);
+            if (tokens is null || string.IsNullOrEmpty(tokens.AccessToken))
+            {
+                _logger.Log(LogLevel.Warning, "Operation requires a registered device, but no identity is present.");
+                throw new InvalidOperationException("Sign in to register this device before syncing.");
+            }
+
             _logger.Log(LogLevel.Warning, "Operation requires a paired device, but no device key is present.");
-            throw new InvalidOperationException("This device is not paired yet. Pair it before managing sync pairs.");
+            throw new InvalidOperationException("This device could not be registered yet. Check your connection and try again.");
         }
         return key;
     }

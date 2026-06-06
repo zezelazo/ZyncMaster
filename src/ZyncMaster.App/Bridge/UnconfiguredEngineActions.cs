@@ -98,6 +98,12 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
         => throw NotConfigured();
 
+    // No engine yet → no server URL to register against. A quiet no-op (null) so a boot/post-login
+    // ensureDevice call degrades silently rather than throwing — the device registers once the
+    // engine is configured and a sign-in happens.
+    public Task<string?> EnsureDeviceRegisteredAsync(CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
+
     // Device self-management needs a configured + paired engine; surface the clear "configure
     // first" error so the UI degrades visibly instead of failing opaquely.
     public Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default)

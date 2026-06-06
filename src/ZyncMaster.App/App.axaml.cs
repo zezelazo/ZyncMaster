@@ -174,6 +174,25 @@ public partial class App : Application
         // on its own cadence. After each tick we refresh status and push it to the UI + tray.
         var scheduler = _engineHost.Scheduler;
 
+        // Boot-time device auto-registration: if the user is ALREADY signed in when the app opens
+        // (the common "already logged in" case), register the device up front so it has an api key
+        // before the heartbeat/scheduler tick — otherwise both no-op silently with an empty key and
+        // nothing ever syncs until a manual "Sync now". Best-effort: EnsureDeviceRegisteredAsync is a
+        // no-op when there is no identity or the key already exists, and swallows transient failures.
+        var bootEngine = _engineHost;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await bootEngine.Actions.EnsureDeviceRegisteredAsync(_shutdown.Token);
+            }
+            catch (OperationCanceledException) { /* shutdown */ }
+            catch (Exception ex)
+            {
+                bootEngine.Logger.Log(LogLevel.Warning, "Boot-time device registration failed.", ex);
+            }
+        });
+
         // FIX C — the device-lease heartbeat runs independently of the scheduler's startup delay so
         // the lease is renewed promptly even before the first (delayed) sync tick. Tracked in a
         // field so Exit can drain it.
