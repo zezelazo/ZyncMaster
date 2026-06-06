@@ -29,10 +29,12 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
-    # Job-level env so the conditional code-signing step can gate on `env.SIGNING_CERT` (the
-    # `secrets` context is not available inside `if:` expressions). Empty when no cert is set.
+    # Job-level BOOLEAN (not the secret itself) so the conditional signing step can gate on it
+    # — the `secrets` context is not available inside `if:` expressions, and exposing the raw
+    # cert job-wide would widen its scope to every step. The actual SIGNING_CERT/PASSWORD stay
+    # bound only on the signing step's own env block.
     env:
-      SIGNING_CERT: ${{ secrets.SIGNING_CERT }}
+      HAS_SIGNING_CERT: ${{ secrets.SIGNING_CERT != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -158,9 +160,8 @@ jobs:
         #   SIGNING_CERT          base64-encoded PFX (Authenticode) code-signing certificate
         #   SIGNING_CERT_PASSWORD password for the PFX above
         # The PFX is materialised to a temp file, used by signtool, then deleted in the finally block.
-        # `secrets` is not allowed in an `if:` expression, so the cert is exposed as a job-level env
-        # var (see the job `env:` block) and the gate checks that instead.
-        if: ${{ env.SIGNING_CERT != '' }}
+        # Gate on the job-level boolean (the raw secret stays scoped to this step's env below).
+        if: ${{ env.HAS_SIGNING_CERT == 'true' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
