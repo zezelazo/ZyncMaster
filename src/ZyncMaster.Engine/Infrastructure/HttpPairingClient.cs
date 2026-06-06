@@ -31,14 +31,16 @@ public sealed class HttpPairingClient : IPairingClient
         {
             PairingId = root["pairingId"]?.Value<string>() ?? "",
             Code = root["code"]?.Value<string>() ?? "",
+            Verifier = root["verifier"]?.Value<string>() ?? "",
         };
     }
 
-    public async Task<PairComplete> CompleteAsync(string pairingId, CancellationToken ct)
+    public async Task<PairComplete> CompleteAsync(string pairingId, string verifier, CancellationToken ct)
     {
         if (pairingId == null) throw new ArgumentNullException(nameof(pairingId));
+        if (verifier == null) throw new ArgumentNullException(nameof(verifier));
 
-        var body = new JObject { ["pairingId"] = pairingId };
+        var body = new JObject { ["pairingId"] = pairingId, ["verifier"] = verifier };
         var root = await PostJsonAsync($"{_baseUrl}/api/pair/complete", body, ct);
 
         return new PairComplete

@@ -30,9 +30,12 @@ public sealed class PairingServiceTests
             return Task.FromResult(StartResult);
         }
 
-        public Task<PairComplete> CompleteAsync(string pairingId, CancellationToken ct)
+        public string? LastVerifier { get; private set; }
+
+        public Task<PairComplete> CompleteAsync(string pairingId, string verifier, CancellationToken ct)
         {
             CompleteCallCount++;
+            LastVerifier = verifier;
             // Repeat the last queued completion once the queue is drained.
             var result = _completions.Count > 1 ? _completions.Dequeue() : _completions.Peek();
             return Task.FromResult(result);

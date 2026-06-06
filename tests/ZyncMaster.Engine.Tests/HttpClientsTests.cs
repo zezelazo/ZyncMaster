@@ -75,11 +75,12 @@ public sealed class HttpClientsTests
         var http = new HttpClient(stub);
         var client = new HttpPairingClient(http, "https://srv.example.com/");
 
-        var result = await client.CompleteAsync("p-123", CancellationToken.None);
+        var result = await client.CompleteAsync("p-123", "verifier-abc", CancellationToken.None);
 
         stub.LastRequest!.Method.Should().Be(HttpMethod.Post);
         stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/pair/complete");
         JObject.Parse(stub.LastBody!)["pairingId"]!.Value<string>().Should().Be("p-123");
+        JObject.Parse(stub.LastBody!)["verifier"]!.Value<string>().Should().Be("verifier-abc");
 
         result.Approved.Should().BeTrue();
         result.ApiKey.Should().Be("key-xyz");
@@ -93,7 +94,7 @@ public sealed class HttpClientsTests
         var http = new HttpClient(stub);
         var client = new HttpPairingClient(http, "https://srv.example.com");
 
-        var result = await client.CompleteAsync("p-123", CancellationToken.None);
+        var result = await client.CompleteAsync("p-123", "verifier-abc", CancellationToken.None);
 
         result.Approved.Should().BeFalse();
         result.ApiKey.Should().BeNull();

@@ -49,7 +49,7 @@ public sealed class PairingService
 
         for (var attempt = 0; attempt < attempts; attempt++)
         {
-            var result = await _pairing.CompleteAsync(start.PairingId, ct);
+            var result = await _pairing.CompleteAsync(start.PairingId, start.Verifier, ct);
             if (result.Approved)
             {
                 await _keys.SaveAsync(result.ApiKey!, ct);
