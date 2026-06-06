@@ -104,6 +104,20 @@ public partial class MainWindow : Window, IWindowControl
                 control.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
                 hostPanel.Children.Add(control);
             }
+
+#if WIN_WEBVIEW2
+            // FIX 2 — if the embedded WebView2 cannot initialise (most commonly because the Evergreen
+            // WebView2 Runtime is not installed), swap the blank host out for a native Avalonia panel
+            // that explains the problem and links to the runtime download. Subscribe before Load() and
+            // also handle the case where the host already failed (HasFailed) so we never miss it.
+            if (webHost is WebView2WebHost wv2)
+            {
+                wv2.InitializationFailed += () => ShowWebView2MissingPanel(hostPanel);
+                if (wv2.HasFailed)
+                    ShowWebView2MissingPanel(hostPanel);
+            }
+#endif
+
             webHost.Load();
             return;
         }
@@ -141,6 +155,80 @@ public partial class MainWindow : Window, IWindowControl
         }
         base.OnClosing(e);
     }
+
+#if WIN_WEBVIEW2
+    // Replaces the blank WebView2 host with a native Avalonia panel explaining that the Evergreen
+    // WebView2 Runtime is missing, plus a button that opens the download page in the system browser.
+    // Runs on the UI thread (InitializationFailed is posted there); idempotent because it rebuilds
+    // the host panel's children from scratch.
+    private void ShowWebView2MissingPanel(Panel? hostPanel)
+    {
+        hostPanel ??= this.FindControl<Panel>("HostPanel");
+        if (hostPanel == null)
+            return;
+
+        var heading = new TextBlock
+        {
+            Text = "WebView2 Runtime no instalado",
+            Foreground = Avalonia.Media.Brushes.White,
+            FontSize = 20,
+            FontWeight = Avalonia.Media.FontWeight.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+
+        var body = new TextBlock
+        {
+            Text = "Zync Master necesita el runtime de Microsoft Edge WebView2 para mostrar su "
+                 + "interfaz. Instálalo y vuelve a abrir la aplicación.",
+            Foreground = Avalonia.Media.Brush.Parse("#9FB0CC"),
+            FontSize = 13,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            MaxWidth = 360,
+        };
+
+        var button = new Button
+        {
+            Content = "Descargar WebView2 Runtime",
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        button.Click += (_, _) => OpenInSystemBrowser(WebView2WebHost.RuntimeDownloadUrl);
+
+        var stack = new StackPanel
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Spacing = 12,
+        };
+        stack.Children.Add(heading);
+        stack.Children.Add(body);
+        stack.Children.Add(button);
+
+        hostPanel.Children.Clear();
+        hostPanel.Children.Add(stack);
+    }
+
+    // Opens a URL in the system's default browser. Best-effort: a missing/blocked browser must not
+    // crash the window. Restricted to http/https so a non-web scheme can never be shelled out.
+    private static void OpenInSystemBrowser(string url)
+    {
+        try
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                return;
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch { /* no browser / blocked: swallow */ }
+    }
+#endif
 
     // ---- IWindowControl: driven by the web title bar through the bridge ----
     // The window is frameless (extend-client-area + NoChrome: resizable WM frame, no painted

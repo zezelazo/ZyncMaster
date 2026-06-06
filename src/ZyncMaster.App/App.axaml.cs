@@ -147,6 +147,18 @@ public partial class App : Application
         {
             actions = MakeUnconfiguredActions();
         }
+        // FIX 1 — a read-only install location (settings.json could not be created/written) must not
+        // crash the app on first launch. Degrade to the unconfigured actions so the tray + web panel
+        // still come up and the user can see what is wrong. The new settings path lives under
+        // %LOCALAPPDATA% so this should be rare, but a locked file / odd ACL can still surface here.
+        catch (IOException)
+        {
+            actions = MakeUnconfiguredActions();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            actions = MakeUnconfiguredActions();
+        }
 
         var transport = new WebViewBridgeTransport((IBridgeTransport)_webHost);
         _bridge = new UiBridge(transport, actions, () => _mainWindow);
@@ -321,9 +333,10 @@ public partial class App : Application
 
     private static UnconfiguredEngineActions MakeUnconfiguredActions()
     {
-        var exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
-                     ?? Directory.GetCurrentDirectory();
-        var settingsPath = Path.Combine(exeDir, "settings.json");
+        // Use the SAME user-writable settings path as EngineHost so that, when the user fixes the
+        // config from the UI, SaveConfigAsync writes to %LOCALAPPDATA% (writable) rather than next
+        // to the exe (possibly read-only) — which is exactly the location that triggered the crash.
+        var settingsPath = EngineHost.DefaultSettingsPath();
         var repo = new SettingsRepository<AppSettings>(new PhysicalFileSystem());
         return new UnconfiguredEngineActions(repo, settingsPath);
     }
