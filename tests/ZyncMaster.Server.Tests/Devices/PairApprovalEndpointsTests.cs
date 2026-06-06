@@ -161,6 +161,8 @@ public class PairApprovalEndpointsTests
         using var startDoc = JsonDocument.Parse(await startResp.Content.ReadAsStringAsync());
         var pairingId = startDoc.RootElement.GetProperty("pairingId").GetString();
         var code = startDoc.RootElement.GetProperty("code").GetString();
+        // FIX 1 — start returns a PKCE verifier the initiator must echo on complete.
+        var verifier = startDoc.RootElement.GetProperty("verifier").GetString();
 
         // 2. Human approves from a signed-in browser. The cookie request finds the global
         //    pending row and creates the device.
@@ -170,8 +172,8 @@ public class PairApprovalEndpointsTests
         using var approveDoc = JsonDocument.Parse(await approveResp.Content.ReadAsStringAsync());
         approveDoc.RootElement.GetProperty("approved").GetBoolean().Should().BeTrue();
 
-        // 3. Device completes anonymously and receives the api key.
-        var completeResp = await deviceClient.PostAsJsonAsync("/api/pair/complete", new { pairingId });
+        // 3. Device completes anonymously (with its verifier) and receives the api key.
+        var completeResp = await deviceClient.PostAsJsonAsync("/api/pair/complete", new { pairingId, verifier });
         completeResp.StatusCode.Should().Be(HttpStatusCode.OK);
         using var completeDoc = JsonDocument.Parse(await completeResp.Content.ReadAsStringAsync());
         completeDoc.RootElement.GetProperty("approved").GetBoolean().Should().BeTrue();

@@ -174,7 +174,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         if (string.IsNullOrWhiteSpace(calendarId)) throw new ArgumentException("calendarId required.", nameof(calendarId));
         if (draft       == null)                   throw new ArgumentNullException(nameof(draft));
 
-        var body = BuildEventJson(draft).ToString(Formatting.None);
+        var body = BuildEventJson(draft, forUpdate: false).ToString(Formatting.None);
         var json = await SendJsonAsync(HttpMethod.Post,
             $"me/calendars/{Uri.EscapeDataString(calendarId)}/events", body, ct).ConfigureAwait(false);
 
@@ -186,7 +186,10 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         if (string.IsNullOrWhiteSpace(eventId)) throw new ArgumentException("eventId required.", nameof(eventId));
         if (draft == null)                      throw new ArgumentNullException(nameof(draft));
 
-        var body = BuildEventJson(draft).ToString(Formatting.None);
+        // FIX 5 — on UPDATE we do NOT re-send the reminder fields, so a reminder the user changed on
+        // the destination event is preserved. The reminder is set ONLY at create time (the source has
+        // no per-event reminder to mirror, so once created it is the user's to manage).
+        var body = BuildEventJson(draft, forUpdate: true).ToString(Formatting.None);
         await SendJsonAsync(new HttpMethod("PATCH"),
             $"me/events/{Uri.EscapeDataString(eventId)}", body, ct).ConfigureAwait(false);
     }
@@ -350,7 +353,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         return result;
     }
 
-    private JObject BuildEventJson(EventDraft draft)
+    private JObject BuildEventJson(EventDraft draft, bool forUpdate)
     {
         // Managed properties written on every Create: the per-event source id (always) and, when
         // the writer is pair-scoped, the pair id (so a later destination cleanup can target exactly
@@ -404,7 +407,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
             timeZone      = draft.TimeZoneId;
         }
 
-        return new JObject
+        var json = new JObject
         {
             ["subject"]                    = draft.Subject,
             ["body"]                       = new JObject
@@ -423,10 +426,20 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                 ["timeZone"] = timeZone,
             },
             ["isAllDay"]                   = draft.IsAllDay,
-            ["isReminderOn"]               = true,
-            ["reminderMinutesBeforeStart"] = draft.ReminderMinutesBeforeStart,
             ["singleValueExtendedProperties"] = managedProps,
         };
+
+        // FIX 5 — write the reminder ONLY on Create. On Update we deliberately omit isReminderOn /
+        // reminderMinutesBeforeStart so a reminder the user customised on the destination event is
+        // not silently overwritten back to the default on every sync. (The source carries no
+        // per-event reminder, so there is nothing to keep mirroring after the initial create.)
+        if (!forUpdate)
+        {
+            json["isReminderOn"]               = true;
+            json["reminderMinutesBeforeStart"] = draft.ReminderMinutesBeforeStart;
+        }
+
+        return json;
     }
 
     private async Task<JObject> SendJsonAsync(HttpMethod method, string url, string? jsonBody, CancellationToken ct)

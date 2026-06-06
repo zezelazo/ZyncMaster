@@ -100,6 +100,31 @@ public sealed class EfSyncRunLock : ISyncRunLock
 
         public string PairId { get; }
 
+        // FIX 2 — extend LockedUntil to now+ttl, but ONLY where this row still carries OUR fence.
+        // A single atomic conditional UPDATE guarded by rowsAffected, exactly like acquire/release.
+        // rowsAffected==1 means we renewed (we still hold the lock); 0 means we lost it (expired and
+        // stolen, or the row vanished) and the caller must stop. Errors surface as false (lost) so a
+        // transport blip is treated conservatively rather than as a held lock.
+        public async Task<bool> RenewAsync(TimeSpan ttl, CancellationToken ct = default)
+        {
+            if (_released)
+                return false;
+
+            try
+            {
+                var until = DateTimeOffset.UtcNow.Add(ttl);
+                await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+                var affected = await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE SyncRunLocks SET LockedUntil = {until} WHERE PairId = {PairId} AND FenceToken = {_fence}",
+                    ct).ConfigureAwait(false);
+                return affected == 1;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public async ValueTask DisposeAsync()
         {
             if (_released) return;

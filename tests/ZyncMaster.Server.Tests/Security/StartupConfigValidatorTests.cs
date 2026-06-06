@@ -17,12 +17,17 @@ public class StartupConfigValidatorTests
     // (user-secrets/env vars). The validator treats a blank/whitespace secret as fatal in production.
     private const string Secret = "the-client-secret";
 
+    // FIX 4 — a >= 32-char cron secret stands in for the deployment value. The validator now also
+    // requires this in production (a blank one silently disables the destructive cron trigger).
+    private const string CronSecret = "0123456789abcdef0123456789abcdef"; // 32 chars
+
     private static ServerOptions FullyConfigured() => new()
     {
         MicrosoftClientId = "cid",
         IdentityRedirectUri = "https://app.example.com/identity/connect/callback/microsoft",
         CalendarRedirectUri = "https://app.example.com/calendar/connect/callback/graph",
         PublicBaseUrl = "https://app.example.com",
+        CronTriggerSecret = CronSecret,
     };
 
     [Fact]
@@ -85,6 +90,73 @@ public class StartupConfigValidatorTests
         var act = () => StartupConfigValidator.ValidateOAuthConfig(
             FullyConfigured(), isDevelopment: true, microsoftClientSecret: null);
         act.Should().NotThrow();
+    }
+
+    // FIX 4 — the destructive cron trigger is gated ONLY by CronTriggerSecret; a blank one silently
+    // disables it (so nothing syncs when no App is up). Production must fail fast naming it.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Production_with_missing_cron_secret_throws_naming_it(string? secret)
+    {
+        var opts = FullyConfigured();
+        opts.CronTriggerSecret = secret!;
+
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            opts, isDevelopment: false, microsoftClientSecret: Secret);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*CronTriggerSecret*");
+    }
+
+    // FIX 4 — a short (low-entropy) cron secret is brute-forceable; production must reject < 32 chars.
+    [Fact]
+    public void Production_with_short_cron_secret_throws_naming_it()
+    {
+        var opts = FullyConfigured();
+        opts.CronTriggerSecret = "too-short"; // < 32 chars
+
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            opts, isDevelopment: false, microsoftClientSecret: Secret);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*CronTriggerSecret*");
+    }
+
+    // FIX 4 — Development tolerates an empty cron secret (the trigger is simply disabled locally).
+    [Fact]
+    public void Development_with_empty_cron_secret_does_not_throw()
+    {
+        var opts = FullyConfigured();
+        opts.CronTriggerSecret = "";
+
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            opts, isDevelopment: true, microsoftClientSecret: Secret);
+
+        act.Should().NotThrow();
+    }
+
+    // FIX 5 — a localhost redirect / public base URL is a dev-only default; shipping it would mint
+    // OAuth callbacks / magic-links pointing at the operator's own machine. Reject it in production.
+    [Theory]
+    [InlineData("IdentityRedirectUri")]
+    [InlineData("CalendarRedirectUri")]
+    [InlineData("RedirectUri")]
+    [InlineData("PublicBaseUrl")]
+    public void Production_with_localhost_url_throws_naming_the_setting(string setting)
+    {
+        var opts = FullyConfigured();
+        switch (setting)
+        {
+            case "IdentityRedirectUri": opts.IdentityRedirectUri = "http://localhost:5000/identity/connect/callback/microsoft"; break;
+            case "CalendarRedirectUri": opts.CalendarRedirectUri = "http://127.0.0.1:5000/calendar/connect/callback/graph"; break;
+            case "RedirectUri": opts.RedirectUri = "http://localhost:5000/connect/callback"; break;
+            case "PublicBaseUrl": opts.PublicBaseUrl = "http://127.0.0.1:5000"; break;
+        }
+
+        var act = () => StartupConfigValidator.ValidateOAuthConfig(
+            opts, isDevelopment: false, microsoftClientSecret: Secret);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage($"*{setting}*");
     }
 
     [Fact]

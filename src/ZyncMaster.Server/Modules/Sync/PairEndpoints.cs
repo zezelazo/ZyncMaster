@@ -656,9 +656,14 @@ public static class PairEndpoints
 
             var writer = registry.ResolveWriter(pair.Destination);
             var (from, to) = Window(opts.Value);
-            var result = await writer
-                .MirrorAsync(pair.Destination.CalendarId, req.Events, ReminderMinutes, from, to, ct, pair.Id)
-                .ConfigureAwait(false);
+            // FIX 2 — renew the run-lock while the (potentially long) destructive mirror runs, so the
+            // lock cannot expire mid-mirror and let a second executor start a concurrent sweep.
+            var mirrorPair = pair;
+            var result = await SyncRunLockHeartbeat.RunAsync(
+                handle, LockTtl(opts.Value),
+                token => writer.MirrorAsync(
+                    mirrorPair.Destination.CalendarId, req.Events, ReminderMinutes, from, to, token, mirrorPair.Id),
+                ct).ConfigureAwait(false);
 
             await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
             return Results.Ok(result);
@@ -703,7 +708,13 @@ public static class PairEndpoints
 
             // Delegate the read + destructive mirror to the calendar module. The §A-3 transient
             // read guard and the conditional window sweep live inside the module / CalendarMirror.
-            var outcome = await module.ExecuteAsync(pair, from, to, ct).ConfigureAwait(false);
+            // FIX 2 — wrapped in the run-lock heartbeat so a long read+mirror cannot let the lock
+            // expire mid-run and admit a concurrent destructive sweep.
+            var runPair = pair;
+            var outcome = await SyncRunLockHeartbeat.RunAsync(
+                handle, LockTtl(opts.Value),
+                token => module.ExecuteAsync(runPair, from, to, token),
+                ct).ConfigureAwait(false);
             if (outcome.NoServerReader)
             {
                 // OutlookCom sources have no server-side read; their events arrive via /push.

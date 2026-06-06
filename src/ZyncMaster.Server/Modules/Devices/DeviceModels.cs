@@ -33,12 +33,29 @@ public sealed record PendingPairing
     public string? ApprovedDeviceId { get; init; }
     public string? OneTimeApiKey { get; init; }
     public DateTimeOffset CreatedUtc { get; init; }
+
+    // FIX 1 (account-takeover via anonymous pairing) — PKCE proof-of-initiator. /api/pair/start
+    // mints a high-entropy secret VERIFIER, returns it only to the caller that started the
+    // pairing, and stores ONLY its SHA-256 here (the clear verifier never touches the DB). The
+    // one-time api key is handed out by /api/pair/complete only when the caller proves possession
+    // of the verifier whose hash matches. This binds completion to the initiator: an attacker who
+    // knows a victim's pairingId (or grinds them) cannot complete the handshake without the
+    // verifier, so the device-code takeover (induce the victim to approve, then complete with the
+    // attacker's pairingId) is closed. Nullable for forward/backward compat: pre-FIX-1 rows have
+    // no hash and CompletePairingAsync treats a null hash as "no PKCE bound" (legacy behaviour),
+    // but every row minted by the patched StartPairingAsync carries one.
+    public string? VerifierHash { get; init; }
 }
 
 public sealed record PairStartResult
 {
     public required string PairingId { get; init; }
     public required string Code { get; init; }
+
+    // FIX 1 — the clear PKCE verifier, returned ONCE to the initiating caller. The caller must
+    // keep it and present it to /api/pair/complete to claim the api key. Never persisted in the
+    // clear (only its hash is stored on the pending row).
+    public required string Verifier { get; init; }
 }
 
 public sealed record PairCompleteResult

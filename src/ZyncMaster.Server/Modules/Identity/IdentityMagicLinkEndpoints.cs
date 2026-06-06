@@ -143,7 +143,7 @@ public static class IdentityMagicLinkEndpoints
         // a no-op if the limiter middleware is not wired, so this stays safe under any host.
         post.RequireRateLimiting(PerIpRateLimitPolicy);
 
-        app.MapGet("/identity/magic-link/callback", async (
+        var callback = app.MapGet("/identity/magic-link/callback", async (
             HttpContext context,
             IDbContextFactory<ZyncMasterDbContext> dbFactory,
             IUserStore users,
@@ -208,6 +208,11 @@ public static class IdentityMagicLinkEndpoints
 
             return Results.Redirect(redirect);
         });
+
+        // FIX 3 — the callback consumes the magic-link token (a bearer secret in the query string),
+        // so cap per-IP attempts to stop brute-forcing live tokens. Shares the identity-token policy
+        // with /identity/handle/redeem and /identity/refresh; excess returns 429.
+        callback.RequireRateLimiting(IdentityConnectEndpoints.TokenRateLimitPolicy);
     }
 
     // Builds the base URL for the emailed link: the configured PublicBaseUrl when set, else the

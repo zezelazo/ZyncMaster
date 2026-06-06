@@ -158,6 +158,8 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.DeviceName).HasMaxLength(256).IsRequired();
             e.Property(x => x.Code).HasMaxLength(64).IsRequired();
             e.Property(x => x.ApprovedDeviceId).HasMaxLength(64);
+            // FIX 1 — SHA-256 base64url is 43 chars; 128 leaves ample headroom and stays nullable.
+            e.Property(x => x.VerifierHash).HasMaxLength(128);
             e.HasIndex(x => x.Code);
         });
 

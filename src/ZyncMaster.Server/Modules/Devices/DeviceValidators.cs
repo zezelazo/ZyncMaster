@@ -3,7 +3,13 @@
 namespace ZyncMaster.Server;
 
 public sealed record PairStartRequest(string Name);
-public sealed record PairCompleteRequest(string PairingId);
+
+// FIX 1 — Verifier is the PKCE proof minted at /api/pair/start. It is OPTIONAL on the wire (so a
+// malformed/legacy body still parses to a clean validation result rather than a 400 storm), but the
+// SERVICE enforces it: a pending row created after this change always carries a verifier hash and
+// will not release the api key without a matching verifier. The request type carries it so the
+// endpoint can forward it to the service.
+public sealed record PairCompleteRequest(string PairingId, string? Verifier = null);
 public sealed record ApproveRequest(string Code);
 
 public sealed class PairStartRequestValidator : AbstractValidator<PairStartRequest>

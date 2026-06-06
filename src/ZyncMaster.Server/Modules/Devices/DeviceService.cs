@@ -71,6 +71,12 @@ public sealed class DeviceService
         var pairingId = Guid.NewGuid().ToString("N");
         var code = GenerateCode();
 
+        // FIX 1 — mint a high-entropy PKCE verifier (256 bits). The clear verifier is returned to
+        // the caller ONCE (PairStartResult.Verifier); only its SHA-256 is persisted. /api/pair/
+        // complete must present a verifier whose hash matches before the api key is released, so a
+        // third party who only learns the pairingId cannot complete the handshake.
+        var verifier = PairingVerifier.Generate();
+
         var pending = new PendingPairing
         {
             PairingId = pairingId,
@@ -78,10 +84,11 @@ public sealed class DeviceService
             Code = code,
             Approved = false,
             CreatedUtc = DateTimeOffset.UtcNow,
+            VerifierHash = PairingVerifier.Hash(verifier),
         };
         await _store.SavePendingAsync(pending, ct);
 
-        return new PairStartResult { PairingId = pairingId, Code = code };
+        return new PairStartResult { PairingId = pairingId, Code = code, Verifier = verifier };
     }
 
     // FIX A — atomic, idempotent approve. Two defects are closed here:
@@ -396,11 +403,29 @@ public sealed class DeviceService
         return p is "windows" or "macos" or "linux" ? p : "windows";
     }
 
-    public async Task<PairCompleteResult> CompletePairingAsync(string pairingId, CancellationToken ct = default)
+    public async Task<PairCompleteResult> CompletePairingAsync(
+        string pairingId, string? verifier = null, CancellationToken ct = default)
     {
         var pending = await _store.GetPendingAsync(pairingId, ct);
         if (pending is null || !pending.Approved)
             return new PairCompleteResult { Approved = pending?.Approved ?? false };
+
+        // FIX 1 — PKCE check: the api key is released ONLY to a caller that proves possession of the
+        // verifier minted at /api/pair/start (its hash is stored on the row). A wrong/absent verifier
+        // is rejected as NOT approved, so a third party who learned the pairingId cannot harvest the
+        // victim's key. The comparison is constant-time over the stored hash. Legacy rows with no
+        // stored hash (pre-FIX-1, none minted after this change) keep the old behaviour so any
+        // in-flight pairing still completes; new rows always carry a hash and are always enforced.
+        if (!string.IsNullOrEmpty(pending.VerifierHash))
+        {
+            if (string.IsNullOrEmpty(verifier)
+                || !PairingVerifier.Matches(verifier, pending.VerifierHash))
+            {
+                // Do NOT reveal whether the pairing exists/was approved — report "not approved",
+                // the same shape an un-approved or unknown pairing returns.
+                return new PairCompleteResult { Approved = false };
+            }
+        }
 
         // The one-time key is handed out exactly once: cleared in place so a second complete is
         // idempotent (Approved=true, ApiKey=null) — the App may legitimately re-poll. The now-spent

@@ -114,4 +114,20 @@ public sealed class ServerOptions
     // a code exists), so it leaks nothing.
     public int PairingMaxPerIp { get; set; } = 20;
     public int PairingRateLimitWindowMinutes { get; set; } = 15;
+
+    // FIX 3 — per-IP fixed-window rate limit for the unauthenticated identity token surfaces
+    // (/identity/handle/redeem, /identity/refresh, /identity/magic-link/callback). Each accepts a
+    // bearer-style secret directly in the request, so an unthrottled caller could grind them; the
+    // window bounds attempts per client address and excess is rejected with 429. Anti-abuse only
+    // (never branches on whether a token exists), so it leaks nothing about valid tokens/users.
+    public int IdentityTokenMaxPerIp { get; set; } = 30;
+    public int IdentityTokenRateLimitWindowMinutes { get; set; } = 5;
+
+    // FIX 4 — per-IP fixed-window rate limit for the destructive cron trigger (/api/sync/run-due).
+    // The endpoint is already secret-gated, but a leaked/guessed secret plus an unthrottled endpoint
+    // would let one caller hammer cross-user syncs; the window caps hits per client address (429 on
+    // excess) as defense-in-depth. The default is generous because the legitimate caller is a single
+    // scheduler making one call per cadence.
+    public int CronTriggerMaxPerIp { get; set; } = 12;
+    public int CronTriggerRateLimitWindowMinutes { get; set; } = 1;
 }
