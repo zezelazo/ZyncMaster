@@ -58,8 +58,19 @@ public sealed class OutlookComSource : ICalendarSource
             }
         }
 
+        // DATA-INTEGRITY CONTRACT (read membership == destination sweep membership).
+        // The destination sweep enumerates with Graph calendarView (GraphCalendarTarget
+        // .ListManagedInWindowAsync), which returns every event that OVERLAPS [from, to] —
+        // including an all-day / multi-day event that STARTED before `from` but still runs into
+        // the window. If the read filtered by START only (StartOffset >= fromUtc), such an event
+        // would be swept-eligible at the destination yet ABSENT from the read set, so the sweep
+        // would DELETE a still-live event on every cycle (data loss). To keep read and sweep
+        // derived from the SAME criterion, membership is OVERLAP, exactly matching calendarView:
+        //   event overlaps the window  <=>  EndOffset > fromUtc AND StartOffset <= toUtc.
+        // EndOffset is always populated here (CompleteCalendarReader parses `end` as a required
+        // field), so the lower bound is meaningful for every record.
         var filtered = collected
-            .Where(e => e.StartOffset >= fromUtc && e.StartOffset <= toUtc)
+            .Where(e => e.EndOffset > fromUtc && e.StartOffset <= toUtc)
             .OrderBy(e => e.StartOffset)
             .ToList();
 

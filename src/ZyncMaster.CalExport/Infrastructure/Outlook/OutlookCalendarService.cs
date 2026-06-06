@@ -62,7 +62,7 @@ public sealed class OutlookCalendarService : ICalendarService
     {
         Type? appType = Type.GetTypeFromProgID("Outlook.Application");
         if (appType == null)
-            throw new InvalidOperationException(
+            throw new OutlookUnavailableException(
                 "Could not connect to Outlook. Make sure Outlook Classic is installed and configured on this machine.");
 
         try
@@ -71,7 +71,7 @@ public sealed class OutlookCalendarService : ICalendarService
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException(
+            throw new OutlookUnavailableException(
                 "Could not connect to Outlook. Make sure Outlook Classic is installed and configured on this machine.", ex);
         }
     }

@@ -18,13 +18,20 @@ namespace ZyncMaster.Engine;
 // ICalExportRunner so OutlookComSource can be unit-tested with a fake runner.
 public sealed class CalExportRunner : ICalExportRunner
 {
+    // Fallback ceiling when the caller passes a non-positive timeout. Outlook's modal prompts
+    // (Programmatic Access "Allow access", a corrupt profile, an MFA wall) can block the headless
+    // child forever; this bounds the wait so the scheduler is never wedged by a hung child.
+    public const int DefaultTimeoutMinutes = 5;
+
     private readonly string _calExportExePath;
     private readonly IAppLogger _logger;
+    private readonly TimeSpan _timeout;
 
-    public CalExportRunner(string calExportExePath, IAppLogger? logger = null)
+    public CalExportRunner(string calExportExePath, IAppLogger? logger = null, int timeoutMinutes = DefaultTimeoutMinutes)
     {
         _calExportExePath = calExportExePath ?? throw new ArgumentNullException(nameof(calExportExePath));
         _logger = logger ?? NullAppLogger.Instance;
+        _timeout = TimeSpan.FromMinutes(timeoutMinutes <= 0 ? DefaultTimeoutMinutes : timeoutMinutes);
     }
 
     public async Task<string> ExportMonthAsync(int year, int month, IReadOnlyList<string>? calendarNames, CancellationToken ct)
@@ -181,7 +188,7 @@ public sealed class CalExportRunner : ICalExportRunner
         }
 
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
+        await WaitForExitOrKillAsync(process, "list-calendars", ct);
         var stderr = await stderrTask;
 
         if (process.ExitCode != 0)
@@ -241,7 +248,7 @@ public sealed class CalExportRunner : ICalExportRunner
         }
 
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
+        await WaitForExitOrKillAsync(process, "export", ct);
         var stderr = await stderrTask;
 
         if (process.ExitCode != 0)
@@ -254,6 +261,54 @@ public sealed class CalExportRunner : ICalExportRunner
                 $"CalExport exited with code {process.ExitCode}. {stderr}".TrimEnd());
         }
     }
+
+    // Waits for the child to exit, but never longer than _timeout. The wait is bounded by a
+    // linked CTS that fires on EITHER the caller's cancellation OR a CancelAfter(_timeout)
+    // deadline. On the timeout deadline (the caller did NOT cancel) the whole child process
+    // TREE is killed — Outlook may have spawned helper processes — and a CalExportTimeoutException
+    // is thrown with the probable cause logged at Error. A caller-initiated cancellation is
+    // re-thrown as OperationCanceledException unchanged (it is not a timeout).
+    private async Task WaitForExitOrKillAsync(Process process, string operation, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linked.CancelAfter(_timeout);
+
+        try
+        {
+            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // Timeout (not a caller cancellation): kill the whole tree so no orphan lingers, then
+            // surface a distinguishable timeout failure with the probable cause.
+            KillTree(process);
+            var message = BuildTimeoutLogMessage(operation, _timeout);
+            _logger.Log(LogLevel.Error, message);
+            throw new CalExportTimeoutException(message);
+        }
+    }
+
+    private void KillTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: the process may have exited in the race between the deadline and the kill.
+            _logger.Log(LogLevel.Debug, $"CalExport kill-on-timeout was a no-op or failed: {ex.Message}");
+        }
+    }
+
+    // The Error-level message for a CalExport timeout. Names the probable cause (an Outlook modal
+    // prompt blocking the headless child) so the log alone explains a wedged sync. Internal +
+    // static so it can be asserted in a unit test without standing up the real process boundary.
+    internal static string BuildTimeoutLogMessage(string operation, TimeSpan timeout)
+        => $"CalExport ({operation}) did not exit within {timeout.TotalMinutes:0.##} minute(s) and was killed " +
+           "(process tree). Probable cause: Outlook is blocked on a modal dialog — Programmatic Access " +
+           "\"Allow access\", a corrupt profile prompt, or an MFA/sign-in wall — on this device.";
 
     // The Error-level message for a non-zero CalExport exit. ALWAYS carries the FULL stderr so a
     // failed sync can be diagnosed from the log alone. Extracted (and internal) so it can be tested

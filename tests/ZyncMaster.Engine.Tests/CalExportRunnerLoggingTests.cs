@@ -1,3 +1,4 @@
+using System;
 using FluentAssertions;
 using ZyncMaster.Engine;
 using Xunit;
@@ -6,6 +7,49 @@ namespace ZyncMaster.Engine.Tests;
 
 public sealed class CalExportRunnerLoggingTests
 {
+    // FIX 2 — when a CalExport child is killed for exceeding its timeout, the Error log must name the
+    // probable cause (an Outlook modal dialog) and the operation + duration so a wedged sync is
+    // diagnosable from the log alone.
+    [Fact]
+    public void TimeoutLogMessage_NamesOperationDurationAndProbableCause()
+    {
+        var msg = CalExportRunner.BuildTimeoutLogMessage("export", TimeSpan.FromMinutes(5));
+
+        msg.Should().Contain("export");
+        msg.Should().Contain("5");
+        msg.Should().Contain("killed");
+        // The probable cause — an Outlook modal prompt — is the actionable hint for the user.
+        msg.Should().Contain("modal dialog");
+        msg.Should().Contain("Programmatic Access");
+    }
+
+    [Fact]
+    public void TimeoutLogMessage_FormatsFractionalMinutes()
+    {
+        var msg = CalExportRunner.BuildTimeoutLogMessage("list-calendars", TimeSpan.FromSeconds(90));
+
+        msg.Should().Contain("list-calendars");
+        msg.Should().Contain("1.5");
+    }
+
+    // A non-positive timeout falls back to the default ceiling rather than 0 (which would kill the
+    // child instantly). The ctor is the only place that clamp lives.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-7)]
+    public void Ctor_NonPositiveTimeout_DoesNotThrow_FallsBackToDefault(int minutes)
+    {
+        Action act = () => new CalExportRunner("calexport.exe", logger: null, timeoutMinutes: minutes);
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Ctor_NullPath_Throws()
+    {
+        Action act = () => new CalExportRunner(null!, logger: null, timeoutMinutes: 5);
+        act.Should().Throw<ArgumentNullException>();
+    }
+
     [Fact]
     public void ExitLogMessage_IncludesCodeAndFullStderr()
     {

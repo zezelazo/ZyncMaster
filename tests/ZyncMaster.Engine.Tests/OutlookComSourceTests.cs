@@ -233,6 +233,97 @@ public sealed class OutlookComSourceTests
         runner.Calls[0].Calendars.Should().BeNull();
     }
 
+    // Builds one Complete-mode all-day event spanning [start, end) days.
+    private static string AllDayEvent(string id, string subject, string start, string end) => $@"{{
+      ""id"": ""{id}"",
+      ""subject"": ""{subject}"",
+      ""isAllDay"": true,
+      ""isCancelled"": false,
+      ""start"": ""{start}"",
+      ""startTimeZoneId"": ""UTC"",
+      ""startTimeZoneDisplayName"": ""(UTC) UTC"",
+      ""end"": ""{end}"",
+      ""durationMinutes"": 1440,
+      ""organizer"": {{ ""name"": ""A"", ""email"": ""a@x.com"" }},
+      ""description"": """",
+      ""participants"": []
+    }}";
+
+    // FIX 1 (data loss) — read membership must equal the destination sweep membership (OVERLAP),
+    // not START-only. A multi-day event whose START is before `from` but that OVERLAPS the window
+    // is enumerated by the destination's calendarView sweep, so it MUST also be in the read set;
+    // otherwise the sweep deletes a still-live event every cycle.
+    [Fact]
+    public async Task ReadWindow_MultiDayEventStartingBeforeFrom_OverlappingWindow_IsIncluded()
+    {
+        // Starts 05-04 (before from=05-05), runs through 05-07 (ends inside the window).
+        var spanning = AllDayEvent("span", "Spanning", "2025-05-04T00:00:00+00:00", "2025-05-07T00:00:00+00:00");
+
+        var runner = new FakeCalExportRunner(new() { [(2025, 5)] = Month(2025, 5, spanning) });
+        var sut = BuildSut(runner);
+
+        var from = new DateTimeOffset(2025, 5, 5, 0, 0, 0, TimeSpan.Zero);
+        var to   = new DateTimeOffset(2025, 5, 20, 0, 0, 0, TimeSpan.Zero);
+
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
+
+        result.Select(e => e.Subject).Should().ContainSingle().Which.Should().Be("Spanning",
+            "an event that overlaps the window must be read so the destination sweep keeps it");
+    }
+
+    // An event that ENDS exactly at `from` does NOT overlap [from, to] (calendarView treats the
+    // lower bound as exclusive of an event ending at startDateTime), so it is excluded.
+    [Fact]
+    public async Task ReadWindow_EventEndingExactlyAtFrom_IsExcluded()
+    {
+        var endsAtFrom = Event("e", "EndsAtFrom", "2025-05-04T23:00:00+00:00", "2025-05-05T00:00:00+00:00");
+
+        var runner = new FakeCalExportRunner(new() { [(2025, 5)] = Month(2025, 5, endsAtFrom) });
+        var sut = BuildSut(runner);
+
+        var from = new DateTimeOffset(2025, 5, 5, 0, 0, 0, TimeSpan.Zero);
+        var to   = new DateTimeOffset(2025, 5, 20, 0, 0, 0, TimeSpan.Zero);
+
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    // An event that starts AFTER `to` does not overlap the window and is excluded.
+    [Fact]
+    public async Task ReadWindow_EventStartingAfterTo_IsExcluded()
+    {
+        var afterTo = Event("a", "AfterTo", "2025-05-21T12:00:00+00:00", "2025-05-21T13:00:00+00:00");
+
+        var runner = new FakeCalExportRunner(new() { [(2025, 5)] = Month(2025, 5, afterTo) });
+        var sut = BuildSut(runner);
+
+        var from = new DateTimeOffset(2025, 5, 5, 0, 0, 0, TimeSpan.Zero);
+        var to   = new DateTimeOffset(2025, 5, 20, 0, 0, 0, TimeSpan.Zero);
+
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    // An event that starts exactly at `to` overlaps the closed upper bound (StartOffset <= toUtc),
+    // consistent with calendarView including an event starting at endDateTime.
+    [Fact]
+    public async Task ReadWindow_EventStartingExactlyAtTo_IsIncluded()
+    {
+        var onTo = Event("t", "OnTo", "2025-05-20T00:00:00+00:00", "2025-05-20T01:00:00+00:00");
+
+        var runner = new FakeCalExportRunner(new() { [(2025, 5)] = Month(2025, 5, onTo) });
+        var sut = BuildSut(runner);
+
+        var from = new DateTimeOffset(2025, 5, 5, 0, 0, 0, TimeSpan.Zero);
+        var to   = new DateTimeOffset(2025, 5, 20, 0, 0, 0, TimeSpan.Zero);
+
+        var result = await sut.ReadWindowAsync(from, to, null, CancellationToken.None);
+
+        result.Select(e => e.Subject).Should().ContainSingle().Which.Should().Be("OnTo");
+    }
+
     [Fact]
     public void Ctor_NullRunner_Throws()
     {

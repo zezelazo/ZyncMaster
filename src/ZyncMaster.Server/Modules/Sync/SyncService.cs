@@ -70,8 +70,18 @@ public sealed class SyncService
         var mirror = new CalendarMirror(target, new ImportPlanBuilder(), new EventDraftBuilder(new ParticipantBodyRenderer()));
 
         var now = DateTimeOffset.UtcNow;
+
+        // DATA-INTEGRITY (read window == sweep window). The device read this payload through the
+        // engine's read window, whose lower bound is snapped to today 00:00 UTC (PairRunner.ReadWindow /
+        // SyncEngine). The destructive sweep here MUST use the IDENTICAL window, or the two diverge:
+        // with an unsnapped [now, now+N] the sweep's UPPER bound runs ~now-of-day past the read's upper
+        // bound (today 00:00 + N), so an event starting in that trailing gap is swept-eligible at the
+        // destination yet absent from the pushed set — and the sweep would delete a live event. Snap
+        // to today 00:00 UTC + N, exactly matching PairEndpoints.Window and the device read floor.
+        var from = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        var to = from.AddDays(_opts.Value.SyncWindowDays);
         var outcome = await mirror
-            .MirrorAsync(calendarId, events, 30, now, now.AddDays(_opts.Value.SyncWindowDays), ct)
+            .MirrorAsync(calendarId, events, 30, from, to, ct)
             .ConfigureAwait(false);
 
         await _state.SetAsync(new SyncState
