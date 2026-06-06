@@ -128,8 +128,11 @@ public sealed class SyncEngineTests
 
         var result = await engine.RunCycleAsync();
 
-        source.FromUtc.Should().Be(now);
-        source.ToUtc.Should().Be(now.AddDays(14));
+        // FIX 3 — the read window is the SINGLE source PairRunner.ReadWindow, whose lower bound is
+        // snapped to today 00:00 UTC (matching the server's destructive sweep window), NOT the
+        // instant `now`. So from = 2026-05-26T00:00Z and to = +14d, not [now, now+14d].
+        source.FromUtc.Should().Be(new DateTimeOffset(2026, 5, 26, 0, 0, 0, TimeSpan.Zero));
+        source.ToUtc.Should().Be(new DateTimeOffset(2026, 6, 9, 0, 0, 0, TimeSpan.Zero));
         client.LastApiKey.Should().Be("the-key");
         result.Skipped.Should().BeFalse();
         result.Push.Should().NotBeNull();

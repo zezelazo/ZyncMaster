@@ -37,6 +37,12 @@ public sealed class AppSettings
     [JsonProperty("calExportPath")]
     public string? CalExportPath { get; set; }
 
+    // Hard cap (minutes) on a single headless CalExport child process before it is killed. Guards
+    // against Outlook blocking the child on a modal dialog (Programmatic Access, corrupt profile,
+    // MFA) which would otherwise wedge the scheduler. Defaults to 5, clamped to >= 1.
+    [JsonProperty("calExportTimeoutMinutes")]
+    public int CalExportTimeoutMinutes { get; set; } = 5;
+
     // null/empty = all calendars; otherwise the named calendars to export.
     [JsonProperty("calendars")]
     public string[]? Calendars { get; set; }

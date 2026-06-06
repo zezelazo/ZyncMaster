@@ -24,7 +24,7 @@ catch (ArgumentParsingException ex)
     // Direct Environment.Exit here is intentional: the terminator is not yet constructed
     // (composition root has not run), so IApplicationTerminator cannot be used.
     // The return below is required only for compiler definite-assignment analysis.
-    Environment.Exit(1);
+    Environment.Exit(ExitCodes.InvalidArguments);
     return;
 }
 
@@ -68,6 +68,17 @@ try
 {
     runner.Run(parsedArgs);
     logger.Log(LogLevel.Debug, "CalExport completed.");
+}
+catch (OutlookUnavailableException ex)
+{
+    // Outlook is simply not available on this device (not installed/registered, or the COM object
+    // could not be started). This is an ENVIRONMENT condition, not a crash: log it, print a single
+    // clean line to stderr (NO stack trace), and exit with a DISTINGUISHABLE code so the App can
+    // show a friendly "Outlook is not available" message instead of a raw COM stack dump.
+    logger.Log(LogLevel.Error, "CalExport could not reach Outlook.", ex);
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    Environment.Exit(ExitCodes.OutlookUnavailable);
+    return;
 }
 catch (Exception ex)
 {

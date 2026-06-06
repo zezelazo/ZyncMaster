@@ -32,8 +32,13 @@ public sealed class SyncEngine : ISyncCycle
 
         try
         {
-            var from = _clock.UtcNow;
-            var to = from.AddDays(_settings.SyncWindowDays);
+            // Single source of the device read window: PairRunner.ReadWindow snaps the lower bound to
+            // today 00:00 UTC, exactly matching the server's destructive sweep window
+            // (PairEndpoints.Window). Using [now, +N] here instead would leave the floor at the current
+            // instant, so an event starting between 00:00 UTC and `now` is inside the server sweep but
+            // missing from this push — and the sweep would delete it. Both read paths (this legacy
+            // single-device push and the pair-scoped PairRunner) MUST derive the window from one place.
+            var (from, to) = PairRunner.ReadWindow(_clock.UtcNow, _settings.SyncWindowDays);
             // Legacy single-device push path (not pair-scoped): no per-pair selection, so pass null
             // and let OutlookComSource fall back to the device's configured calendar names.
             var events = await _source.ReadWindowAsync(from, to, null, ct);

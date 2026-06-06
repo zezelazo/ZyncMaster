@@ -87,7 +87,7 @@ public sealed class EngineHost : IDisposable
         var syncClient = new HttpSyncClient(http, engineSettings.ServerBaseUrl);
         var pairsClient = new HttpPairsClient(http, engineSettings.ServerBaseUrl);
 
-        var calExportRunner = new CalExportRunner(engineSettings.CalExportPath, logger);
+        var calExportRunner = new CalExportRunner(engineSettings.CalExportPath, logger, engineSettings.CalExportTimeoutMinutes);
         var calendarReader = new CompleteCalendarReader();
         var calendarSource = new OutlookComSource(calExportRunner, calendarReader, engineSettings.CalendarNames, logger);
 

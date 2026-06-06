@@ -46,6 +46,7 @@ public sealed class AppSettingsResolver
         // explicitly out-of-range value up to the minimum of 1.
         var syncWindowDays = Math.Max(1, settings.SyncWindowDays);
         var intervalMinutes = Math.Max(1, settings.IntervalMinutes);
+        var calExportTimeoutMinutes = Math.Max(1, settings.CalExportTimeoutMinutes);
 
         var calExportPath = string.IsNullOrWhiteSpace(settings.CalExportPath)
             ? DefaultCalExportPath
@@ -64,6 +65,7 @@ public sealed class AppSettingsResolver
             SyncWindowDays = syncWindowDays,
             IntervalMinutes = intervalMinutes,
             CalExportPath = calExportPath,
+            CalExportTimeoutMinutes = calExportTimeoutMinutes,
             CalendarNames = calendars is { Length: > 0 } ? calendars : null,
         };
     }
