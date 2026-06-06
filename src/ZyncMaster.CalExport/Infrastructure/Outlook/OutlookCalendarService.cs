@@ -1,14 +1,34 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
-using Microsoft.Office.Interop.Outlook;
 using ZyncMaster.Core;
 
 namespace ZyncMaster.CalExport;
 
+// This service talks to Outlook Classic purely through COM late binding (dynamic + ProgID).
+// It does NOT reference Microsoft.Office.Interop.Outlook or any Office PIA, so the published
+// exe runs on any machine that has Outlook Classic installed regardless of whether the matching
+// PIA assemblies are present. Every strong interop type (Application, NameSpace, MAPIFolder,
+// AppointmentItem, Items, Recipients, ...) is handled as dynamic/object, and every interop enum
+// value used below is replaced with its documented integer constant.
 public sealed class OutlookCalendarService : ICalendarService
 {
+    // --- Outlook interop enum values, hard-coded so we don't need the PIA ---------------------
+
+    // OlItemType.olAppointmentItem
+    private const int OlAppointmentItem = 1;
+
+    // OlObjectClass.olAppointment — value of AppointmentItem.Class; used instead of the
+    // `is AppointmentItem` type check that is impossible without the interop type.
+    private const int OlAppointment = 26;
+
+    // OlAddressEntryUserType values for Exchange recipients (need GetExchangeUser for SMTP).
+    // OlAddressEntryUserType.olExchangeUserAddressEntry
+    private const int OlExchangeUserAddressEntry = 0;
+    // OlAddressEntryUserType.olExchangeRemoteUserAddressEntry
+    private const int OlExchangeRemoteUserAddressEntry = 5;
+
     private static class MeetingStatusCode
     {
         internal const int CanceledByOrganizer = 5;
@@ -36,47 +56,59 @@ public sealed class OutlookCalendarService : ICalendarService
     private static readonly Guid AppointmentIdNamespace =
         new Guid("6f0e7f2c-9c4a-4f7e-b6f5-ac6f0a3e3c11");
 
+    // Late-bound creation of the Outlook.Application COM object via ProgID. Throws a friendly
+    // InvalidOperationException when Outlook is not installed/registered or cannot be started.
+    private static dynamic CreateOutlookApplication()
+    {
+        Type? appType = Type.GetTypeFromProgID("Outlook.Application");
+        if (appType == null)
+            throw new InvalidOperationException(
+                "Could not connect to Outlook. Make sure Outlook Classic is installed and configured on this machine.");
+
+        try
+        {
+            return Activator.CreateInstance(appType)!;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "Could not connect to Outlook. Make sure Outlook Classic is installed and configured on this machine.", ex);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // ICalendarService — GetCalendarFolders
     // -----------------------------------------------------------------------
 
     public IReadOnlyList<CalendarFolderInfo> GetCalendarFolders()
     {
-        Application? app   = null;
-        bool         owned = false;
-        var          result = new List<CalendarFolderInfo>();
+        dynamic? app    = null;
+        bool     owned  = false;
+        var      result = new List<CalendarFolderInfo>();
 
         try
         {
             bool wasRunning = System.Diagnostics.Process.GetProcessesByName("OUTLOOK").Length > 0;
-            try
-            {
-                app   = new Application();
-                owned = !wasRunning;
-            }
-            catch (COMException ex)
-            {
-                throw new InvalidOperationException(
-                    "Could not connect to Outlook. Make sure Outlook Classic is installed and configured on this machine.", ex);
-            }
+            app   = CreateOutlookApplication();
+            owned = !wasRunning;
 
-            NameSpace? ns = null;
+            dynamic? ns = null;
             try
             {
                 ns = app.GetNamespace("MAPI");
-                foreach (Store store in ns.Stores)
+                foreach (dynamic store in ns.Stores)
                 {
-                    MAPIFolder? root = null;
+                    dynamic? root = null;
                     try
                     {
-                        var storeName = store.DisplayName ?? store.StoreID ?? "";
+                        string storeName = (string)(store.DisplayName ?? store.StoreID ?? "");
                         root = store.GetRootFolder();
                         CollectCalendarFolders(root, storeName, result);
                     }
                     catch (COMException) { /* skip inaccessible or non-calendar stores */ }
                     finally
                     {
-                        if (root  != null) try { Marshal.ReleaseComObject(root);  } catch { }
+                        if (root != null) try { Marshal.ReleaseComObject(root);  } catch { }
                         try { Marshal.ReleaseComObject(store); } catch { }
                     }
                 }
@@ -90,7 +122,7 @@ public sealed class OutlookCalendarService : ICalendarService
         {
             if (owned && app != null)
             {
-                try { app.Quit(); } catch { }
+                try { app!.Quit(); } catch { }
                 Marshal.ReleaseComObject(app);
             }
         }
@@ -98,19 +130,19 @@ public sealed class OutlookCalendarService : ICalendarService
         return result;
     }
 
-    private static void CollectCalendarFolders(MAPIFolder folder, string storeName, List<CalendarFolderInfo> result)
+    private static void CollectCalendarFolders(dynamic folder, string storeName, List<CalendarFolderInfo> result)
     {
-        if (folder.DefaultItemType == OlItemType.olAppointmentItem)
+        if ((int)folder.DefaultItemType == OlAppointmentItem)
         {
             result.Add(new CalendarFolderInfo
             {
                 DisplayName = $"{folder.Name} [{storeName}]",
-                EntryId     = folder.EntryID,
-                StoreId     = folder.StoreID,
+                EntryId     = (string)folder.EntryID,
+                StoreId     = (string)folder.StoreID,
             });
         }
 
-        foreach (MAPIFolder sub in folder.Folders)
+        foreach (dynamic sub in folder.Folders)
         {
             try { CollectCalendarFolders(sub, storeName, result); }
             catch (COMException) { }
@@ -126,22 +158,14 @@ public sealed class OutlookCalendarService : ICalendarService
     {
         if (parameters == null) throw new ArgumentNullException(nameof(parameters));
 
-        Application? app   = null;
-        bool         owned = false;
+        dynamic? app   = null;
+        bool     owned = false;
 
         try
         {
             bool wasRunning = System.Diagnostics.Process.GetProcessesByName("OUTLOOK").Length > 0;
-            try
-            {
-                app   = new Application();
-                owned = !wasRunning;
-            }
-            catch (COMException ex)
-            {
-                throw new InvalidOperationException(
-                    "Could not connect to Outlook. Make sure Outlook Classic is installed and configured on this machine.", ex);
-            }
+            app   = CreateOutlookApplication();
+            owned = !wasRunning;
 
             var results = new List<AppointmentRecord>();
             var seen    = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -150,16 +174,16 @@ public sealed class OutlookCalendarService : ICalendarService
             var rangeEnd   = rangeStart.AddMonths(1);
             var filterStr  = $"[Start] >= '{rangeStart:MM/dd/yyyy HH:mm}' AND [Start] < '{rangeEnd:MM/dd/yyyy HH:mm}'";
 
-            NameSpace? ns = null;
+            dynamic? ns = null;
             try
             {
                 ns = app.GetNamespace("MAPI");
 
                 if (parameters.SelectedFolders == null)
                 {
-                    foreach (Store store in ns.Stores)
+                    foreach (dynamic store in ns.Stores)
                     {
-                        MAPIFolder? root = null;
+                        dynamic? root = null;
                         try
                         {
                             root = store.GetRootFolder();
@@ -177,7 +201,7 @@ public sealed class OutlookCalendarService : ICalendarService
                 {
                     foreach (var fi in parameters.SelectedFolders)
                     {
-                        MAPIFolder? folder = null;
+                        dynamic? folder = null;
                         try
                         {
                             folder = ns.GetFolderFromID(fi.EntryId, fi.StoreId);
@@ -202,31 +226,31 @@ public sealed class OutlookCalendarService : ICalendarService
         {
             if (owned && app != null)
             {
-                try { app.Quit(); } catch { }
+                try { app!.Quit(); } catch { }
                 Marshal.ReleaseComObject(app);
             }
         }
     }
 
     private static void CollectFromFolder(
-        MAPIFolder          folder,
-        string              filter,
-        DateTime            rangeStart,
-        DateTime            rangeEnd,
-        ExportMode          mode,
-        bool                includeCancelled,
-        HashSet<string>     seen,
+        dynamic                 folder,
+        string                  filter,
+        DateTime                rangeStart,
+        DateTime                rangeEnd,
+        ExportMode              mode,
+        bool                    includeCancelled,
+        HashSet<string>         seen,
         List<AppointmentRecord> results)
     {
-        if (folder.DefaultItemType == OlItemType.olAppointmentItem)
+        if ((int)folder.DefaultItemType == OlAppointmentItem)
         {
-            var items = folder.Items;
+            dynamic items = folder.Items;
             // Restrict returns a NEW COM Items collection — even though it looks "derived"
             // from `items`, it's a separate object with its own RCW that must be released
             // explicitly. Letting it leak accumulates COM handles when iterating many
             // folders ("all calendars" exports) and delays Outlook resource cleanup
             // until non-deterministic GC.
-            Items? filtered = null;
+            dynamic? filtered = null;
             try
             {
                 // IncludeRecurrences + Sort("[Start]") MUST be set before Restrict
@@ -235,9 +259,16 @@ public sealed class OutlookCalendarService : ICalendarService
                 items.Sort("[Start]");
 
                 filtered = items.Restrict(filter);
-                foreach (object raw in filtered)
+                foreach (dynamic raw in filtered)
                 {
-                    if (raw is AppointmentItem appt)
+                    // Without the interop type we cannot use `is AppointmentItem`. Outlook items
+                    // expose an integer .Class; OlObjectClass.olAppointment (26) identifies an
+                    // AppointmentItem. Treat any non-appointment item as something to skip.
+                    bool isAppointment;
+                    try { isAppointment = (int)raw.Class == OlAppointment; }
+                    catch { isAppointment = false; }
+
+                    if (isAppointment)
                     {
                         try
                         {
@@ -245,16 +276,16 @@ public sealed class OutlookCalendarService : ICalendarService
                             // property. On recurring occurrences, accessing it after Start can
                             // corrupt the COM context and make subsequent reads return the series
                             // master date instead of the occurrence date.
-                            var globalId = TryGetGlobalAppointmentId(appt);
+                            var globalId = TryGetGlobalAppointmentId(raw);
 
                             // Capture Start immediately for the same reason.
-                            var start = appt.Start;
+                            DateTime start = (DateTime)raw.Start;
 
                             if (start < rangeStart || start >= rangeEnd)
                                 continue;
 
-                            var meetingStatus = (int)appt.MeetingStatus;
-                            var subject       = appt.Subject ?? "";
+                            var meetingStatus = (int)raw.MeetingStatus;
+                            var subject       = (string)(raw.Subject ?? "");
                             bool isCancelled  = meetingStatus == MeetingStatusCode.CanceledByOrganizer ||
                                                 meetingStatus == MeetingStatusCode.ReceivedAndCanceled ||
                                                 IsCancelledSubject(subject);
@@ -262,15 +293,16 @@ public sealed class OutlookCalendarService : ICalendarService
                             if (isCancelled && !includeCancelled)
                                 continue;
 
-                            var record = BuildRecord(appt, start, subject, mode, isCancelled, globalId);
+                            var record = BuildRecord(raw, start, subject, mode, isCancelled, globalId);
 
                             var key = $"{start:yyyy-MM-dd HH:mm}|{subject}";
                             if (seen.Add(key))
                                 results.Add(record);
                         }
                         catch (System.Exception) { /* skip malformed individual appointment items */ }
-                        finally { try { Marshal.ReleaseComObject(raw); } catch { } }
                     }
+
+                    try { Marshal.ReleaseComObject(raw); } catch { }
                 }
             }
             finally
@@ -280,7 +312,7 @@ public sealed class OutlookCalendarService : ICalendarService
             }
         }
 
-        foreach (MAPIFolder sub in folder.Folders)
+        foreach (dynamic sub in folder.Folders)
         {
             try { CollectFromFolder(sub, filter, rangeStart, rangeEnd, mode, includeCancelled, seen, results); }
             catch (COMException) { }
@@ -293,19 +325,27 @@ public sealed class OutlookCalendarService : ICalendarService
         subject.StartsWith("Cancelled:", StringComparison.OrdinalIgnoreCase);
 
     private static AppointmentRecord BuildRecord(
-        AppointmentItem appt,
-        DateTime        start,
-        string          subject,
-        ExportMode      mode,
-        bool            isCancelled,
-        string          globalAppointmentId)
+        dynamic    appt,
+        DateTime   start,
+        string     subject,
+        ExportMode mode,
+        bool       isCancelled,
+        string     globalAppointmentId)
     {
         var titleForRecord = subject.Length > 0 ? subject : "(no title)";
 
         if (mode == ExportMode.Complete)
         {
             var description = TryGetBody(appt);
-            var (startOffset, endOffset, tzId, tzDisplayName) = GetTimezoneInfo(appt, start);
+            // GetTimezoneInfo takes a dynamic argument, which would make the whole call
+            // dynamic-dispatched and therefore non-deconstructible. Bind the result to an
+            // explicit tuple type first so the deconstruction works.
+            (DateTimeOffset startOffset, DateTimeOffset endOffset, string tzId, string tzDisplayName) tz =
+                GetTimezoneInfo(appt, start);
+            var startOffset    = tz.startOffset;
+            var endOffset      = tz.endOffset;
+            var tzId           = tz.tzId;
+            var tzDisplayName  = tz.tzDisplayName;
             var participants   = GetParticipants(appt);
             var organizerEmail = TryGetOrganizerEmail(appt);
             var id             = ResolveId(globalAppointmentId, organizerEmail, startOffset, titleForRecord);
@@ -314,10 +354,10 @@ public sealed class OutlookCalendarService : ICalendarService
             {
                 Id                       = id,
                 Start                    = start,
-                Duration                 = appt.Duration,
-                IsAllDay                 = appt.AllDayEvent,
+                Duration                 = (int)appt.Duration,
+                IsAllDay                 = (bool)appt.AllDayEvent,
                 Subject                  = titleForRecord,
-                OrganizerName            = appt.Organizer ?? "",
+                OrganizerName            = (string)(appt.Organizer ?? ""),
                 OrganizerEmail           = organizerEmail,
                 IsCancelled              = isCancelled,
                 Description              = description,
@@ -338,19 +378,19 @@ public sealed class OutlookCalendarService : ICalendarService
             {
                 Id             = id,
                 Start          = start,
-                Duration       = appt.Duration,
-                IsAllDay       = appt.AllDayEvent,
+                Duration       = (int)appt.Duration,
+                IsAllDay       = (bool)appt.AllDayEvent,
                 Subject        = titleForRecord,
-                OrganizerName  = appt.Organizer ?? "",
+                OrganizerName  = (string)(appt.Organizer ?? ""),
                 OrganizerEmail = organizerEmail,
                 IsCancelled    = isCancelled,
             };
         }
     }
 
-    private static string TryGetGlobalAppointmentId(AppointmentItem appt)
+    private static string TryGetGlobalAppointmentId(dynamic appt)
     {
-        try   { return appt.GlobalAppointmentID ?? ""; }
+        try   { return (string)(appt.GlobalAppointmentID ?? ""); }
         catch { return ""; }
     }
 
@@ -366,14 +406,14 @@ public sealed class OutlookCalendarService : ICalendarService
         return UuidV5.Create(AppointmentIdNamespace, seed).ToString("D");
     }
 
-    private static string TryGetBody(AppointmentItem appt)
+    private static string TryGetBody(dynamic appt)
     {
-        try { return appt.Body ?? ""; }
+        try { return (string)(appt.Body ?? ""); }
         catch { return ""; }
     }
 
     private static (DateTimeOffset startOffset, DateTimeOffset endOffset, string tzId, string tzDisplayName)
-        GetTimezoneInfo(AppointmentItem appt, DateTime start)
+        GetTimezoneInfo(dynamic appt, DateTime start)
     {
         string   tzId          = "";
         string   tzDisplayName = "";
@@ -412,28 +452,28 @@ public sealed class OutlookCalendarService : ICalendarService
         var startOffset = new DateTimeOffset(start, tzInfo.GetUtcOffset(start));
 
         DateTime endLocal;
-        try { endLocal = appt.End; }
-        catch (System.Exception) { endLocal = start.AddMinutes(appt.Duration); }
+        try { endLocal = (DateTime)appt.End; }
+        catch (System.Exception) { endLocal = start.AddMinutes((int)appt.Duration); }
 
         var endOffset = new DateTimeOffset(endLocal, tzInfo.GetUtcOffset(endLocal));
 
         return (startOffset, endOffset, tzId, tzDisplayName);
     }
 
-    private static List<ParticipantRecord> GetParticipants(AppointmentItem appt)
+    private static List<ParticipantRecord> GetParticipants(dynamic appt)
     {
-        var         result     = new List<ParticipantRecord>();
-        Recipients? recipients = null;
+        var      result     = new List<ParticipantRecord>();
+        dynamic? recipients = null;
         try
         {
             recipients = appt.Recipients;
-            foreach (Recipient r in recipients)
+            foreach (dynamic r in recipients)
             {
                 try
                 {
                     result.Add(new ParticipantRecord
                     {
-                        Name     = r.Name ?? "",
+                        Name     = (string)(r.Name ?? ""),
                         Email    = GetRecipientEmail(r),
                         Type     = GetRecipientTypeLabel(r),
                         Response = GetParticipantResponseLabel(r),
@@ -451,28 +491,39 @@ public sealed class OutlookCalendarService : ICalendarService
         return result;
     }
 
-    private static string GetRecipientEmail(Recipient r)
+    private static string GetRecipientEmail(dynamic r)
     {
         try
         {
-            var addr = r.AddressEntry;
+            dynamic? addr = r.AddressEntry;
             if (addr == null) return "";
             try
             {
-                if (addr.AddressEntryUserType is
-                    OlAddressEntryUserType.olExchangeUserAddressEntry or
-                    OlAddressEntryUserType.olExchangeRemoteUserAddressEntry)
+                int userType = (int)addr.AddressEntryUserType;
+                if (userType == OlExchangeUserAddressEntry ||
+                    userType == OlExchangeRemoteUserAddressEntry)
                 {
-                    return addr.GetExchangeUser()?.PrimarySmtpAddress ?? addr.Address ?? "";
+                    dynamic? exUser = null;
+                    try
+                    {
+                        exUser = addr.GetExchangeUser();
+                        if (exUser != null)
+                            return (string)(exUser.PrimarySmtpAddress ?? addr.Address ?? "");
+                        return (string)(addr.Address ?? "");
+                    }
+                    finally
+                    {
+                        if (exUser != null) try { Marshal.ReleaseComObject(exUser); } catch { }
+                    }
                 }
-                return addr.Address ?? "";
+                return (string)(addr.Address ?? "");
             }
             finally { try { Marshal.ReleaseComObject(addr); } catch { } }
         }
         catch { return ""; }
     }
 
-    private static string GetRecipientTypeLabel(Recipient r)
+    private static string GetRecipientTypeLabel(dynamic r)
     {
         try
         {
@@ -487,7 +538,7 @@ public sealed class OutlookCalendarService : ICalendarService
         catch { return "unknown"; }
     }
 
-    private static string GetParticipantResponseLabel(Recipient r)
+    private static string GetParticipantResponseLabel(dynamic r)
     {
         try
         {
@@ -504,20 +555,21 @@ public sealed class OutlookCalendarService : ICalendarService
         catch { return "none"; }
     }
 
-    private static string TryGetOrganizerEmail(AppointmentItem appt)
+    private static string TryGetOrganizerEmail(dynamic appt)
     {
-        if (string.IsNullOrEmpty(appt.Organizer))
+        string organizer = (string)(appt.Organizer ?? "");
+        if (string.IsNullOrEmpty(organizer))
             return "";
 
-        Recipients? recipients = null;
+        dynamic? recipients = null;
         try
         {
             recipients = appt.Recipients;
-            foreach (Recipient r in recipients)
+            foreach (dynamic r in recipients)
             {
                 try
                 {
-                    if (!string.Equals(r.Name, appt.Organizer, StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals((string)(r.Name ?? ""), organizer, StringComparison.OrdinalIgnoreCase))
                         continue;
                     return GetRecipientEmail(r);
                 }
