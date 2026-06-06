@@ -497,11 +497,16 @@ function scheduleNextHealthProbe() {
     serverHealth.error = true;
     clearHealthPoll();
     rerender();
+    // The error screen is now the determined paint — hand the splash off to it.
+    maybeDismissLaunch();
     return;
   }
   serverHealth.checked = true;
   serverHealth.waking = true;
   rerender();
+  // The "waking up" warm-up screen owns the view while we keep polling; drop the splash onto it
+  // rather than holding the splash for the (still pending) identity gate.
+  maybeDismissLaunch();
   clearHealthPoll();
   healthPoll = setTimeout(probeServerHealth, HEALTH_POLL_MS);
 }
@@ -527,7 +532,7 @@ function onServerReady() {
       rerender();
     })
     .catch(() => { identityAuth.resolved = true; identityAuth.signedIn = false; rerender(); })
-    .finally(() => setTimeout(dismissLaunch, 450));
+    .finally(() => maybeDismissLaunch(450));
 }
 
 // User-driven Retry from the error screen: reset the budget and probe again.
@@ -589,7 +594,8 @@ async function loadLocalCalendars() {
   live.localCalendarsLoading = true;
   live.localCalendarsError = false;
   try {
-    const list = await Bridge.call('listLocalCalendars');
+    // Cold Outlook can take well over the 60s default to enumerate local calendars over COM.
+    const list = await Bridge.call('listLocalCalendars', null, COM_SLOW_TIMEOUT_MS);
     live.localCalendars = Array.isArray(list) ? list : [];
     return live.localCalendars;
   } catch (_) {
@@ -1068,6 +1074,14 @@ const addPairLive = {
   // reports (null = not loaded yet, 'err' = the count call failed). The count is keyed to the old
   // destination so it is invalidated whenever that endpoint signature changes.
   cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
+  // Inline error surfaced on the configure step (step 2) when create/updatePair fails. Kept on the
+  // wizard state (not a local) so a failed save leaves the user on step 2 with everything they
+  // entered intact and a red message + Retry, instead of silently dropping their work.
+  submitError: null, submitting: false,
+  // Subset mode (online source): a pending account switch awaiting confirmation. When the user taps
+  // a calendar of a DIFFERENT account while a subset selection already exists, we stash the intent
+  // here and show an inline confirm instead of silently wiping their prior selection.
+  srcSwitchPrompt: null, // null | { accountRef, calendarId }
 };
 function resetAddPairLive() {
   Object.assign(addPairLive, {
@@ -1080,6 +1094,8 @@ function resetAddPairLive() {
     origSrcAllCalendars: true, origSrcCalendarNames: [], origSrcCalendarIds: [],
     origDstAccountRef: null, origDstCalendarId: null, origDstCalendarName: null,
     cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
+    submitError: null, submitting: false,
+    srcSwitchPrompt: null,
   });
 }
 
@@ -1125,6 +1141,7 @@ function startEditPair(id) {
     origDstCalendarId: dst.calendarId || null,
     origDstCalendarName: dst.calendarName || null,
     cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
+    submitError: null, submitting: false, srcSwitchPrompt: null,
   });
   navigate('add-pair');
 }
@@ -1387,7 +1404,8 @@ function comSourceMultiSelect() {
 function onlineSourceMultiSelect() {
   const a = addPairLive;
   const wrap = el('div', { class: 'glass glass--card cal-multi', style: 'padding:4px' });
-  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; }));
+  // Flipping All on/off makes a pending subset account-switch confirm meaningless — clear it.
+  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; a.srcSwitchPrompt = null; }));
 
   const accounts = live.accounts || [];
   if (accounts.length === 0) {
@@ -1395,17 +1413,38 @@ function onlineSourceMultiSelect() {
     return wrap;
   }
 
-  const list = el('div', { class: 'cal-list' });
+  // The whole set of accounts is a single list of grouped calendars. role=list + per-account
+  // role=group (labelled by the account name) gives assistive tech the account→calendars
+  // relationship the old flat stack of <div>s lacked.
+  const list = el('div', { class: 'cal-list', role: 'list' });
+
+  // applySwitch — commit a confirmed account switch in subset mode: drop the old account's
+  // selection, pin the new account, and select the tapped calendar as the first member.
+  const applySwitch = (acc, c, cals) => {
+    a.srcAccountRef = acc.accountRef;
+    a.srcCalendarIds = [c.id];
+    a.srcCalendarId = c.id;
+    a.srcCalendarName = c.displayName || c.id;
+    a.srcSwitchPrompt = null;
+  };
+
   accounts.forEach((acc) => {
-    list.append(el('div', { class: 'route__label', style: 'padding:8px 10px 2px', text: acc.displayName || acc.accountRef }));
+    const accName = acc.displayName || acc.accountRef;
+    // Group each account's header + calendars so the relationship is explicit to screen readers.
+    const group = el('div', { class: 'cal-acct-group', role: 'group', 'aria-label': accName });
+    const heading = el('div', { class: 'route__label', id: `srcacct-${acc.accountRef}`, style: 'padding:8px 10px 2px', text: accName });
+    group.append(heading);
+    group.setAttribute('aria-labelledby', heading.id);
+    list.append(group);
+
     const cals = live.calendars[acc.accountRef];
     if (!cals) {
-      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
+      group.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
       loadCalendars(acc.accountRef).then(() => { if (state.view === 'add-pair') rerender(); });
       return;
     }
     if (cals.length === 0) {
-      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
+      group.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
       return;
     }
 
@@ -1415,8 +1454,8 @@ function onlineSourceMultiSelect() {
     // calendars as a read-only, informative list so it is clear what "All" will include.
     if (a.srcAllCalendars) {
       const accountChosen = a.srcAccountRef === acc.accountRef;
-      list.append(calCheckRow(
-        acc.displayName || acc.accountRef,
+      group.append(calCheckRow(
+        accName,
         accountChosen ? 'Source account — All calendars below will be mirrored' : 'Use this account as the source',
         accountChosen,
         () => {
@@ -1426,14 +1465,16 @@ function onlineSourceMultiSelect() {
           a.srcCalendarId = first ? first.id : null;
           a.srcCalendarName = first ? (first.displayName || first.id) : null;
         }));
+      // Read-only "included by All" list, as a semantic list of the account's calendars.
+      const roList = el('div', { class: 'cal-readonly-list', role: 'list', 'aria-label': `Calendars on ${accName}` });
       cals.forEach((c) => {
-        const item = el('div', { class: `cal-item is-readonly${accountChosen ? '' : ' is-muted'}`, 'aria-disabled': 'true' },
+        roList.append(el('div', { class: `cal-item is-readonly${accountChosen ? '' : ' is-muted'}`, role: 'listitem', 'aria-disabled': 'true' },
           pairBadge('Outlook'),
           el('div', null,
             el('div', { class: 'cal-item__name', text: c.displayName || c.id }),
-            el('div', { class: 'cal-item__sub', text: accountChosen ? 'Included by “All calendars”' : 'Pick this account to include' })));
-        list.append(item);
+            el('div', { class: 'cal-item__sub', text: accountChosen ? 'Included by “All calendars”' : 'Pick this account to include' }))));
       });
+      group.append(roList);
       return;
     }
 
@@ -1441,9 +1482,18 @@ function onlineSourceMultiSelect() {
     cals.forEach((c) => {
       const accountChosen = a.srcAccountRef === acc.accountRef;
       const checked = accountChosen && a.srcCalendarIds.includes(c.id);
-      list.append(calCheckRow(c.displayName || c.id, acc.displayName || acc.accountRef, checked, () => {
-        // Changing account resets the selection so a pair targets ONE account.
+      const itemRow = el('div', { role: 'listitem' });
+      itemRow.append(calCheckRow(c.displayName || c.id, accName, checked, () => {
+        const switchingAccount = a.srcAccountRef && a.srcAccountRef !== acc.accountRef;
+        // Switching to a DIFFERENT account would wipe the existing subset. Don't do it silently:
+        // stash the intent and surface an inline confirm (rendered just below this row). A tap on
+        // the SAME account, or when nothing is selected yet, applies immediately as before.
+        if (switchingAccount && a.srcCalendarIds.length > 0) {
+          a.srcSwitchPrompt = { accountRef: acc.accountRef, calendarId: c.id };
+          return;
+        }
         if (a.srcAccountRef !== acc.accountRef) { a.srcAccountRef = acc.accountRef; a.srcCalendarIds = []; }
+        a.srcSwitchPrompt = null;
         if (a.srcCalendarIds.includes(c.id)) a.srcCalendarIds = a.srcCalendarIds.filter((x) => x !== c.id);
         else a.srcCalendarIds = a.srcCalendarIds.concat([c.id]);
         // Keep the legacy anchor pointing at the first selected calendar (server requires calendarId).
@@ -1452,6 +1502,20 @@ function onlineSourceMultiSelect() {
         a.srcCalendarId = first || null;
         a.srcCalendarName = fc ? (fc.displayName || fc.id) : null;
       }));
+      group.append(itemRow);
+
+      // Inline confirm for the pending account switch, anchored under the tapped calendar.
+      if (a.srcSwitchPrompt && a.srcSwitchPrompt.accountRef === acc.accountRef && a.srcSwitchPrompt.calendarId === c.id) {
+        const prevName = (accounts.find((x) => x.accountRef === a.srcAccountRef) || {});
+        const prevLabel = prevName.displayName || prevName.accountRef || 'the other account';
+        const confirm = el('div', { class: 'glass glass--card cal-switch-confirm', role: 'alert' },
+          el('div', { class: 'cal-switch-confirm__text',
+            text: `A source pair uses one account. Switching to “${accName}” clears the ${a.srcCalendarIds.length} calendar${a.srcCalendarIds.length === 1 ? '' : 's'} selected on “${prevLabel}”.` }),
+          el('div', { class: 'cal-switch-confirm__actions' },
+            el('button', { class: 'btn btn--ghost', type: 'button', text: 'Keep current', onclick: () => { a.srcSwitchPrompt = null; rerender(); } }),
+            el('button', { class: 'btn btn--primary', type: 'button', text: 'Switch account', onclick: () => { applySwitch(acc, c, cals); rerender(); } })));
+        group.append(confirm);
+      }
     });
   });
   wrap.append(list);
@@ -1598,9 +1662,19 @@ function renderAddPairLive(root) {
           el('span', { text: unsavedEndpoints ? 'Save changes before exporting' : 'Export this month to .txt' }))));
     }
 
+    // Inline error from a failed create/updatePair: a red message right above the actions so the
+    // user sees WHY the save failed without leaving the step (their entries are untouched).
+    if (a.submitError) {
+      root.append(el('div', { class: 'glass glass--card wizard-warn wizard-warn--err', role: 'alert' },
+        el('div', { class: 'wizard-warn__text', text: a.submitError })));
+    }
+
+    const submitBtn = el('button', { class: 'btn btn--primary', disabled: !!a.submitting, onclick: () => completeAddPairLive() },
+      iconEl('check', 14, 2.2),
+      el('span', { text: a.submitting ? 'Saving…' : (a.submitError ? 'Retry' : (editing ? 'Save changes' : 'Create pair')) }));
     root.append(el('div', { class: 'wizard-foot' },
-      el('button', { class: 'btn btn--ghost', text: 'Back', onclick: () => { a.step = 1; rerender(); } }),
-      el('button', { class: 'btn btn--primary', onclick: () => completeAddPairLive() }, iconEl('check', 14, 2.2), el('span', { text: editing ? 'Save changes' : 'Create pair' }))));
+      el('button', { class: 'btn btn--ghost', text: 'Back', disabled: !!a.submitting, onclick: () => { a.step = 1; rerender(); } }),
+      submitBtn));
   }
 }
 
@@ -1742,6 +1816,12 @@ function completeAddPairLive() {
 
   // Edit (F2) updates in place (preserving the id); create makes a new pair. Both send the same
   // {name, source, destination, intervalMin}; updatePair additionally carries the id.
+  // Enter the submitting state and clear any prior error before the call (drives the button label +
+  // disables Back/Submit so the user can't double-submit or navigate mid-flight).
+  a.submitting = true;
+  a.submitError = null;
+  if (state.view === 'add-pair') rerender();
+
   const call = a.editId
     ? Bridge.call('updatePair', JSON.stringify({ id: a.editId, name: a.name, intervalMin: a.intervalMin, source, destination }))
     : Bridge.call('createPair', JSON.stringify({ name: a.name, source, destination, intervalMin: a.intervalMin }));
@@ -1758,7 +1838,15 @@ function completeAddPairLive() {
       }
       return finish();
     })
-    .catch(() => { resetAddPairLive(); navigate('calendar'); });
+    .catch((e) => {
+      // Save failed: do NOT discard what the user entered or navigate away. Surface the reason
+      // inline on the configure step and let them fix/retry — the button flips to "Retry".
+      a.submitting = false;
+      a.submitError = (e && e.message)
+        ? `Could not ${a.editId ? 'save the pair' : 'create the pair'}: ${e.message}`
+        : `Could not ${a.editId ? 'save the pair' : 'create the pair'}. Please try again.`;
+      if (state.view === 'add-pair') rerender();
+    });
 }
 
 // confirmCleanupOldDestination(pairId, oldDest, oldDestName, knownCount) — a secondary, explicit
@@ -2783,6 +2871,10 @@ function openModal({ title, body, onClose }) {
 //     returns the .txt; the App saves it). No COM dependency.
 // The copy adapts to the provider, so a Graph source never claims "local Outlook on this PC".
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+// Timeout for slow Outlook COM round-trips (listLocalCalendars / generateTxt / exportSourceTxt). A
+// cold Outlook plus the native save dialog can run far past the 60s Bridge.call default, which would
+// otherwise reject as "bridge timeout" mid-operation. Matches the connect flow's 210s budget.
+const COM_SLOW_TIMEOUT_MS = 210000;
 function openExportTxtModal(pair) {
   if (!Bridge.available || !pair) return;
   const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
@@ -2807,6 +2899,9 @@ function openExportTxtModal(pair) {
   const cancelToggle = toggleLocal(() => selected.includeCancelled, (v) => { selected.includeCancelled = v; }, 'Include cancelled events');
 
   const feedback = el('div', { class: 'cfg-row__hint modal__feedback', style: 'min-height:16px' });
+  // Explicit Cancel (btn--ghost) alongside the X/overlay/Escape, for parity with the cleanup and
+  // new-calendar modals. Closes the modal — the close handler also cancels any pending export.
+  const cancelBtn = el('button', { class: 'btn btn--ghost', type: 'button', text: 'Cancel' });
   const confirmBtn = el('button', { class: 'btn btn--primary', type: 'button' }, iconEl('folder', 13, 1.6), el('span', { text: 'Export .txt' }));
 
   const srcText = isCom
@@ -2819,13 +2914,32 @@ function openExportTxtModal(pair) {
       cfgRow('Year', null, yearSel),
       cfgRow('Include cancelled', el('div', { class: 'cfg-row__hint', text: 'Keep events marked as cancelled' }), cancelToggle)),
     feedback,
-    el('div', { class: 'modal__foot' }, confirmBtn));
+    el('div', { class: 'modal__foot' }, cancelBtn, confirmBtn));
 
-  const modal = openModal({ title: 'Export to .txt', body });
+  // Pending guard: a slow COM export (Outlook cold start + the host save dialog) can outlive the
+  // modal if the user closes it mid-flight. Track that so the late .then/.catch becomes a no-op
+  // instead of poking a detached span and leaving the UI "stuck", and so onClose can fire the
+  // host's cancel for the in-flight action rather than dangling the COM call.
+  let pending = false;
+  let stale = false;
+
+  const modal = openModal({
+    title: 'Export to .txt',
+    body,
+    onClose: () => {
+      // Closing while an export is in flight: mark the response stale and ask the host to abort the
+      // COM/server export so it doesn't keep a save dialog / Graph read alive behind a closed modal.
+      if (pending) { stale = true; Bridge.call('cancelExport').catch(() => {}); }
+    },
+  });
+
+  cancelBtn.addEventListener('click', () => modal.close());
 
   confirmBtn.addEventListener('click', () => {
     const span = confirmBtn.querySelector('span');
+    pending = true;
     confirmBtn.disabled = true;
+    cancelBtn.disabled = false; // Cancel stays live so the user can bail out of a slow export.
     if (span) span.textContent = 'Saving…';
     feedback.textContent = ''; feedback.style.color = '';
     // COM source → generateTxt (local Outlook); Graph source → exportSourceTxt (server reads the
@@ -2834,8 +2948,12 @@ function openExportTxtModal(pair) {
     const req = isCom
       ? { year: selected.year, month: selected.month, includeCancelled: selected.includeCancelled }
       : { pairId: pair.id, year: selected.year, month: selected.month, includeCancelled: selected.includeCancelled };
-    Bridge.call(action, JSON.stringify(req))
+    // Generous timeout: a cold Outlook plus the host save dialog can run well past the 60s default,
+    // mirroring the connect flow. Without this the call would reject as "bridge timeout" mid-save.
+    Bridge.call(action, JSON.stringify(req), COM_SLOW_TIMEOUT_MS)
       .then((r) => {
+        pending = false;
+        if (stale) return; // modal already closed; nothing to update.
         if (r && r.cancelled) {
           // The host's save dialog was dismissed — leave the modal open so the user can retry.
           confirmBtn.disabled = false;
@@ -2848,6 +2966,8 @@ function openExportTxtModal(pair) {
         setTimeout(() => modal.close(), 900);
       })
       .catch((e) => {
+        pending = false;
+        if (stale) return; // modal already closed; do not poke a detached UI.
         confirmBtn.disabled = false;
         if (span) span.textContent = 'Export .txt';
         feedback.textContent = (e && e.message) || 'Export failed.'; feedback.style.color = 'var(--err)';
@@ -3297,8 +3417,41 @@ function dismissLaunch() {
 }
 function playLaunch() {
   const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // Hard cap so the splash always clears, even with no bridge or a slow host.
-  setTimeout(dismissLaunch, reduce ? 600 : 1400);
+  // Hard cap so the splash ALWAYS clears, even with no bridge, a wedged gate, or a slow host.
+  // This is the only unconditional dismissal; every other path goes through maybeDismissLaunch,
+  // which keeps the splash up until the gate that will own the screen has settled.
+  setTimeout(dismissLaunch, reduce ? 4000 : 6000);
+}
+
+// splashGatesSettled — true once the screen that will replace the splash is determined, so the
+// splash can clear WITHOUT flashing an empty/half-built dashboard before a gate decides. Single
+// source of truth for "is it safe to drop the splash":
+//   * web panel    — the session probe has answered (webAuth.resolved); the next paint is either
+//                    the sign-in gate or the dashboard.
+//   * desktop app  — the warm-up gate decides first: while the health probe is still pending we
+//                    hold the splash; once it errors or is still waking, that gate screen is the
+//                    next paint, so we may drop. Only when the server is healthy do we additionally
+//                    wait for the identity gate to resolve (so we never flash an empty dashboard in
+//                    the gap between health-ok and identity-resolved).
+//   * mock / other — no gates, always settled.
+function splashGatesSettled() {
+  if (Bridge.webPanel) return webAuth.resolved;
+  if (Bridge.desktopApp) {
+    if (!serverHealth.checked) return false;
+    if (serverHealth.error || !serverHealth.ok) return true;
+    return identityAuth.resolved;
+  }
+  return true;
+}
+
+// maybeDismissLaunch — the SINGLE deterministic dismissal point. No-op until the gates settle, so
+// callers can fire it freely from every settle path (boot, health probe, onServerReady, the
+// unauthorized gate) without racing two independent timers against the gate. The optional floor
+// gives the splash a brief minimum hold so a near-instant host still feels intentional.
+function maybeDismissLaunch(floorMs) {
+  if (!splashGatesSettled()) return;
+  if (floorMs) setTimeout(dismissLaunch, floorMs);
+  else dismissLaunch();
 }
 
 // ---------------- Boot ----------------
@@ -3316,7 +3469,7 @@ async function boot() {
   document.documentElement.setAttribute('data-transport', Bridge.mode);
 
   // Web panel: a 401 from any call drops us back to the sign-in gate.
-  if (Bridge.webPanel) Bridge.onUnauthorized(() => { webAuth.resolved = true; webAuth.signedIn = false; rerender(); });
+  if (Bridge.webPanel) Bridge.onUnauthorized(() => { webAuth.resolved = true; webAuth.signedIn = false; rerender(); maybeDismissLaunch(); });
 
   if (Bridge.available) {
     Bridge.start();
@@ -3346,11 +3499,19 @@ async function boot() {
         // resolve the gate so the sign-in screen shows instead of an empty dashboard.
         if (Bridge.webPanel) { webAuth.resolved = true; webAuth.signedIn = false; rerender(); }
       })
-      .finally(() => setTimeout(dismissLaunch, 450));
+      // Route through the single gate-aware dismissal. In the web panel getStatus IS the gate, so
+      // this drops the splash; in the desktop app the health/identity gates own dismissal (this is
+      // a no-op until they settle), so getStatus resolving early can no longer reveal the dashboard
+      // before those gates have decided what to paint.
+      .finally(() => maybeDismissLaunch(450));
   }
 
   rerender();
   playLaunch();
+  // Non-bridge transports (the mock/demo panel) have no gates and no inbound settle callback, so
+  // dismiss as soon as the first paint is up — splashGatesSettled() is already true for them, and
+  // this keeps the demo splash short instead of waiting on playLaunch's hard cap.
+  if (!Bridge.available) maybeDismissLaunch(450);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

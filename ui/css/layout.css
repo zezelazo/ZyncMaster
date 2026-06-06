@@ -555,6 +555,13 @@
   color: var(--ink-2);
   line-height: 1.45;
 }
+/* Error variant: a failed create/updatePair on the configure step. Red accent so it reads as a
+   blocking error rather than the amber "heads up" warning above. */
+.wizard-warn--err {
+  border-left-color: var(--err);
+  background: var(--err-soft);
+}
+.wizard-warn--err .wizard-warn__text { color: var(--err); }
 
 /* Opt-in destructive cleanup of the previous destination (F2 edit). A row inside the
    destination-changed warning card: descriptive text on the left, the OFF-by-default toggle on
