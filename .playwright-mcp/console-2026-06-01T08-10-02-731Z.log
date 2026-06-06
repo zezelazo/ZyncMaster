@@ -1,2 +1,0 @@
-[     207ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8732/health:0
-[     353ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8732/favicon.ico:0

@@ -5,6 +5,10 @@
 *.user
 *.suo
 
+# Local agent/tooling scratch (never tracked)
+.claude/
+.playwright-mcp/
+
 # Test / coverage artifacts
 TestResults/
 [Cc]overage/
