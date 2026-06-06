@@ -45,6 +45,23 @@ public sealed class InMemorySyncRunLock : ISyncRunLock
         }
     }
 
+    // FIX 2 — extend the entry's expiry to now+ttl, but ONLY while it still carries OUR fence (we
+    // still hold the lock). Returns true on a successful renewal, false when the lock has been lost
+    // (expired-and-stolen → different fence, or removed). Mirrors the EF store's fenced conditional
+    // UPDATE so the in-memory and DB paths behave identically under the heartbeat.
+    private bool Renew(string pairId, string fence, TimeSpan ttl)
+    {
+        lock (_gate)
+        {
+            if (_locks.TryGetValue(pairId, out var existing) && existing.Fence == fence)
+            {
+                _locks[pairId] = existing with { Until = DateTimeOffset.UtcNow.Add(ttl) };
+                return true;
+            }
+            return false;
+        }
+    }
+
     private sealed class Handle : ISyncRunLockHandle
     {
         private readonly InMemorySyncRunLock _owner;
@@ -59,6 +76,9 @@ public sealed class InMemorySyncRunLock : ISyncRunLock
         }
 
         public string PairId { get; }
+
+        public Task<bool> RenewAsync(TimeSpan ttl, CancellationToken ct = default)
+            => Task.FromResult(!_released && _owner.Renew(PairId, _fence, ttl));
 
         public ValueTask DisposeAsync()
         {

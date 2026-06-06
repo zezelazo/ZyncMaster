@@ -30,7 +30,10 @@ public static class DeviceEndpoints
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
 
-            var result = await service.CompletePairingAsync(req.PairingId);
+            // FIX 1 — the PKCE verifier minted at /api/pair/start is required to claim the api key.
+            // Without a matching verifier the service returns Approved=false / no key, so a caller
+            // that only knows the pairingId cannot harvest the approving user's key.
+            var result = await service.CompletePairingAsync(req.PairingId, req.Verifier);
             return Results.Ok(result);
         }).RequireRateLimiting(PairingRateLimitPolicy);
 

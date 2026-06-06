@@ -178,6 +178,39 @@ builder.Services.AddRateLimiter(rl =>
             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
         });
     });
+
+    // FIX 3 — per-IP fixed window for the unauthenticated identity token surfaces
+    // (/identity/handle/redeem, /identity/refresh, /identity/magic-link/callback). Each accepts a
+    // bearer-style secret directly, so without a limiter they are grindable; this bounds attempts
+    // per client address and returns 429 on excess. Anti-abuse only, leaks no user existence.
+    rl.AddPolicy(IdentityConnectEndpoints.TokenRateLimitPolicy, context =>
+    {
+        var opts = context.RequestServices.GetRequiredService<IOptions<ServerOptions>>().Value;
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter("identity-token:" + ip, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = opts.IdentityTokenMaxPerIp,
+            Window = TimeSpan.FromMinutes(opts.IdentityTokenRateLimitWindowMinutes),
+            QueueLimit = 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+        });
+    });
+
+    // FIX 4 — per-IP fixed window for the destructive cron trigger (/api/sync/run-due). The endpoint
+    // is already secret-gated; this is defense-in-depth so a leaked/guessed secret cannot be paired
+    // with unthrottled hammering of cross-user syncs. 429 on excess.
+    rl.AddPolicy(SyncRunDueEndpoints.RateLimitPolicy, context =>
+    {
+        var opts = context.RequestServices.GetRequiredService<IOptions<ServerOptions>>().Value;
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter("cron-run-due:" + ip, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = opts.CronTriggerMaxPerIp,
+            Window = TimeSpan.FromMinutes(opts.CronTriggerRateLimitWindowMinutes),
+            QueueLimit = 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+        });
+    });
 });
 builder.Services.AddSingleton<DeviceNameGenerator>();
 builder.Services.AddScoped<DeviceService>();
@@ -456,7 +489,30 @@ landingDefaults.DefaultFileNames.Add("index.html");
 app.UseDefaultFiles(landingDefaults);
 app.UseStaticFiles(new StaticFileOptions { FileProvider = landingFileProvider });
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+// FIX 5 — /health now verifies the database connection, returning 503 when the DB is unreachable so
+// an orchestrator/probe sees an unhealthy instance instead of a misleading 200 while every real
+// request would fail. The check is deliberately CHEAP (Database.CanConnectAsync, which issues a
+// trivial connectivity probe and not a query) to stay friendly to F1/cold-start: it adds one light
+// round-trip, not a schema or data scan. Any exception (timeout, transient transport) is treated as
+// unhealthy rather than bubbling a 500.
+app.MapGet("/health", async (IDbContextFactory<ZyncMasterDbContext> dbFactory, CancellationToken ct) =>
+{
+    bool dbUp;
+    try
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        dbUp = await db.Database.CanConnectAsync(ct);
+    }
+    catch
+    {
+        dbUp = false;
+    }
+
+    return dbUp
+        ? Results.Ok(new { status = "ok", db = "up" })
+        : Results.Json(new { status = "degraded", db = "down" },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+});
 
 app.MapDeviceEndpoints();
 app.MapConnectEndpoints();

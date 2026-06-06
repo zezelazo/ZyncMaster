@@ -127,6 +127,82 @@ public sealed class SyncRunLockTests
         await bHandle!.DisposeAsync();
     }
 
+    // FIX 2 — renewal extends a lock's expiry: a lock acquired with a SHORT ttl that is then renewed
+    // with a long ttl must keep blocking a second acquire, proving the renewal pushed LockedUntil
+    // forward (without renewal the short ttl would have lapsed and the second acquire would win).
+    [Fact]
+    public async Task Renew_extends_expiry_so_a_run_longer_than_ttl_keeps_the_lock()
+    {
+        using var harness = new EfStoreTestHarness();
+        var sut = new EfSyncRunLock(harness.Factory);
+
+        // Acquire with an already-elapsed ttl (the row is born expired), then RENEW with a long ttl.
+        var handle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMilliseconds(-1), owner: "A");
+        handle.Should().NotBeNull();
+
+        var renewed = await handle!.RenewAsync(TimeSpan.FromMinutes(8));
+        renewed.Should().BeTrue("we still own the row, so the renewal lands");
+
+        // After renewal the lock is live again: a second executor cannot acquire it.
+        var second = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "B");
+        second.Should().BeNull("renewal kept the lock alive past its original (elapsed) ttl");
+
+        await handle.DisposeAsync();
+    }
+
+    // FIX 2 — once a lock has expired AND been stolen, the original holder's RenewAsync returns false
+    // (its fence no longer matches) and does NOT extend the new owner's lock.
+    [Fact]
+    public async Task Renew_after_lock_was_stolen_returns_false_and_does_not_extend()
+    {
+        using var harness = new EfStoreTestHarness();
+        var sut = new EfSyncRunLock(harness.Factory);
+
+        var aHandle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMilliseconds(-1), owner: "A");
+        aHandle.Should().NotBeNull();
+
+        var bHandle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "B");
+        bHandle.Should().NotBeNull("B steals A's expired lock");
+
+        var renewed = await aHandle!.RenewAsync(TimeSpan.FromMinutes(30));
+        renewed.Should().BeFalse("A lost the lock; its renewal must not touch B's row");
+
+        // B still holds it; a third acquire still fails.
+        var thief = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "C");
+        thief.Should().BeNull();
+
+        await bHandle!.DisposeAsync();
+    }
+
+    // FIX 2 — in-memory store must enforce the same renewal semantics as the EF store.
+    [Fact]
+    public async Task InMemory_renew_extends_then_loses_after_steal()
+    {
+        var sut = new InMemorySyncRunLock();
+
+        var handle = await sut.TryAcquireAsync("pair-1", TimeSpan.FromMilliseconds(-1), owner: "A");
+        handle.Should().NotBeNull();
+        (await handle!.RenewAsync(TimeSpan.FromMinutes(8))).Should().BeTrue();
+        (await sut.TryAcquireAsync("pair-1", TimeSpan.FromMinutes(8), owner: "B"))
+            .Should().BeNull("in-memory renewal also keeps the lock alive");
+        await handle.DisposeAsync();
+
+        // After release a fresh acquire wins; renew on the disposed handle is false.
+        (await handle.RenewAsync(TimeSpan.FromMinutes(8))).Should().BeFalse();
+    }
+
+    // FIX 2 — the heartbeat interval is a fraction of the TTL, floored at the minimum, so the
+    // executor renews several times before a long mirror could outlive the lock.
+    [Fact]
+    public void Heartbeat_interval_is_a_fraction_of_ttl_floored_at_minimum()
+    {
+        SyncRunLockHeartbeat.ComputeInterval(TimeSpan.FromMinutes(9))
+            .Should().Be(TimeSpan.FromMinutes(3), "a 9-minute TTL renews every 3 minutes");
+
+        SyncRunLockHeartbeat.ComputeInterval(TimeSpan.FromSeconds(3))
+            .Should().Be(SyncRunLockHeartbeat.MinInterval, "a tiny TTL floors at the minimum interval");
+    }
+
     [Fact]
     public async Task Concurrent_acquire_lets_exactly_one_win()
     {

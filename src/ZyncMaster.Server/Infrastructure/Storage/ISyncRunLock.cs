@@ -7,12 +7,16 @@ namespace ZyncMaster.Server;
 // same destructive mirror concurrently.
 //
 // TTL contract: the lock auto-expires after ServerOptions.SyncRunLockTtlMinutes so a crashed
-// executor cannot wedge a pair forever. There is NO mid-run renewal — the lock is held for a
-// single acquire/dispose around the whole read+mirror — so the TTL MUST exceed the worst-case
-// duration of one mirror. If a mirror ever outlives the TTL, the lock expires while still
-// running and a second executor could acquire and run a concurrent destructive sweep against
-// the same calendar. The default 8 min against a 14-day / $top=50 window is comfortably above
-// the observed mirror cost; if the window or page size grows materially, re-check this margin.
+// executor cannot wedge a pair forever.
+//
+// FIX 2 (run-lock renewal) — the lock is now RENEWED mid-run: the executor periodically calls
+// handle.RenewAsync (driven by SyncRunLockHeartbeat) to push LockedUntil forward while the mirror
+// is still working. This removes the previous hazard where a long mirror (many calendars, paging,
+// retries) could outlive a fixed TTL, let the lock expire WHILE RUNNING, and allow a second
+// executor to start a concurrent destructive sweep against the same calendar. With renewal the TTL
+// only needs to exceed one heartbeat interval, not the whole worst-case mirror duration; if the
+// executor crashes, renewal stops and the lock expires after at most one TTL so the pair is never
+// wedged.
 public interface ISyncRunLock
 {
     // Tries to acquire the lock for pairId until now+ttl. Returns a handle to release in a
@@ -23,10 +27,15 @@ public interface ISyncRunLock
     Task<ISyncRunLockHandle?> TryAcquireAsync(string pairId, TimeSpan ttl, string? owner = null, CancellationToken ct = default);
 }
 
-// Release-on-dispose handle for an acquired run lock. Held for the whole read+mirror and
-// released on dispose; there is intentionally no mid-run renewal (see the TTL contract on
-// ISyncRunLock — the TTL is sized to exceed a single mirror's worst-case duration).
+// Acquired run-lock handle. Released on dispose, and RENEWED mid-run via RenewAsync (FIX 2).
 public interface ISyncRunLockHandle : IAsyncDisposable
 {
     string PairId { get; }
+
+    // FIX 2 — extend this lock's expiry to now+ttl, but ONLY while this handle still owns the row
+    // (its fence token still matches). Returns true when the renewal landed (we still hold the
+    // lock) and false when it did not (the lock had already expired and been stolen, or the row is
+    // gone) — a false result tells the executor it has lost the lock and should treat the run as
+    // unsafe. Best-effort and idempotent; safe to call repeatedly from a heartbeat loop.
+    Task<bool> RenewAsync(TimeSpan ttl, CancellationToken ct = default);
 }

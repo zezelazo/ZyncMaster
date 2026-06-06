@@ -398,14 +398,45 @@ public class DeviceServiceTests
         var start = await svc.StartPairingAsync("Laptop");
         await svc.ApproveAsync(start.Code);
 
-        var first = await svc.CompletePairingAsync(start.PairingId);
+        // FIX 1 — the PKCE verifier minted by start must be presented to claim the key.
+        var first = await svc.CompletePairingAsync(start.PairingId, start.Verifier);
         first.Approved.Should().BeTrue();
         first.ApiKey.Should().NotBeNullOrWhiteSpace();
         first.DeviceId.Should().NotBeNullOrWhiteSpace();
 
-        var second = await svc.CompletePairingAsync(start.PairingId);
+        var second = await svc.CompletePairingAsync(start.PairingId, start.Verifier);
         second.Approved.Should().BeTrue();
         second.ApiKey.Should().BeNull();
+    }
+
+    // FIX 1 — a complete that presents the WRONG verifier (the attack: a third party who knows the
+    // pairingId but not the initiator's verifier) does NOT get the api key, even after approval.
+    [Fact]
+    public async Task CompletePairing_with_wrong_verifier_is_not_approved_and_yields_no_key()
+    {
+        var (svc, _) = Build();
+        var start = await svc.StartPairingAsync("Laptop");
+        await svc.ApproveAsync(start.Code);
+
+        var result = await svc.CompletePairingAsync(start.PairingId, "not-the-real-verifier");
+
+        result.Approved.Should().BeFalse();
+        result.ApiKey.Should().BeNull();
+    }
+
+    // FIX 1 — a complete that presents NO verifier (the legacy/anonymous attacker shape) is rejected
+    // for a row minted with a verifier hash.
+    [Fact]
+    public async Task CompletePairing_with_missing_verifier_is_not_approved()
+    {
+        var (svc, _) = Build();
+        var start = await svc.StartPairingAsync("Laptop");
+        await svc.ApproveAsync(start.Code);
+
+        var result = await svc.CompletePairingAsync(start.PairingId, verifier: null);
+
+        result.Approved.Should().BeFalse();
+        result.ApiKey.Should().BeNull();
     }
 
     [Fact]

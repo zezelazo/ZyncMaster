@@ -82,7 +82,14 @@ public sealed class CronSyncRunner
 
         var dueRows = activePairs.Where(p => IsDue(p, now)).ToList();
         if (dueRows.Count == 0)
+        {
+            // FIX 5 — even a no-op run logs a one-line summary at Info so a "nothing syncs" report
+            // can be diagnosed from the logs alone (here: zero pairs were due).
+            _logger.LogInformation(
+                "Cron run-due: {Active} active pair(s), {Due} due, nothing to run.",
+                activePairs.Count, dueRows.Count);
             return new RunDueSummary();
+        }
 
         // Which users currently have an active device lease (App running). Computed once for the
         // whole batch so we do not re-query per pair. The DateTimeOffset comparison is done in
@@ -105,6 +112,10 @@ public sealed class CronSyncRunner
         // once, not once per pair.
         var gatedOut = new Dictionary<string, bool>(StringComparer.Ordinal);
 
+        // FIX 5 — break the skip count down by REASON so the per-run summary can explain why a due
+        // pair did not run ("covered" by a live App vs "gated" by the entitlement vs "lock busy").
+        int covered_ = 0, comPinned = 0, gated = 0, lockBusy = 0;
+
         foreach (var row in dueRows)
         {
             if (ct.IsCancellationRequested)
@@ -113,18 +124,24 @@ public sealed class CronSyncRunner
             if (IsComPinned(row))
             {
                 summary.Skipped++;
+                comPinned++;
+                _logger.LogDebug("Cron run-due: pair {PairId} skipped (COM-pinned, no server reader).", row.Id);
                 continue;
             }
 
             if (covered.Contains(row.UserId))
             {
                 summary.Skipped++;
+                covered_++;
+                _logger.LogDebug("Cron run-due: pair {PairId} skipped (covered by a running App lease).", row.Id);
                 continue;
             }
 
             if (await IsUserGatedOutAsync(row.UserId, gatedOut, ct).ConfigureAwait(false))
             {
                 summary.Skipped++;
+                gated++;
+                _logger.LogDebug("Cron run-due: pair {PairId} skipped (cloud fallback gated off).", row.Id);
                 continue;
             }
 
@@ -138,9 +155,16 @@ public sealed class CronSyncRunner
             {
                 var ran = await RunOnePairAsync(module, row, now, ct).ConfigureAwait(false);
                 if (ran)
+                {
                     summary.Ran++;
+                    _logger.LogInformation("Cron run-due: pair {PairId} synced.", row.Id);
+                }
                 else
+                {
                     summary.Skipped++; // lock busy: another executor already has this pair
+                    lockBusy++;
+                    _logger.LogDebug("Cron run-due: pair {PairId} skipped (run-lock busy).", row.Id);
+                }
             }
             catch (Exception ex)
             {
@@ -149,6 +173,14 @@ public sealed class CronSyncRunner
                 _logger.LogWarning(ex, "Cron run failed for pair {PairId}", row.Id);
             }
         }
+
+        // FIX 5 — one Info line per run summarising the outcome, so "it doesn't sync" can be
+        // diagnosed from the logs alone (due/ran/skipped with the skip reasons broken out).
+        _logger.LogInformation(
+            "Cron run-due summary: due={Due} ran={Ran} skipped={Skipped} failed={Failed} " +
+            "(covered={Covered} comPinned={ComPinned} gated={Gated} lockBusy={LockBusy}).",
+            dueRows.Count, summary.Ran, summary.Skipped, summary.Failed,
+            covered_, comPinned, gated, lockBusy);
 
         return summary;
     }
@@ -174,7 +206,13 @@ public sealed class CronSyncRunner
 
             try
             {
-                var outcome = await module.ExecuteAsync(pair, from, to, ct).ConfigureAwait(false);
+                // FIX 2 — renew the run-lock while this pair's (possibly long) read+mirror runs so
+                // the lock cannot expire mid-run and let another executor (an overlapping cron tick
+                // or a manual run) start a concurrent destructive sweep against the same calendar.
+                var outcome = await SyncRunLockHeartbeat.RunAsync(
+                    handle, ttl,
+                    token => module.ExecuteAsync(pair, from, to, token),
+                    ct, _logger).ConfigureAwait(false);
 
                 // OutlookCom sources are filtered out before we get here, so NoServerReader should
                 // not occur; if it ever does, do NOT record a run (treat as a no-op, not a failure).

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 namespace ZyncMaster.Server;
@@ -16,6 +17,11 @@ public static class SyncRunDueEndpoints
 {
     public const string SecretHeader = "X-Cron-Secret";
     private const string BearerPrefix = "Bearer ";
+
+    // FIX 4 — per-IP fixed-window rate-limit policy for the destructive cron trigger. Registered in
+    // Program.cs and attached via RequireRateLimiting below; excess returns 429 even with a valid
+    // secret (defense-in-depth against a leaked secret + endpoint abuse).
+    public const string RateLimitPolicy = "cron-run-due-ip";
 
     public static void MapSyncRunDueEndpoints(this WebApplication app)
     {
@@ -41,9 +47,11 @@ public static class SyncRunDueEndpoints
             if (presented is null || !ConstantTimeEquals(presented, configured))
                 return Results.Unauthorized();
 
+            // FIX 5 — log a one-line per-run summary at Info so a "it doesn't sync" report can be
+            // diagnosed from the logs alone (how many pairs were due vs run vs skipped vs failed).
             var summary = await runner.RunDueAsync(ct);
             return Results.Ok(new { ran = summary.Ran, skipped = summary.Skipped, failed = summary.Failed });
-        });
+        }).RequireRateLimiting(RateLimitPolicy);
     }
 
     // Reads the secret from X-Cron-Secret, else from a Bearer Authorization header. Null when

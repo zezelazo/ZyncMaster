@@ -34,15 +34,49 @@ public static class StartupConfigValidator
         if (string.IsNullOrWhiteSpace(options.CalendarRedirectUri)) missing.Add("CalendarRedirectUri");
         if (string.IsNullOrWhiteSpace(options.PublicBaseUrl)) missing.Add("PublicBaseUrl");
 
+        // FIX 4 — the cron trigger runs DESTRUCTIVE cross-user syncs gated ONLY by CronTriggerSecret.
+        // A blank secret silently DISABLES the trigger (so cron never runs and nothing syncs when no
+        // App is up — a "no sync" footgun), and a short/low-entropy secret is brute-forceable. In a
+        // non-Development environment require it present and >= 32 chars so a real deployment cannot
+        // ship a weak or accidentally-empty trigger secret.
+        const int minCronSecretLength = 32;
+        if (string.IsNullOrWhiteSpace(options.CronTriggerSecret))
+            missing.Add("CronTriggerSecret (required, >= 32 chars)");
+        else if (options.CronTriggerSecret.Trim().Length < minCronSecretLength)
+            missing.Add($"CronTriggerSecret (too short: needs >= {minCronSecretLength} chars)");
+
+        // FIX 5 — a localhost / 127.0.0.1 redirect or public base URL is a dev-only default; shipping
+        // it to a real environment would mint OAuth callbacks / magic-links pointing at the operator's
+        // own machine. Reject any loopback host in the externally-reachable URLs outside Development.
+        if (IsLoopbackUrl(options.IdentityRedirectUri)) missing.Add("IdentityRedirectUri (must not be localhost)");
+        if (IsLoopbackUrl(options.CalendarRedirectUri)) missing.Add("CalendarRedirectUri (must not be localhost)");
+        if (IsLoopbackUrl(options.RedirectUri)) missing.Add("RedirectUri (must not be localhost)");
+        if (IsLoopbackUrl(options.PublicBaseUrl)) missing.Add("PublicBaseUrl (must not be localhost)");
+
         if (missing.Count == 0)
             return;
 
         throw new InvalidOperationException(
-            "Missing required OAuth / magic-link configuration in a non-Development environment: " +
+            "Missing or invalid required configuration in a non-Development environment: " +
             string.Join(", ", missing) + ". " +
             "Set the 'Server'-section values per-environment (e.g. the app settings " +
             "Server__MicrosoftClientId, Server__IdentityRedirectUri, Server__CalendarRedirectUri, " +
-            "Server__PublicBaseUrl). The secret Microsoft:ClientSecret stays in user-secrets/env vars " +
-            "(set it via 'Microsoft__ClientSecret'), NOT in the committed 'Server' section.");
+            "Server__PublicBaseUrl, Server__CronTriggerSecret). The secret Microsoft:ClientSecret " +
+            "stays in user-secrets/env vars (set it via 'Microsoft__ClientSecret'), NOT in the " +
+            "committed 'Server' section.");
+    }
+
+    // True when the URL is non-empty and points at a loopback host (localhost / 127.x / [::1]). A
+    // value that does not parse as an absolute URI is treated as NOT loopback here — the blank/missing
+    // checks above already cover the empty case, and a malformed non-empty value is surfaced by the
+    // OAuth provider rather than this guard.
+    private static bool IsLoopbackUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return false;
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            return false;
+        return uri.IsLoopback
+            || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase);
     }
 }

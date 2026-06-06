@@ -36,6 +36,8 @@ public class DeviceJourneyTests
         using var startDoc = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
         var pairingId = startDoc.RootElement.GetProperty("pairingId").GetString();
         var code = startDoc.RootElement.GetProperty("code").GetString()!;
+        // FIX 1 — start returns a PKCE verifier the initiator must echo on complete.
+        var verifier = startDoc.RootElement.GetProperty("verifier").GetString();
 
         // 2. The signed-in human visits /pair?code=... and sees the approval page for the device.
         var pairPage = await panel.GetAsync($"/pair?code={code}");
@@ -48,8 +50,8 @@ public class DeviceJourneyTests
         using var approveDoc = JsonDocument.Parse(await approve.Content.ReadAsStringAsync());
         approveDoc.RootElement.GetProperty("approved").GetBoolean().Should().BeTrue();
 
-        // 4. The device completes (anonymous) and receives its one-time api key.
-        var complete = await device.PostAsJsonAsync("/api/pair/complete", new { pairingId });
+        // 4. The device completes (anonymous, with its verifier) and receives its one-time api key.
+        var complete = await device.PostAsJsonAsync("/api/pair/complete", new { pairingId, verifier });
         complete.StatusCode.Should().Be(HttpStatusCode.OK);
         using var completeDoc = JsonDocument.Parse(await complete.Content.ReadAsStringAsync());
         completeDoc.RootElement.GetProperty("approved").GetBoolean().Should().BeTrue();

@@ -100,6 +100,12 @@ public sealed class PendingPairingRow
     public string? ApprovedDeviceId { get; set; }
     public string? OneTimeApiKey { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }
+
+    // FIX 1 — SHA-256 (base64url) of the PKCE verifier minted at /api/pair/start. The clear verifier
+    // is never stored; /api/pair/complete must present a verifier whose hash matches this value
+    // before the one-time api key is released. Nullable + additive so the migration is purely
+    // additive and pre-FIX-1 rows (no verifier) keep working under the legacy code path.
+    public string? VerifierHash { get; set; }
 }
 
 public sealed class SyncPairRow

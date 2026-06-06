@@ -154,6 +154,7 @@ public sealed class EfDeviceStore : IDeviceStore
         row.ApprovedDeviceId = pairing.ApprovedDeviceId;
         row.OneTimeApiKey = pairing.OneTimeApiKey;
         row.CreatedUtc = pairing.CreatedUtc;
+        row.VerifierHash = pairing.VerifierHash;
         await db.SaveChangesAsync(ct);
     }
 
@@ -230,6 +231,7 @@ public sealed class EfDeviceStore : IDeviceStore
         ApprovedDeviceId = p.ApprovedDeviceId,
         OneTimeApiKey = p.OneTimeApiKey,
         CreatedUtc = p.CreatedUtc,
+        VerifierHash = p.VerifierHash,
     };
 
     private static PendingPairing ToDomain(PendingPairingRow r) => new()
@@ -241,5 +243,6 @@ public sealed class EfDeviceStore : IDeviceStore
         ApprovedDeviceId = r.ApprovedDeviceId,
         OneTimeApiKey = r.OneTimeApiKey,
         CreatedUtc = r.CreatedUtc,
+        VerifierHash = r.VerifierHash,
     };
 }

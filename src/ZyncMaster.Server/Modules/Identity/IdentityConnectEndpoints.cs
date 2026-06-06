@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 namespace ZyncMaster.Server;
@@ -14,6 +15,13 @@ namespace ZyncMaster.Server;
 //     handle (plan v2 §A-1) rather than a panel cookie.
 public static class IdentityConnectEndpoints
 {
+    // FIX 3 — per-IP fixed-window rate-limit policy for the unauthenticated token surfaces
+    // (/identity/handle/redeem, /identity/refresh, /identity/magic-link/callback). These accept a
+    // bearer-style secret (handle / refresh token / magic-link token) directly in the request, so
+    // without a limiter they are grindable. Registered in Program.cs alongside the magic-link and
+    // pairing limiters and attached via RequireRateLimiting; excess returns 429.
+    public const string TokenRateLimitPolicy = "identity-token-ip";
+
     // CSRF cross-check cookie for the identity flow (kept distinct from the legacy
     // sm_oauth_state so the two flows never collide).
     private const string StateCookieName = "sm_identity_oauth_state";
@@ -191,7 +199,7 @@ public static class IdentityConnectEndpoints
 
             // The wrapped JSON ({accessToken, refreshToken}) is returned verbatim.
             return Results.Content(bundle, "application/json");
-        });
+        }).RequireRateLimiting(TokenRateLimitPolicy);
 
         // Exchanges a valid refresh token for a freshly minted access token AND a rotated
         // refresh token (plan v2 §A-1). Anonymous: the refresh token IS the proof — possession
@@ -229,7 +237,7 @@ public static class IdentityConnectEndpoints
                 accessToken = access.Token,
                 newRefreshToken = outcome.NewRefreshToken,
             });
-        });
+        }).RequireRateLimiting(TokenRateLimitPolicy);
 
         // Identity profile for the holder of a valid identity access token. Authentication is
         // enforced by the IdentityBearer scheme (RequireIdentityBearer); the caller is resolved
