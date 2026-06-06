@@ -28,12 +28,27 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     private const string VirtualHost = "zyncmaster.assets";
     private const string StartUrl = "https://zyncmaster.assets/index.html";
 
+    // Where to download the Evergreen WebView2 Runtime. Surfaced to the user (and opened in the
+    // system browser) by the native fallback panel when the runtime is missing.
+    public const string RuntimeDownloadUrl = "https://developer.microsoft.com/microsoft-edge/webview2/";
+
     private readonly string _uiRoot;
     private readonly Queue<string> _pending = new();
     private CoreWebView2Controller? _controller;
     private bool _ready;
+    private bool _initFailedRaised;
 
     public event Action<string>? Received;
+
+    // FIX 2 — raised when the embedded WebView2 cannot initialise (most commonly because the
+    // Evergreen WebView2 Runtime is not installed). The window subscribes to this to swap in a
+    // NATIVE Avalonia panel explaining the problem with a link to the runtime download, instead of
+    // leaving a blank frameless window with no explanation. Raised on the UI thread.
+    public event Action? InitializationFailed;
+
+    // True once the runtime is confirmed missing / init has failed. Lets the window decide whether
+    // to show the fallback panel even if it attaches after the failure was raised.
+    public bool HasFailed { get; private set; }
 
     public WebView2WebHost(string? uiRoot = null)
     {
@@ -84,6 +99,20 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     {
         try
         {
+            // Detect a missing Evergreen WebView2 Runtime BEFORE attempting to create the
+            // environment: GetAvailableBrowserVersionString returns null (or throws) when no runtime
+            // is installed. CreateAsync would otherwise throw a less obvious error and we'd land in
+            // the catch below anyway, but checking first keeps the failure reason unambiguous.
+            string? version = null;
+            try { version = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+            catch { version = null; }
+
+            if (string.IsNullOrEmpty(version))
+            {
+                RaiseInitFailed();
+                return;
+            }
+
             var userData = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ZyncMaster", "App", "WebView2");
@@ -142,10 +171,24 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
         }
         catch
         {
-            // WebView2 runtime missing or init failed: leave the host blank rather than
-            // crash. The tray remains usable and the engine keeps running headless.
+            // WebView2 runtime missing or init failed: surface a native fallback panel (FIX 2)
+            // instead of leaving the host blank. The tray remains usable and the engine keeps
+            // running headless regardless.
             _ready = false;
+            RaiseInitFailed();
         }
+    }
+
+    // Marks the host failed and raises InitializationFailed once, on the UI thread. Idempotent so
+    // the up-front runtime check and the catch block cannot double-fire it.
+    private void RaiseInitFailed()
+    {
+        _ready = false;
+        HasFailed = true;
+        if (_initFailedRaised)
+            return;
+        _initFailedRaised = true;
+        Dispatcher.UIThread.Post(() => InitializationFailed?.Invoke());
     }
 
     // target="_blank" / window.open from the UI: open the URL in the system browser and stop

@@ -7,6 +7,10 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>ZyncMaster.App.Tests</RootNamespace>
     <AssemblyName>ZyncMaster.App.Tests</AssemblyName>
+    <!-- The App is always built with WIN_WEBVIEW2 (net10.0-windows embeds the WebView2 host).
+         Mirror the constant here so tests that reference the WIN_WEBVIEW2-gated WebView2WebHost
+         (e.g. the FIX 2 fallback surface) compile instead of being silently dropped. -->
+    <DefineConstants>$(DefineConstants);WIN_WEBVIEW2</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

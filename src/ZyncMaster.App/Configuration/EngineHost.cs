@@ -43,18 +43,60 @@ public sealed class EngineHost : IDisposable
         Logger = logger;
     }
 
-    // Builds the engine from settings.json next to the exe (created with defaults if
-    // absent). Throws SettingsValidationException if the resolved settings are invalid
-    // and SettingsLoadException if the file exists but cannot be parsed.
+    // The user-writable settings path: %LOCALAPPDATA%\ZyncMaster\App\settings.json. This is the
+    // SAME user-writable tree as device.key / identity.token / the WebView2 user data, so a first
+    // launch from a read-only install location (Program Files, a still-mounted zip) can always write
+    // settings — unlike the old location next to the exe, which threw UnauthorizedAccessException /
+    // IOException and crashed the app on a fresh machine.
+    public static string DefaultSettingsPath()
+        => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ZyncMaster", "App", "settings.json");
+
+    // The legacy location next to the exe. Kept only so an existing install's settings can be
+    // migrated to the new user-writable path once, on first run after the move.
+    private static string LegacySettingsPath()
+    {
+        var exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+                     ?? Directory.GetCurrentDirectory();
+        return Path.Combine(exeDir, "settings.json");
+    }
+
+    // One-time migration: if the old settings.json exists next to the exe and the new
+    // user-writable copy does not yet exist, copy the old file across so an upgrading user keeps
+    // their configuration. Best-effort — a failed copy (read-only source, locked file) must not
+    // crash; the app falls back to generating defaults at the new path. The legacy file is left in
+    // place (the install dir may be read-only, and leaving it is harmless).
+    private static void MigrateLegacySettingsIfNeeded(string newPath)
+    {
+        try
+        {
+            var legacy = LegacySettingsPath();
+            if (!File.Exists(legacy) || File.Exists(newPath))
+                return;
+
+            var dir = Path.GetDirectoryName(newPath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            File.Copy(legacy, newPath, overwrite: false);
+        }
+        catch (IOException) { /* best-effort migration */ }
+        catch (UnauthorizedAccessException) { /* best-effort migration */ }
+    }
+
+    // Builds the engine from settings.json under %LOCALAPPDATA%\ZyncMaster\App\ (created with
+    // defaults if absent, migrated once from the legacy location next to the exe). Throws
+    // SettingsValidationException if the resolved settings are invalid and SettingsLoadException if
+    // the file exists but cannot be parsed.
     //
     // saveDialog: shows a Save-As picker (the App supplies an Avalonia IStorageProvider
     // implementation) and returns the chosen path or null when cancelled.
     // autoStartExePath: the host executable registered for login auto-start.
     public static EngineHost Create(Func<string, Task<string?>> saveDialog, string autoStartExePath, bool verbose = false)
     {
-        var exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
-                     ?? Directory.GetCurrentDirectory();
-        var settingsPath = Path.Combine(exeDir, "settings.json");
+        var settingsPath = DefaultSettingsPath();
+        MigrateLegacySettingsIfNeeded(settingsPath);
 
         var fileSystem = new PhysicalFileSystem();
         var settingsRepo = new SettingsRepository<AppSettings>(fileSystem);

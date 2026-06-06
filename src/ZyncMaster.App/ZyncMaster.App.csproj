@@ -48,28 +48,61 @@
 
   <!-- Bundle CalExport next to the App so it is found at run time both from a Visual Studio build
        (this target) and from the release zip (the publish step in .github/workflows/release-app.yml).
-       Copies CalExport's whole build output (exe + dlls + runtimeconfig.json + deps.json) into an
-       $(OutDir)CalExport\ subfolder. AppContext.BaseDirectory + "CalExport\ZyncMaster.CalExport.exe"
-       is the default the App resolves (AppSettingsResolver). Runs after build; depends on the
-       ProjectReference above for ordering so the source folder is already populated. A
-       ProjectReference does not copy another project's exe, so this explicit target is required. -->
-  <Target Name="CopyCalExport" AfterTargets="Build">
+       AppContext.BaseDirectory + "CalExport\ZyncMaster.CalExport.exe" is the default the App
+       resolves (AppSettingsResolver), so the output lands in an $(OutDir)CalExport\ subfolder.
+
+       The bundle is produced by PUBLISHING CalExport (not by globbing its bin folder) with the SAME
+       RuntimeIdentifier / SelfContained / Configuration as the App build that is running. Doing a
+       real publish, rather than copying the build output verbatim, is what guarantees the bundle
+       holds EXACTLY one correct set of files:
+
+         * the old glob over the no-RID build folder pulled in BOTH the framework-dependent build
+           (no coreclr) AND the nested RID subfolder that a RID build leaves behind, so the bundle
+           ended up with duplicates and the wrong (FDD) variant;
+         * a publish into a clean folder emits a single coherent output for the requested RID/config
+           (apphost + coreclr + deps + runtimeconfig for self-contained), with no nested RID folder
+           and no FDD leftovers.
+
+       Uses the MSBuild task to invoke CalExport's own Publish target so the SDK computes the correct
+       output. The bundle folder is wiped first so a file CalExport stopped shipping cannot linger
+       across incremental builds.
+
+       Two entry points, one for each output location:
+         * CopyCalExportToBuildOutput (after Build) writes into $(OutDir)CalExport\ — this is what a
+           `dotnet build` / Visual Studio F5 / `dotnet run` resolves at AppContext.BaseDirectory.
+         * CopyCalExportToPublishOutput (after Publish) writes into $(PublishDir)CalExport\ — this is
+           what `dotnet publish -o <dir>` ships, so the release zip carries CalExport too. Without
+           this, a self-contained App publish would leave the publish dir's CalExport\ empty.
+
+       Mirror the App's runtime shape onto the CalExport publish via CalExportSelfContained: when the
+       App is a plain `dotnet build` (no RID) RuntimeIdentifier/SelfContained are empty and CalExport
+       publishes framework-dependent for the current TFM; when the App is a self-contained RID publish
+       they flow through so CalExport publishes the matching self-contained set with no nested RID
+       folder and no FDD duplicates. PublishDir is forced absolute so the SDK does not resolve it
+       relative to the CalExport project. Each target wipes its bundle folder first so a file
+       CalExport stopped shipping cannot linger across incremental builds. -->
+  <PropertyGroup>
+    <CalExportSelfContained Condition="'$(SelfContained)' != ''">$(SelfContained)</CalExportSelfContained>
+  </PropertyGroup>
+
+  <Target Name="CopyCalExportToBuildOutput" AfterTargets="Build">
     <PropertyGroup>
-      <CalExportBuildDir>$(MSBuildProjectDirectory)\..\ZyncMaster.CalExport\bin\$(Configuration)\net10.0-windows\</CalExportBuildDir>
-      <CalExportBundleDir>$(OutDir)CalExport\</CalExportBundleDir>
+      <CalExportBuildBundleDir>$([System.IO.Path]::GetFullPath('$(OutDir)CalExport'))\</CalExportBuildBundleDir>
     </PropertyGroup>
-    <ItemGroup>
-      <CalExportFiles Include="$(CalExportBuildDir)**\*" />
-    </ItemGroup>
-    <!-- Wipe the whole bundle subfolder first, then copy CalExport's fresh output verbatim. This
-         guarantees the bundle is ALWAYS an exact mirror of the current build output: any file that
-         CalExport stopped shipping (e.g. the now-excluded Outlook interop DLL) cannot linger across
-         incremental dev builds. RemoveDir tolerates an absent folder (clean checkout / first build).
-         No SkipUnchangedFiles — it is meaningless right after a full wipe and only adds fragility. -->
-    <RemoveDir Directories="$(CalExportBundleDir)" />
-    <Copy SourceFiles="@(CalExportFiles)"
-          DestinationFiles="@(CalExportFiles->'$(CalExportBundleDir)%(RecursiveDir)%(Filename)%(Extension)')"
-          Condition="'@(CalExportFiles)' != ''" />
+    <RemoveDir Directories="$(CalExportBuildBundleDir)" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\ZyncMaster.CalExport\ZyncMaster.CalExport.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(CalExportBuildBundleDir);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(CalExportSelfContained);AppendRuntimeIdentifierToOutputPath=false" />
+  </Target>
+
+  <Target Name="CopyCalExportToPublishOutput" AfterTargets="Publish">
+    <PropertyGroup>
+      <CalExportPublishBundleDir>$([System.IO.Path]::GetFullPath('$(PublishDir)CalExport'))\</CalExportPublishBundleDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(CalExportPublishBundleDir)" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\ZyncMaster.CalExport\ZyncMaster.CalExport.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(CalExportPublishBundleDir);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(CalExportSelfContained);AppendRuntimeIdentifierToOutputPath=false" />
   </Target>
 
   <ItemGroup>
@@ -92,6 +125,22 @@
          edited copy there. -->
     <Content Include="$(MSBuildProjectDirectory)\settings.json" Link="settings.json" Condition="Exists('$(MSBuildProjectDirectory)\settings.json')" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- FIX 4 — drop the dead WebView2 WPF / WinForms control assemblies from the publish output.
+       The app only uses Microsoft.Web.WebView2.Core (the embedded NativeControlHost binds to the
+       CoreWebView2 controller directly); the package also ships Wpf and WinForms control wrappers
+       that are never loaded. Removing them from the publish is pure bloat reduction — nothing
+       references them, so their absence cannot crash anything. This runs right before the publish
+       file list is finalised so the items are present to remove. -->
+  <Target Name="TrimUnusedWebView2Shims" BeforeTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Filename)%(Extension)' == 'Microsoft.Web.WebView2.Wpf.dll'
+                                     or '%(Filename)%(Extension)' == 'Microsoft.Web.WebView2.WinForms.dll'
+                                     or '%(Filename)%(Extension)' == 'Microsoft.Web.WebView2.Wpf.xml'
+                                     or '%(Filename)%(Extension)' == 'Microsoft.Web.WebView2.WinForms.xml'" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.3" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
