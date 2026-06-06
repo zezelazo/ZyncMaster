@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -11,19 +11,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Embed the COM interop types into the exe so it does NOT need the Office PIAs
-         (Microsoft.Office.Interop.Outlook.dll / office.dll) at run time. Without this the app
-         fails on machines that have Outlook installed but not the matching PIA assemblies with
-         "Could not load file or assembly 'office'". Embedded types bind to whatever Outlook COM
-         server is registered locally, regardless of the installed Office version. -->
-    <PackageReference Include="Microsoft.Office.Interop.Outlook" Version="15.0.4797.1003" NoWarn="NU1701;NU1603">
-      <EmbedInteropTypes>true</EmbedInteropTypes>
-      <!-- The interop types are embedded into the exe (EmbedInteropTypes), so the PIA assembly
-           is not needed at run time. ExcludeAssets=runtime keeps the compile-time reference for
-           embedding while preventing the ~990 KB Microsoft.Office.Interop.Outlook.dll from being
-           copied to bin\ and dragged into the release zip / the App's CopyCalExport bundle. -->
-      <ExcludeAssets>runtime</ExcludeAssets>
-    </PackageReference>
+    <!-- No reference to the Office PIAs (Microsoft.Office.Interop.Outlook.dll / office.dll).
+         All Outlook COM access is done through late binding (dynamic + ProgID "Outlook.Application"),
+         so the app binds to whatever Outlook Classic COM server is registered locally and never
+         needs the PIA assemblies at run time. This is the only configuration that works on machines
+         that have Outlook installed but not the matching PIAs. -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
