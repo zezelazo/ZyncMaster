@@ -32,7 +32,12 @@ jobs:
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
+          # The exact SDK is pinned by global.json (rollForward: latestPatch); this is the fallback
+          # feed family. NuGet restore output is cached and keyed on the committed lock files so a
+          # clean run reuses packages instead of re-downloading them.
           dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Build (Release)
         run: dotnet build -c Release

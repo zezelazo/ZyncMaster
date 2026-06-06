@@ -3,6 +3,16 @@
   <!-- Solution-wide build properties. -->
   <PropertyGroup>
     <!--
+      Reproducible restore: write a packages.lock.json next to every project so restore is
+      deterministic and CI can key its NuGet cache on the resolved graph (the cache-dependency-path
+      points at the packages.lock.json files). Generate or refresh the lock files locally with
+      a normal restore (or "dotnet restore /p:RestoreForceEvaluate=true" after changing package
+      versions) and commit them. On CI, the restore can be run in locked mode if you want it to
+      fail when a lock file is stale rather than silently regenerating it.
+    -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+
+    <!--
       MSB3277: WindowsBase version conflict (4.0.0.0 vs 5.0.0.0).
 
       The Microsoft.Web.WebView2 package ships unused WPF/WinForms control assemblies

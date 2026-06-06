@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace ZyncMaster.Core;
@@ -21,20 +22,108 @@ namespace ZyncMaster.Core;
 // The clock is injected as a Func<DateTimeOffset> rather than the Engine's IClock so this stays
 // in ZyncMaster.Core (which must not reference ZyncMaster.Engine). Callers that already have an
 // IClock pass `() => clock.UtcNow`; CalExport (no Engine reference) passes `() => DateTimeOffset.UtcNow`.
+//
+// Retention: on construction the logger deletes its own per-day files older than `retentionDays`
+// (default 30; <= 0 disables retention). This is a best-effort, one-shot sweep — a locked or
+// undeletable file is skipped silently so a full disk or an open handle never takes down startup.
 public sealed class DailyFileLogger : IAppLogger
 {
+    // Default number of days of per-day log files to keep before the startup sweep deletes them.
+    public const int DefaultRetentionDays = 30;
+
+    private const string FilePrefix = "zyncmaster-";
+    private const string FileSuffix = ".log";
+
     private readonly string _logDirectory;
     private readonly LogLevel _minLevel;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly object _gate = new();
 
-    public DailyFileLogger(string logDirectory, LogLevel minLevel, Func<DateTimeOffset> utcNow)
+    public DailyFileLogger(
+        string logDirectory,
+        LogLevel minLevel,
+        Func<DateTimeOffset> utcNow,
+        int retentionDays = DefaultRetentionDays)
     {
         _logDirectory = logDirectory ?? throw new ArgumentNullException(nameof(logDirectory));
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
         _minLevel = minLevel;
 
         Directory.CreateDirectory(_logDirectory);
+
+        PurgeOldLogs(retentionDays);
+    }
+
+    // Deletes per-day log files whose date component is older than `retentionDays` relative to the
+    // clock's current UTC day. Best-effort: any IO failure (locked file, gone directory, malformed
+    // name) is swallowed per-file so retention never throws into the composition root. A value of
+    // zero or less disables the sweep entirely.
+    private void PurgeOldLogs(int retentionDays)
+    {
+        if (retentionDays <= 0)
+            return;
+
+        DateTime cutoff;
+        try
+        {
+            cutoff = _utcNow().UtcDateTime.Date.AddDays(-retentionDays);
+        }
+        catch
+        {
+            return;
+        }
+
+        string[] files;
+        try
+        {
+            files = Directory.GetFiles(_logDirectory, FilePrefix + "*" + FileSuffix);
+        }
+        catch
+        {
+            return;
+        }
+
+        foreach (var file in files)
+        {
+            if (!TryParseFileDate(Path.GetFileName(file), out var fileDate))
+                continue;
+
+            if (fileDate >= cutoff)
+                continue;
+
+            try
+            {
+                File.Delete(file);
+            }
+            catch
+            {
+                // Best-effort: a locked or vanished file is left in place. Retention is a courtesy,
+                // not a guarantee — it must never surface as a startup failure.
+            }
+        }
+    }
+
+    // Parses "zyncmaster-YYYY-MM-DD.log" back to its UTC date. Returns false for any file that does
+    // not match the exact pattern this logger writes, so unrelated files in the directory are left
+    // untouched.
+    private static bool TryParseFileDate(string? fileName, out DateTime date)
+    {
+        date = default;
+        if (fileName is null
+            || !fileName.StartsWith(FilePrefix, StringComparison.Ordinal)
+            || !fileName.EndsWith(FileSuffix, StringComparison.Ordinal))
+            return false;
+
+        var datePart = fileName.Substring(
+            FilePrefix.Length,
+            fileName.Length - FilePrefix.Length - FileSuffix.Length);
+
+        return DateTime.TryParseExact(
+            datePart,
+            "yyyy-MM-dd",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out date);
     }
 
     // Resolves the default log directory: %LOCALAPPDATA%\ZyncMaster\logs. Shared by every
@@ -77,7 +166,7 @@ public sealed class DailyFileLogger : IAppLogger
     }
 
     private static string FileNameFor(DateTimeOffset when)
-        => "zyncmaster-" + when.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".log";
+        => FilePrefix + when.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + FileSuffix;
 
     private static string Format(DateTimeOffset when, LogLevel level, string message, Exception? ex)
     {

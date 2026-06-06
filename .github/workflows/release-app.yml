@@ -20,16 +20,39 @@ on:
 permissions:
   contents: write   # required to create the GitHub Release and upload the asset
 
+concurrency:
+  # One release build at a time. Two dispatches for the same (or different) versions must not run
+  # concurrently and race on the same tag/release. A newer dispatch queues; the running one finishes.
+  group: release-app
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fail if the tag already exists
+        shell: pwsh
+        # Guard against duplicate releases: if v<version> already points at a tag in the repo, abort
+        # before building anything. A re-release must bump the version (or the human deletes the tag).
+        run: |
+          $tag = "v${{ inputs.version }}"
+          git fetch --tags --quiet
+          $existing = git tag --list $tag
+          if ($existing) {
+            Write-Error "Tag $tag already exists. Bump the version or delete the existing tag/release first."
+            exit 1
+          }
+          Write-Host "Tag $tag is free; continuing."
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
+          # SDK pinned by global.json; NuGet cache keyed on the committed lock files.
           dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Publish app (self-contained win-x64)
         shell: pwsh
@@ -63,6 +86,98 @@ jobs:
           /p:AssemblyVersion=${{ inputs.version }}.0
           /p:FileVersion=${{ inputs.version }}.0
           -o "${{ runner.temp }}/publish/CalExport"
+
+      - name: Verify bundle integrity
+        shell: pwsh
+        # Hard gate: a broken bundle must never reach a release. This catches the class of CalExport
+        # packaging bug where the Outlook COM interop assemblies leaked into a self-contained publish
+        # (or the self-contained runtime was missing). Any failure here aborts the release.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publish = "${{ runner.temp }}/publish"
+          $calExport = Join-Path $publish 'CalExport'
+          $errors = @()
+
+          # 1. CalExport.exe must exist.
+          $exe = Join-Path $calExport 'ZyncMaster.CalExport.exe'
+          if (-not (Test-Path $exe)) { $errors += "Missing $exe" }
+
+          # 2. Self-contained: the CoreCLR runtime must be shipped next to the exe.
+          $coreclr = Join-Path $calExport 'coreclr.dll'
+          if (-not (Test-Path $coreclr)) { $errors += "Missing $coreclr (publish is not self-contained)" }
+
+          # 3. No Outlook COM interop / Office assemblies anywhere in the publish. CalExport talks to
+          #    Outlook over late-bound COM; the interop DLL must never ship.
+          $office = Get-ChildItem -Path $publish -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '(?i)^(Microsoft\.Office\.Interop\.Outlook|office)\.dll$' }
+          if ($office) {
+            foreach ($f in $office) { $errors += "Office/Outlook interop assembly leaked into the bundle: $($f.FullName)" }
+          }
+
+          # 4. The CalExport deps.json must not reference Office/Outlook interop.
+          $deps = Join-Path $calExport 'ZyncMaster.CalExport.deps.json'
+          if (-not (Test-Path $deps)) {
+            $errors += "Missing $deps"
+          } else {
+            $depsText = Get-Content $deps -Raw
+            if ($depsText -match '(?i)Microsoft\.Office\.Interop\.Outlook' -or $depsText -match '(?i)"office(\.dll)?"') {
+              $errors += "deps.json references Office/Outlook interop: $deps"
+            }
+          }
+
+          if ($errors.Count -gt 0) {
+            Write-Host "::error::Bundle verification failed:"
+            $errors | ForEach-Object { Write-Host "::error::  - $_" }
+            exit 1
+          }
+          Write-Host "Bundle verification passed: CalExport.exe + coreclr.dll present, no Office interop."
+
+      - name: Trim debug and doc files
+        shell: pwsh
+        # Shrink the asset: ship only what runs. Strip every .pdb (debug symbols) and the WebView2
+        # XML doc file from the whole publish tree. Only .pdb/.xml are removed — never .dll/.exe/.json,
+        # which the app needs at run time.
+        run: |
+          $publish = "${{ runner.temp }}/publish"
+          Get-ChildItem -Path $publish -Recurse -File -Include *.pdb, *.xml -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              Write-Host "Removing $($_.FullName)"
+              Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            }
+
+      - name: Sign the app executable (only when signing secrets are configured)
+        # Optional code-signing. SKIPPED silently unless the SIGNING_CERT secret is present, so the
+        # workflow keeps producing unsigned betas today and starts producing signed releases the
+        # moment the cert is configured — no further workflow edits needed.
+        #
+        # Required secrets when enabling:
+        #   SIGNING_CERT          base64-encoded PFX (Authenticode) code-signing certificate
+        #   SIGNING_CERT_PASSWORD password for the PFX above
+        # The PFX is materialised to a temp file, used by signtool, then deleted in the finally block.
+        if: ${{ secrets.SIGNING_CERT != '' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_CERT))
+            $exe = "${{ runner.temp }}/publish/ZyncMaster.App.exe"
+            & signtool sign `
+              /f $pfxPath `
+              /p $env:SIGNING_CERT_PASSWORD `
+              /fd SHA256 `
+              /tr http://timestamp.digicert.com `
+              /td SHA256 `
+              $exe
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+            Write-Host "Signed $exe"
+          }
+          finally {
+            if (Test-Path $pfxPath) { Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue }
+          }
+        env:
+          SIGNING_CERT: ${{ secrets.SIGNING_CERT }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
 
       - name: Package zip
         shell: pwsh

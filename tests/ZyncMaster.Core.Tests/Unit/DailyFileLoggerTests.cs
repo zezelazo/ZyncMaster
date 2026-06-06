@@ -121,6 +121,46 @@ public sealed class DailyFileLoggerTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_PurgesLogsOlderThanRetention_KeepsRecent()
+    {
+        Directory.CreateDirectory(_dir);
+        var today = new DateTimeOffset(2026, 6, 5, 10, 0, 0, TimeSpan.Zero);
+
+        // Seed files at known ages relative to "today". Retention = 30 days.
+        var old1 = Path.Combine(_dir, "zyncmaster-2026-04-01.log");   // 65 days old -> delete
+        var old2 = Path.Combine(_dir, "zyncmaster-2026-05-05.log");   // 31 days old -> delete
+        var keep1 = Path.Combine(_dir, "zyncmaster-2026-05-07.log");  // 29 days old -> keep
+        var keep2 = Path.Combine(_dir, "zyncmaster-2026-06-05.log");  // today -> keep
+        var unrelated = Path.Combine(_dir, "notes.txt");             // not ours -> keep
+        File.WriteAllText(old1, "x");
+        File.WriteAllText(old2, "x");
+        File.WriteAllText(keep1, "x");
+        File.WriteAllText(keep2, "x");
+        File.WriteAllText(unrelated, "x");
+
+        _ = new DailyFileLogger(_dir, LogLevel.Debug, FixedClock(today), retentionDays: 30);
+
+        File.Exists(old1).Should().BeFalse();
+        File.Exists(old2).Should().BeFalse();
+        File.Exists(keep1).Should().BeTrue();
+        File.Exists(keep2).Should().BeTrue();
+        File.Exists(unrelated).Should().BeTrue("retention must only touch this logger's own files");
+    }
+
+    [Fact]
+    public void Constructor_WithRetentionDisabled_KeepsAllLogs()
+    {
+        Directory.CreateDirectory(_dir);
+        var today = new DateTimeOffset(2026, 6, 5, 10, 0, 0, TimeSpan.Zero);
+        var ancient = Path.Combine(_dir, "zyncmaster-2020-01-01.log");
+        File.WriteAllText(ancient, "x");
+
+        _ = new DailyFileLogger(_dir, LogLevel.Debug, FixedClock(today), retentionDays: 0);
+
+        File.Exists(ancient).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Log_IsThreadSafe_NoLostOrCorruptLines()
     {
         var when = new DateTimeOffset(2026, 6, 5, 10, 0, 0, TimeSpan.Zero);
