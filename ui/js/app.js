@@ -529,10 +529,23 @@ function onServerReady() {
       identityAuth.me = signedIn
         ? { userId: s.userId, email: s.email, displayName: s.displayName, expiresAt: s.expiresAt, plan: s.plan }
         : null;
+      // Already signed in at boot: make sure the device is registered (has its api key) so the
+      // background scheduler / heartbeat / Sync-now work without waiting for a manual sync.
+      if (signedIn) ensureDeviceRegistered();
       rerender();
     })
     .catch(() => { identityAuth.resolved = true; identityAuth.signedIn = false; rerender(); })
     .finally(() => maybeDismissLaunch(450));
+}
+
+// ensureDeviceRegistered — fire-and-forget request that the host auto-register THIS device against
+// the server using the signed-in identity, so it has a device api key before any sync runs. The
+// host call is idempotent (a no-op when a key already exists or no identity is present), so calling
+// it on every sign-in / boot-when-signed-in is safe. Errors are swallowed: a failure just means the
+// host's self-heal retries on the next device-key-gated call (e.g. Sync now).
+function ensureDeviceRegistered() {
+  if (!Bridge.desktopApp) return;
+  Bridge.call('ensureDevice').catch(() => {});
 }
 
 // User-driven Retry from the error screen: reset the budget and probe again.
@@ -2414,6 +2427,9 @@ async function refreshIdentity() {
       ? { userId: s.userId, email: s.email, displayName: s.displayName, expiresAt: s.expiresAt, plan: s.plan }
       : null;
     if (signedIn) { identityAuth.loading = false; identityAuth.error = null; identityAuth.magicLinkSent = false; }
+    // A fresh sign-in (the flag flipped on) is exactly when the device must be registered so the
+    // scheduler/heartbeat/Sync-now have a key. Idempotent in the host, so it is safe to call here.
+    if (signedIn && !was) ensureDeviceRegistered();
     if (was !== signedIn) rerender();
     return s;
   } catch (_) {

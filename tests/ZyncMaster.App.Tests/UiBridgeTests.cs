@@ -217,6 +217,16 @@ public class UiBridgeTests
         public DeviceInfo DeviceToReturn = new() { DeviceId = "dev-1", Name = "Current Name", Platform = "windows" };
         public DeviceInfo RenamedDeviceToReturn = new() { DeviceId = "dev-1", Name = "New Name", Platform = "windows" };
 
+        public int EnsureDeviceCalls;
+        public string? EnsureDeviceKeyToReturn = "device-key";
+
+        public async Task<string?> EnsureDeviceRegisteredAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            EnsureDeviceCalls++;
+            return EnsureDeviceKeyToReturn;
+        }
+
         public async Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
@@ -738,6 +748,39 @@ public class UiBridgeTests
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
         var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
         payload.GetProperty("affectedPairIds").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public void EnsureDevice_calls_engine_and_reports_registered()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions(); // EnsureDeviceKeyToReturn defaults to a non-null key
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("ensureDevice", "e1"));
+
+        engine.EnsureDeviceCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("e1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("registered").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void EnsureDevice_reports_not_registered_when_no_key_returned()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { EnsureDeviceKeyToReturn = null };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("ensureDevice", "e2"));
+
+        engine.EnsureDeviceCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("registered").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

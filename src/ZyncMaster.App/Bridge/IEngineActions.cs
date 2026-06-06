@@ -51,6 +51,14 @@ public interface IEngineActions
     Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default);
 
+    // Auto-registers THIS device against the server using the signed-in identity bearer and
+    // persists the returned api key, so the device is "paired" for every later device-key-gated
+    // call (Sync now, heartbeat, getDevice, rename) WITHOUT a manual pairing step. Idempotent: a
+    // no-op when a key already exists; a silent no-op when no identity is present; best-effort on
+    // failure (logged, never thrown) so it can run on boot and right after sign-in without breaking
+    // either flow. Returns the persisted key, or null when nothing was registered.
+    Task<string?> EnsureDeviceRegisteredAsync(CancellationToken ct = default);
+
     // Device self-management. GetDeviceAsync reads the REAL current device (id + name + platform)
     // from the server so Settings can pre-fill the actual registered name. RenameDeviceAsync
     // renames the device in place on the server (hot rename) and returns the persisted echo.

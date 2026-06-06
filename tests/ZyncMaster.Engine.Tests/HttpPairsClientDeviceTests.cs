@@ -22,6 +22,7 @@ public sealed class HttpPairsClientDeviceTests
         public HttpRequestMessage? LastRequest { get; private set; }
         public string? LastBody { get; private set; }
         public string? LastApiKey { get; private set; }
+        public string? LastBearer { get; private set; }
 
         public StubHandler(HttpStatusCode status, string responseBody)
         {
@@ -34,6 +35,8 @@ public sealed class HttpPairsClientDeviceTests
             LastRequest = request;
             if (request.Headers.TryGetValues("X-Api-Key", out var values))
                 foreach (var v in values) LastApiKey = v;
+            if (request.Headers.Authorization is { } auth)
+                LastBearer = auth.Parameter;
             if (request.Content != null)
                 LastBody = await request.Content.ReadAsStringAsync(cancellationToken);
 
@@ -183,6 +186,71 @@ public sealed class HttpPairsClientDeviceTests
     {
         var (client, _) = Make(HttpStatusCode.OK, "{}");
         Func<Task> act = () => client.CheckDeviceNameAvailableAsync(null!, "x", CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    // ---------------- RegisterDeviceAsync ----------------
+
+    [Fact]
+    public async Task RegisterDevice_PostsNameWithBearerAndParsesResult()
+    {
+        var (client, stub) = Make(HttpStatusCode.OK,
+            @"{ ""deviceId"": ""dev-99"", ""apiKey"": ""kid.secret"", ""leaseUntil"": ""2026-06-06T12:00:00+00:00"" }");
+
+        var result = await client.RegisterDeviceAsync("bearer-1", "My Laptop", CancellationToken.None);
+
+        stub.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        stub.LastRequest!.RequestUri!.ToString().Should().Be("https://srv.example.com/api/devices/register");
+        // Registration is the HUMAN-only surface: it carries the IDENTITY BEARER, never an api key.
+        stub.LastBearer.Should().Be("bearer-1");
+        stub.LastApiKey.Should().BeNull();
+
+        var body = JObject.Parse(stub.LastBody!);
+        body["name"]!.Value<string>().Should().Be("My Laptop");
+        // The server reads the owning user from the token; the body must NOT smuggle a userId.
+        body.ContainsKey("userId").Should().BeFalse();
+
+        result.DeviceId.Should().Be("dev-99");
+        result.ApiKey.Should().Be("kid.secret");
+        result.LeaseUntil.Should().Be(DateTimeOffset.Parse("2026-06-06T12:00:00+00:00",
+            System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public async Task RegisterDevice_ParsesNullLeaseWhenAbsent()
+    {
+        var (client, _) = Make(HttpStatusCode.OK,
+            @"{ ""deviceId"": ""dev-1"", ""apiKey"": ""kid.secret"" }");
+
+        var result = await client.RegisterDeviceAsync("bearer-1", "Laptop", CancellationToken.None);
+
+        result.LeaseUntil.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RegisterDevice_ServerError_Throws()
+    {
+        var (client, _) = Make(HttpStatusCode.Unauthorized, @"{ ""error"": ""no identity"" }");
+
+        Func<Task> act = () => client.RegisterDeviceAsync("bearer-1", "Laptop", CancellationToken.None);
+
+        (await act.Should().ThrowAsync<SyncClientException>())
+            .Which.Message.Should().Contain("401");
+    }
+
+    [Fact]
+    public async Task RegisterDevice_NullBearer_Throws()
+    {
+        var (client, _) = Make(HttpStatusCode.OK, "{}");
+        Func<Task> act = () => client.RegisterDeviceAsync(null!, "Laptop", CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task RegisterDevice_NullName_Throws()
+    {
+        var (client, _) = Make(HttpStatusCode.OK, "{}");
+        Func<Task> act = () => client.RegisterDeviceAsync("bearer-1", null!, CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 }

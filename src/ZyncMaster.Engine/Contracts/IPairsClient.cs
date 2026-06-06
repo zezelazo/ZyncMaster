@@ -62,6 +62,13 @@ public interface IPairsClient
     // key, so the body is empty. Returns the new LeaseUntil reported by the server.
     Task<DateTimeOffset?> HeartbeatAsync(string apiKey, CancellationToken ct);
 
+    // Brokered device registration (POST /api/devices/register). HUMAN-only surface: authenticated
+    // with the signed-in user's IDENTITY BEARER (the server gates it RequireIdentityBearer and binds
+    // the new device to the token's user). The body carries only the device name; the server returns
+    // a fresh one-time api key + deviceId + the initial lease. The App calls this once, right after
+    // sign-in, so the device has a key for every later device-key-gated call.
+    Task<DeviceRegistration> RegisterDeviceAsync(string bearer, string deviceName, CancellationToken ct);
+
     // Device self-management. The server resolves the deviceId from the api key, so neither call
     // sends an id; a device can only ever read/rename ITSELF.
     Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct);

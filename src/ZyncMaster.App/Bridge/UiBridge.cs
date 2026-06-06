@@ -191,6 +191,15 @@ public sealed class UiBridge
                 var affected = await _engine.UnlinkAccountAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(new { affectedPairIds = affected }, JsonOptions);
             }
+            case "ensureDevice":
+            {
+                // Best-effort auto-registration: the UI calls this after a successful sign-in (and at
+                // boot when already signed in) so the device gets its api key and the scheduler /
+                // heartbeat / Sync-now work without a manual pairing step. Returns { registered: bool }
+                // so the UI can fire-and-forget without needing the key itself.
+                var key = await _engine.EnsureDeviceRegisteredAsync(ct);
+                return JsonSerializer.Serialize(new { registered = !string.IsNullOrEmpty(key) }, JsonOptions);
+            }
             case "getDevice":
             {
                 var device = await _engine.GetDeviceAsync(ct);

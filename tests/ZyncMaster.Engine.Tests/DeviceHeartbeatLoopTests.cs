@@ -50,6 +50,7 @@ public sealed class DeviceHeartbeatLoopTests
         public Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct) => throw new NotImplementedException();
         public Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct) => throw new NotImplementedException();
         public Task<MirrorResult> RunPairAsync(string apiKey, string id, CancellationToken ct) => throw new NotImplementedException();
+        public Task<DeviceRegistration> RegisterDeviceAsync(string bearer, string deviceName, CancellationToken ct) => throw new NotImplementedException();
         public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct) => throw new NotImplementedException();
         public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct) => throw new NotImplementedException();
         public Task<bool> CheckDeviceNameAvailableAsync(string apiKey, string name, CancellationToken ct) => throw new NotImplementedException();

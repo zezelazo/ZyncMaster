@@ -105,6 +105,8 @@ public sealed class PairSchedulerTests
             => Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
         public Task<DateTimeOffset?> HeartbeatAsync(string apiKey, CancellationToken ct)
             => Task.FromResult<DateTimeOffset?>(DateTimeOffset.UtcNow);
+        public Task<DeviceRegistration> RegisterDeviceAsync(string bearer, string deviceName, CancellationToken ct)
+            => Task.FromResult(new DeviceRegistration());
         public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
             => Task.FromResult(new DeviceInfo());
         public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct)
