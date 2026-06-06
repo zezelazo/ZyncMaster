@@ -4,9 +4,11 @@ using Microsoft.Extensions.Options;
 
 namespace ZyncMaster.Server;
 
-// Thrown when a rename/register would land on a device name already taken by ANOTHER device of the
-// same user (case-insensitive). The endpoint maps this to a 409 with error code "name_taken" so the
-// UI can show an inline "Name already used" message rather than an opaque 500.
+// Thrown when a RENAME would land on a device name already taken by ANOTHER device of the same user
+// (case-insensitive). The rename endpoint maps this to a 409 with error code "name_taken" so the UI
+// can show an inline "Name already used" message rather than an opaque 500. Registration does NOT
+// throw this: a register whose name is already the caller's own device re-keys it in place
+// (idempotent re-registration), so the name is never a registration dead-end.
 public sealed class DeviceNameTakenException : Exception
 {
     public DeviceNameTakenException(string name)
@@ -162,10 +164,45 @@ public sealed class DeviceService
 
         // Insert with a retry loop so a same-user collision on the unique (UserId, NameLower) index
         // cannot fail the registration. For a generated (nameless) request we regenerate from the
-        // freshly re-read taken-set each attempt (it picks the next free character/suffix); for an
-        // explicit name we surface a clean "name_taken" instead of looping (the user must choose).
+        // freshly re-read taken-set each attempt (it picks the next free character/suffix).
         for (var attempt = 0; ; attempt++)
         {
+            // IDEMPOTENT RE-REGISTRATION BY NAME. When the App registers with an explicit name that
+            // is ALREADY one of this user's devices (one machine == one name), treat it as the SAME
+            // logical device and RE-KEY it in place instead of failing on the unique (UserId,
+            // NameLower) index. This is the recovery path for a device whose local api key was lost
+            // or never persisted: it receives a fresh key, KEEPS its stable deviceId (so COM pins and
+            // schedules stay valid), and the historical dead-end — a name already taken by a prior
+            // pairing/registration permanently blocking the device from ever getting a key ("no
+            // device key present") — is gone. Nameless registrations skip this and mint a unique geek
+            // name below. The store is user-scoped, so this only ever re-keys the caller's OWN device.
+            if (explicitName is not null)
+            {
+                var existing = (await _store.ListAsync(ct)).FirstOrDefault(d =>
+                    string.Equals((d.Name ?? string.Empty).Trim(), explicitName, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null)
+                {
+                    var rekeyed = existing with
+                    {
+                        ApiKeyHash = ApiKeyHasher.Hash(generated.Secret),
+                        KeyId = generated.KeyId,
+                        Platform = NormalizePlatform(request.Platform),
+                        HasOutlookCom = request.HasOutlookCom,
+                        AppVersion = string.IsNullOrWhiteSpace(request.AppVersion) ? existing.AppVersion : request.AppVersion.Trim(),
+                        LastSeenUtc = now,
+                        LeaseUntil = leaseUntil,
+                    };
+                    await _store.UpdateAsync(rekeyed, ct);
+
+                    return new DeviceRegisterResult
+                    {
+                        DeviceId = existing.Id,
+                        ApiKey = generated.ApiKey,
+                        LeaseUntil = leaseUntil,
+                    };
+                }
+            }
+
             // When the App registers without a name, mint a friendly, unique geek name derived from
             // the user's account (email local-part / display name) so every device has a readable
             // handle the user can later rename. Unique among the user's existing device names.
@@ -192,12 +229,10 @@ public sealed class DeviceService
             }
             catch (DbUpdateException ex) when (IsNameConflict(ex))
             {
-                // An explicit name collided: nothing to regenerate, so report it to the caller.
-                if (explicitName is not null)
-                    throw new DeviceNameTakenException(explicitName);
-
-                // A generated name raced another registration of the same user. Regenerate and retry
-                // a bounded number of times; if even that is exhausted, rethrow the underlying error.
+                // Lost a race: a concurrent registration of the same user just inserted this name.
+                // Retry — the idempotent pre-check at the top now finds it and re-keys (explicit
+                // name) or regenerates a fresh unique name (nameless). Bounded so a persistent
+                // failure still surfaces rather than looping forever.
                 if (attempt >= RegisterCollisionRetries)
                     throw;
                 continue;

@@ -688,6 +688,9 @@
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+/* The source-calendar multi-select sits right under the provider grid (the "Outlook on this PC" /
+   "Online account" tiles); separate them so the "All calendars" card does not crowd the tiles. */
+.cal-multi { margin-top: 14px; }
 .provider-tile {
   display: flex; flex-direction: column;
   align-items: flex-start;

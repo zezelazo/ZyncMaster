@@ -15,8 +15,9 @@ using Xunit;
 namespace ZyncMaster.Server.Tests.Devices;
 
 // Backend hardening of per-user device-name uniqueness (case-insensitive on both providers via the
-// derived NameLower column + unique (UserId, NameLower) index), the register collision retry, the
-// rename "name_taken" rejection, and the live availability endpoint.
+// derived NameLower column + unique (UserId, NameLower) index), the register collision retry,
+// idempotent re-registration by name (a re-register with an owned name re-keys in place rather than
+// failing), the rename "name_taken" rejection, and the live availability endpoint.
 public class DeviceNameUniquenessTests
 {
     private static (string token, string userId) IssueToken(
@@ -120,23 +121,38 @@ public class DeviceNameUniquenessTests
     }
 
     [Fact]
-    public async Task Register_with_explicit_name_already_taken_is_rejected()
+    public async Task Register_with_explicit_name_already_owned_rekeys_same_device()
     {
         using var factory = new ServerTestFactory();
         var (token, _) = IssueToken(factory, "uniq-exp", "exp@example.com");
         var client = factory.CreateClient();
-        await RegisterDevice(client, token, "Workstation");
+        var (firstKey, firstId) = await RegisterDevice(client, token, "Workstation");
 
-        // A second explicit registration with the same name (different case) must NOT silently
-        // duplicate — the service surfaces name_taken, which the endpoint maps to a non-2xx.
-        var req = new HttpRequestMessage(HttpMethod.Post, "/api/devices/register")
+        // Re-registering with the SAME name (different case) must NOT fail on the unique
+        // (UserId, NameLower) index — it RE-KEYS the existing device in place: same stable deviceId,
+        // a fresh key, no duplicate row. This is the fix for the permanent "no device key present"
+        // dead-end, where a name already taken (e.g. by an earlier pairing) blocked the device from
+        // ever obtaining a key. RegisterDevice asserts the call returns 200.
+        var (secondKey, secondId) = await RegisterDevice(client, token, "workstation");
+
+        secondId.Should().Be(firstId, "re-registration re-keys the same logical device");
+        secondKey.Should().NotBe(firstKey, "a fresh key is issued on re-registration");
+
+        // Exactly one device row — re-registration never spawns a duplicate.
+        using (var scope = factory.Services.CreateScope())
         {
-            Content = JsonContent.Create(new { name = "workstation" }),
-        };
-        req.Headers.Add("Authorization", $"Bearer {token}");
-        var resp = await client.SendAsync(req);
+            var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+            (await db.Devices.CountAsync()).Should().Be(1);
+        }
 
-        resp.IsSuccessStatusCode.Should().BeFalse();
+        // The fresh key authenticates; the rotated-out old key no longer does.
+        var meNew = new HttpRequestMessage(HttpMethod.Get, "/api/devices/me");
+        meNew.Headers.Add("X-Api-Key", secondKey);
+        (await client.SendAsync(meNew)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var meOld = new HttpRequestMessage(HttpMethod.Get, "/api/devices/me");
+        meOld.Headers.Add("X-Api-Key", firstKey);
+        (await client.SendAsync(meOld)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     // ---------------- Rename ----------------

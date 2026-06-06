@@ -350,6 +350,54 @@ public class DeviceServiceTests
         (await store.ListAsync()).Single().Platform.Should().Be("windows");
     }
 
+    // Idempotent re-registration by name — the fix for "no device key present". When the App
+    // re-registers (its local key was lost or never persisted, e.g. a name already created by an
+    // earlier pairing) with the SAME explicit name, the existing device is RE-KEYED in place: same
+    // stable deviceId, a fresh working key, exactly ONE device — never a unique-index failure that
+    // would leave the device permanently keyless.
+    [Fact]
+    public async Task Register_with_name_already_owned_rekeys_same_device_in_place()
+    {
+        var (svc, store) = Build(user: new FixedUser("token-user"));
+
+        var first = await svc.RegisterAsync(new DeviceRegisterRequest(
+            Name: "DESKTOP-PC", Platform: "windows", HasOutlookCom: false, AppVersion: "0.2.5"));
+        var second = await svc.RegisterAsync(new DeviceRegisterRequest(
+            Name: "DESKTOP-PC", Platform: "windows", HasOutlookCom: true, AppVersion: "0.2.6"));
+
+        // Same logical device — stable id, not a duplicate row.
+        second.DeviceId.Should().Be(first.DeviceId);
+        (await store.ListAsync()).Should().HaveCount(1, "re-registration re-keys in place, it never spawns a duplicate");
+
+        // A fresh, DIFFERENT, working key was issued; the old key no longer authenticates.
+        second.ApiKey.Should().NotBe(first.ApiKey);
+        var device = (await store.ListAsync()).Single();
+        ApiKeyGenerator.TryParse(second.ApiKey, out var keyId2, out var secret2).Should().BeTrue();
+        device.KeyId.Should().Be(keyId2);
+        ApiKeyHasher.Verify(secret2, device.ApiKeyHash).Should().BeTrue("the new key authenticates");
+        ApiKeyGenerator.TryParse(first.ApiKey, out _, out var secret1).Should().BeTrue();
+        ApiKeyHasher.Verify(secret1, device.ApiKeyHash).Should().BeFalse("the old key was rotated out");
+
+        // Capability flags + lease refreshed from the latest registration.
+        device.HasOutlookCom.Should().BeTrue();
+        device.AppVersion.Should().Be("0.2.6");
+        device.LeaseUntil.Should().NotBeNull();
+    }
+
+    // Re-registration matches the existing name case-insensitively (one machine == one name), so a
+    // trim/casing difference re-keys the same device rather than spawning a duplicate.
+    [Fact]
+    public async Task Register_with_name_match_is_case_insensitive_rekeys_same_device()
+    {
+        var (svc, store) = Build(user: new FixedUser("token-user"));
+
+        var first = await svc.RegisterAsync(new DeviceRegisterRequest(Name: "Workstation"));
+        var second = await svc.RegisterAsync(new DeviceRegisterRequest(Name: "  workstation  "));
+
+        second.DeviceId.Should().Be(first.DeviceId);
+        (await store.ListAsync()).Should().HaveCount(1);
+    }
+
     [Fact]
     public async Task Heartbeat_renews_lease_for_known_device()
     {
