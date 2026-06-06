@@ -752,6 +752,31 @@
 .cal-item.is-readonly { cursor: default; }
 .cal-item.is-muted { opacity: 0.55; }
 
+/* Semantic grouping wrappers for the online source multi-select (role=group / role=list). They
+   exist purely to carry the account→calendars relationship for assistive tech; display:contents
+   keeps the visual grid/flow of .cal-list (and its .cal-item + .cal-item borders) unchanged. */
+.cal-acct-group,
+.cal-readonly-list,
+.cal-acct-group > [role="listitem"] { display: contents; }
+
+/* Inline confirm shown when switching the source to a different account in subset mode — switching
+   would clear the existing selection, so we ask first instead of wiping it silently. */
+.cal-switch-confirm {
+  margin: 6px 4px;
+  padding: 12px;
+  border-left: 3px solid var(--warn);
+}
+.cal-switch-confirm__text {
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+.cal-switch-confirm__actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 10px;
+}
+.cal-switch-confirm__actions .btn { min-width: 92px; }
+
 /* Consolidated identity hint (Signed-in chip + email on one line). */
 .identity-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
 .identity-hint__email { color: var(--ink-2); }
