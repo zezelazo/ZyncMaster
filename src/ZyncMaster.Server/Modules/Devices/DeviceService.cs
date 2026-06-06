@@ -359,6 +359,33 @@ public sealed class DeviceService
         return device;
     }
 
+    // Returns the device with this id (user-scoped through the store), or null when it does not exist
+    // or belongs to another user. Used by the COM-pin surface to resolve the pinned device's display
+    // name and lease for the pair listing / request-sync routing. NO self-heal (unlike GetMeAsync):
+    // this is a read of an arbitrary device of the user, not the caller's own.
+    public async Task<Device?> GetByIdAsync(string deviceId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return null;
+        return await _store.GetAsync(deviceId, ct);
+    }
+
+    // Lists every device of the current user (user-scoped through the store). Used by the pair
+    // listing to resolve the pinned-device name + online flag for all COM-pinned pairs with a single
+    // read rather than one GetById per pair.
+    public Task<IReadOnlyList<Device>> ListForCurrentUserAsync(CancellationToken ct = default)
+        => _store.ListAsync(ct);
+
+    // True when the device identified by deviceId currently holds a live lease (the App is running on
+    // it): the device exists for this user AND LeaseUntil > now. Drives the COM-pin "origin online?"
+    // check for /request-sync and the pair listing's pinnedDeviceOnline. A device with no lease, an
+    // expired lease, an unknown id, or a foreign id all resolve to false (offline).
+    public async Task<bool> IsDeviceOnlineAsync(string deviceId, CancellationToken ct = default)
+    {
+        var device = await GetByIdAsync(deviceId, ct);
+        return device?.LeaseUntil is { } until && until > DateTimeOffset.UtcNow;
+    }
+
     // Builds a unique geek name for a new/nameless device of the current user. Resolves the account
     // identifier (PrimaryEmail / legacy Email / DisplayName / userId) and the set of names already
     // taken by the user's devices, then delegates to the pure DeviceNameGenerator. excludeDeviceId

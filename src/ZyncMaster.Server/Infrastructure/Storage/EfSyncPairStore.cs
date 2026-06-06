@@ -110,6 +110,10 @@ public sealed class EfSyncPairStore : ISyncPairStore
         row.PendingCleanupJson = pair.PendingCleanupDestinations is { Count: > 0 } pend
             ? PairJson.Serialize(pend)
             : null;
+        // COM device-pinning (Track B). Both flow as top-level columns; a normalize-to-null keeps a
+        // blank PinnedDeviceId from masquerading as a real pin.
+        row.PinnedDeviceId = string.IsNullOrWhiteSpace(pair.PinnedDeviceId) ? null : pair.PinnedDeviceId;
+        row.SyncRequestedUtc = pair.SyncRequestedUtc;
     }
 
     private static SyncPair ToDomain(SyncPairRow r) => new()
@@ -125,5 +129,7 @@ public sealed class EfSyncPairStore : ISyncPairStore
         PendingCleanupDestinations = string.IsNullOrEmpty(r.PendingCleanupJson)
             ? new List<Endpoint>()
             : PairJson.Deserialize<List<Endpoint>>(r.PendingCleanupJson),
+        PinnedDeviceId = r.PinnedDeviceId,
+        SyncRequestedUtc = r.SyncRequestedUtc,
     };
 }

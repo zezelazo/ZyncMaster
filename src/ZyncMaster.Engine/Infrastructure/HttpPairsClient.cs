@@ -94,7 +94,7 @@ public sealed class HttpPairsClient : IPairsClient
         };
     }
 
-    public async Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
+    public async Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct, string? pinnedDeviceId = null)
     {
         if (bearer == null) throw new ArgumentNullException(nameof(bearer));
         if (name == null) throw new ArgumentNullException(nameof(name));
@@ -108,6 +108,10 @@ public sealed class HttpPairsClient : IPairsClient
             ["destination"] = EndpointToJson(destination),
             ["intervalMin"] = intervalMin,
         };
+        // Track B — pin the pair to this device up front (COM sources only). The server ignores a pin
+        // on a non-COM pair, so it is safe to send whenever the App knows its deviceId; blank is dropped.
+        if (!string.IsNullOrWhiteSpace(pinnedDeviceId))
+            body["pinnedDeviceId"] = pinnedDeviceId;
 
         var root = await SendBearerAsync(HttpMethod.Post, "/api/pairs", bearer, body, ct) as JObject ?? new JObject();
         return ParsePair(root);
@@ -220,6 +224,22 @@ public sealed class HttpPairsClient : IPairsClient
 
         var root = await SendAsync(HttpMethod.Post, $"/api/pairs/{id}/run", apiKey, new JObject(), ct) as JObject ?? new JObject();
         return ParseMirrorResult(root);
+    }
+
+    public async Task<RequestSyncResult> RequestPairSyncAsync(string bearerOrKey, string id, CancellationToken ct)
+    {
+        if (bearerOrKey == null) throw new ArgumentNullException(nameof(bearerOrKey));
+        if (id == null) throw new ArgumentNullException(nameof(id));
+
+        // The endpoint accepts the device api key (X-Api-Key), which is what the App scheduler holds;
+        // the server also tolerates a cookie/identity bearer. The body is empty — the server reads the
+        // pair + the caller's deviceId (when present) from the request. Returns { status, device }.
+        var root = await SendAsync(HttpMethod.Post, $"/api/pairs/{id}/request-sync", bearerOrKey, new JObject(), ct) as JObject ?? new JObject();
+        return new RequestSyncResult
+        {
+            Status = root["status"]?.Value<string>() ?? "",
+            DeviceName = root["device"]?.Value<string>(),
+        };
     }
 
     public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct)
@@ -360,6 +380,10 @@ public sealed class HttpPairsClient : IPairsClient
         State = obj["state"]?.Value<string>() ?? "",
         LastRunUtc = ParseDateTimeOffset(obj["lastRunUtc"]),
         LastResult = obj["lastResult"] is JObject lr ? ParseMirrorResult(lr) : null,
+        PinnedDeviceId = obj["pinnedDeviceId"]?.Value<string>(),
+        SyncRequestedUtc = ParseDateTimeOffset(obj["syncRequestedUtc"]),
+        PinnedDeviceName = obj["pinnedDeviceName"]?.Value<string>(),
+        PinnedDeviceOnline = obj["pinnedDeviceOnline"]?.Value<bool>() ?? false,
     };
 
     private static DateTimeOffset? ParseDateTimeOffset(JToken? token)

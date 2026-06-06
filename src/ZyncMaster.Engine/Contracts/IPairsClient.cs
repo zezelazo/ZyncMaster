@@ -26,7 +26,11 @@ public interface IPairsClient
     // surface: authenticated with the identity bearer, like the other accounts/pairs calls.
     Task<CalendarInfo> CreateCalendarAsync(string bearer, string accountRef, string name, CancellationToken ct);
 
-    Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct);
+    // pinnedDeviceId (Track B): when the source is OutlookCom, the App passes its own deviceId up
+    // front so the pair is pinned to this machine at creation time and the dashboard shows "Source is
+    // on this PC" immediately, without waiting for the first push to claim it. Null/blank for non-COM
+    // pairs or when the deviceId is not yet known; the server ignores a pin on a non-COM pair.
+    Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct, string? pinnedDeviceId = null);
 
     Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct);
 
@@ -55,6 +59,13 @@ public interface IPairsClient
     Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct);
 
     Task<MirrorResult> RunPairAsync(string apiKey, string id, CancellationToken ct);
+
+    // Asks the server to sync a COM-pinned pair now (POST /api/pairs/{id}/request-sync). Used by the
+    // App's "Sync now" when the caller is NOT the pinned device: instead of reading COM locally (which
+    // would fail or compete), it signals the pinned device to run. Tolerates a human cookie/bearer or
+    // a device api key (RequireCookieOrApiKeyOrIdentityBearer), so the first argument is a bearer-or-key.
+    // Returns the server's status ("requested" / "origin_unavailable" / "local") plus the device name.
+    Task<RequestSyncResult> RequestPairSyncAsync(string bearerOrKey, string id, CancellationToken ct);
 
     // Renews the calling device's lease (POST /api/devices/heartbeat). The App calls this on a
     // PeriodicTimer well inside DeviceLeaseTtlMinutes so the server's cron fallback treats the

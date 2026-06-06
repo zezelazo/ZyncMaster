@@ -466,6 +466,24 @@
 .pair:not(.is-open) .pair__substats { padding-bottom: 14px; }
 .pair.is-open .pair__substats { border-bottom: 1px solid var(--glass-stroke-2); }
 
+/* COM device-pinning note (Track B): where this pair's Outlook source is read.
+   local  → this PC is the origin (azure accent, calm/positive);
+   remote → another device is the origin (muted ink);
+   offline→ that origin device's lease has expired (warn accent). */
+.pair__pin-note {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 14px 12px;
+  font-size: 11px; line-height: 1.3;
+  color: var(--ink-2);
+}
+.pair__pin-note > span { display: inline-flex; align-items: center; }
+.pair__pin-note[data-kind="local"]     { color: var(--azure); }
+.pair__pin-note[data-kind="remote"]    { color: var(--ink-2); }
+.pair__pin-note[data-kind="offline"]   { color: var(--warn); }
+.pair__pin-note[data-kind="unclaimed"] { color: var(--ink-2); }
+.pair__pin-note-sub { color: var(--ink-3); margin-left: 2px; }
+.pair__pin-note[data-kind="offline"] .pair__pin-note-sub { color: var(--warn); opacity: 0.9; }
+
 /* Full route detail inside expanded pair — no ellipsis, full names */
 .pair__route-detail {
   display: grid;

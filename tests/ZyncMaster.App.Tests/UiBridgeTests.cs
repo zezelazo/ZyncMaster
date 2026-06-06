@@ -42,6 +42,8 @@ public class UiBridgeTests
         public string? UpdatePairArg;
         public string? DeletePairArg;
         public string? RunPairNowArg;
+        public string? RequestPairSyncArg;
+        public RequestSyncResult RequestSyncToReturn = new() { Status = "requested", DeviceName = "Studio PC" };
         public string? UnlinkAccountArg;
         public bool? SetAutoStartValue;
 
@@ -202,6 +204,13 @@ public class UiBridgeTests
             if (Throw != null) await Throw();
             RunPairNowArg = id;
             return MirrorToReturn;
+        }
+
+        public async Task<RequestSyncResult> RequestPairSyncAsync(string id, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            RequestPairSyncArg = id;
+            return RequestSyncToReturn;
         }
 
         public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
@@ -732,6 +741,23 @@ public class UiBridgeTests
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
         var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
         payload.GetProperty("created").GetInt32().Should().Be(3);
+    }
+
+    [Fact]
+    public void RequestPairSync_passes_id_and_returns_status_and_device()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("requestPairSync", "a7b", "p1"));
+
+        engine.RequestPairSyncArg.Should().Be("p1");
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("status").GetString().Should().Be("requested");
+        payload.GetProperty("deviceName").GetString().Should().Be("Studio PC");
     }
 
     [Fact]

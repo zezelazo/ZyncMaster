@@ -35,6 +35,18 @@ public sealed class PairScheduler
     // Per-pair next-due time. Pairs absent from the latest ListPairs are dropped.
     private readonly Dictionary<string, DateTimeOffset> _nextRun = new();
 
+    // Track B — the SyncRequestedUtc stamp this device's scheduler has already acted on, per pair.
+    // A pair whose server-side SyncRequestedUtc is newer than the value here is run immediately
+    // (in addition to its due interval); after a run the server clears the stamp on RecordRunAsync,
+    // so the next tick sees null and does not re-run. Pairs absent from the latest list are dropped.
+    private readonly Dictionary<string, DateTimeOffset> _lastHandledRequest = new();
+
+    // Track B — this device's own deviceId, resolved lazily from the device api key (GET
+    // /api/devices/me) and cached. Needed to filter COM-pinned pairs: a device only runs the COM
+    // pairs pinned to itself. Null until first resolved; a resolution failure leaves it null and is
+    // retried next tick (the device simply runs nothing COM-pinned-to-others, which is safe).
+    private string? _deviceId;
+
     public PairScheduler(
         IPairsClient client,
         ICalendarSource comSource,
@@ -103,6 +115,11 @@ public sealed class PairScheduler
             return;
         }
 
+        // Resolve this device's id once (cached) so we can filter COM-pinned pairs to ourselves.
+        // A failure leaves it null: we then skip every COM pair pinned to a non-null other device,
+        // which is the safe default (we never compete for a pair we may not own).
+        await EnsureDeviceIdAsync(apiKey, ct);
+
         var now = _clock.UtcNow;
         var seen = new HashSet<string>();
 
@@ -118,10 +135,44 @@ public sealed class PairScheduler
                 continue;
             }
 
-            if (_nextRun.TryGetValue(pair.Id, out var due) && now < due)
+            // Track B — COM device-pinning filter. A COM-sourced pair may only be read by the device
+            // it is pinned to. Skip any COM pair pinned to a DIFFERENT device. A COM pair with no pin
+            // yet (PinnedDeviceId == null) is claimed on first run by whichever device runs it (the
+            // server stamps the pin on first /push), so it is NOT skipped here. Non-COM pairs are
+            // server-side and unaffected.
+            if (PairRunner.IsOutlookCom(pair)
+                && !string.IsNullOrEmpty(pair.PinnedDeviceId)
+                && !string.Equals(pair.PinnedDeviceId, _deviceId, StringComparison.Ordinal))
+            {
+                // When _deviceId is null (GET /devices/me failed) every COM-pinned pair is skipped
+                // here, including ones pinned to THIS device — so a persistent resolution failure
+                // silently freezes all of this device's COM sync. Surface that at Warning so it is
+                // diagnosable; a genuine pin-to-another-device (id resolved, just not ours) stays Debug.
+                if (string.IsNullOrEmpty(_deviceId))
+                    _logger.Log(LogLevel.Warning, $"Pair '{pair.Id}': skip (COM pinned, but this device's id is unresolved — /devices/me failing?).");
+                else
+                    _logger.Log(LogLevel.Debug, $"Pair '{pair.Id}': skip (COM pinned to another device).");
+                continue;
+            }
+
+            // Track B — sync-now signal. The pinned device runs the pair immediately when the server's
+            // SyncRequestedUtc is newer than the stamp this device last acted on, even if the interval
+            // is not due yet. The server clears the stamp on the recorded run, so this fires once.
+            var signalled = HasFreshSyncRequest(pair);
+
+            if (!signalled && _nextRun.TryGetValue(pair.Id, out var due) && now < due)
             {
                 _logger.Log(LogLevel.Debug, $"Pair '{pair.Id}': skip (not due until {due:o}).");
                 continue;
+            }
+
+            // Record that we are handling this signal stamp so a later tick (before the server clears
+            // it) does not run the pair a second time. The server-side clear is the durable reset;
+            // this in-memory mark covers the window between our run and that clear.
+            if (signalled && pair.SyncRequestedUtc is { } stamp)
+            {
+                _lastHandledRequest[pair.Id] = stamp;
+                _logger.Log(LogLevel.Info, $"Pair '{pair.Id}': sync-now signal observed, running immediately.");
             }
 
             try
@@ -177,6 +228,49 @@ public sealed class PairScheduler
         if (stale != null)
             foreach (var id in stale)
                 _nextRun.Remove(id);
+
+        // Drop sync-now bookkeeping for the same vanished pairs so the dictionary cannot grow
+        // unbounded across deletes/re-creates.
+        List<string>? staleReq = null;
+        foreach (var id in _lastHandledRequest.Keys)
+            if (!seen.Contains(id))
+                (staleReq ??= new List<string>()).Add(id);
+
+        if (staleReq != null)
+            foreach (var id in staleReq)
+                _lastHandledRequest.Remove(id);
+    }
+
+    // Resolves and caches this device's id from the device api key. Best-effort: a failure (server
+    // briefly unreachable, key not yet usable) leaves _deviceId null and is retried next tick.
+    private async Task EnsureDeviceIdAsync(string apiKey, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(_deviceId))
+            return;
+
+        try
+        {
+            var me = await _client.GetDeviceMeAsync(apiKey, ct);
+            if (!string.IsNullOrEmpty(me.DeviceId))
+                _deviceId = me.DeviceId;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Warning, "Scheduler tick: could not resolve this device's id (server unreachable?).", ex);
+        }
+    }
+
+    // True when the pair carries a sync-now stamp this device has NOT yet acted on. A pair with no
+    // stamp, or one whose stamp we already handled (== last handled), returns false.
+    private bool HasFreshSyncRequest(SyncPair pair)
+    {
+        if (pair.SyncRequestedUtc is not { } requested)
+            return false;
+        return !_lastHandledRequest.TryGetValue(pair.Id, out var handled) || requested > handled;
     }
 
     private static bool IsActive(string state)

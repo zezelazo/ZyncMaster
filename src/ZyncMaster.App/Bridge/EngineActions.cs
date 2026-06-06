@@ -53,6 +53,11 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // re-polls, so a short per-attempt budget keeps the "waking up" feedback responsive.
     private static readonly TimeSpan HealthProbeTimeout = TimeSpan.FromSeconds(8);
 
+    // Track B — this device's own deviceId, resolved lazily (GET /api/devices/me) and cached. Used
+    // by "Sync now" to decide whether THIS device is the one pinned to a COM pair (run locally) or
+    // not (signal the pinned device via request-sync). Null until first resolved.
+    private string? _deviceId;
+
     private SyncStatus _status = SyncStatus.Idle;
     private bool _paused;
     private string? _lastMessage;
@@ -276,7 +281,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
             dto.Source?.ToEndpoint() ?? new Endpoint(),
             dto.Destination?.ToEndpoint() ?? new Endpoint(),
             interval,
-            ct);
+            ct,
+            dto.PinnedDeviceId);
     }
 
     public async Task<IReadOnlyList<SyncPair>> ListPairsAsync(CancellationToken ct = default)
@@ -354,8 +360,26 @@ public sealed class EngineActions : IEngineActions, IDisposable
             throw new InvalidOperationException($"Sync pair '{id}' was not found.");
         }
 
+        // Track B — COM device-pinning routing. A COM-sourced pair can only be READ locally on the
+        // device that owns its Outlook. If THIS device is NOT the pinned one, reading COM here would
+        // fail (or compete with the real origin), so the App must NOT run it locally; the UI routes
+        // that case to RequestPairSyncAsync instead. We hard-guard here too so a stray runPairNow on
+        // the wrong device fails clearly rather than silently reading the wrong (or no) Outlook.
+        if (PairRunner.IsOutlookCom(pair) && !string.IsNullOrEmpty(pair.PinnedDeviceId))
+        {
+            var myDeviceId = await ResolveDeviceIdAsync(key, ct);
+            if (!string.Equals(pair.PinnedDeviceId, myDeviceId, StringComparison.Ordinal))
+            {
+                _logger.Log(LogLevel.Warning,
+                    $"Sync now: pair '{id}' is COM-pinned to another device; use request-sync instead of a local run.");
+                throw new InvalidOperationException(
+                    "This calendar's source lives on another device. Use Sync now to ask that device to run it.");
+            }
+        }
+
         // PairRunner is the single source of truth for the COM-vs-Graph decision and the
-        // [now, now + SyncWindowDays] read window, shared with PairScheduler.
+        // [now, now + SyncWindowDays] read window, shared with PairScheduler. For a COM pair this
+        // reads Outlook locally and PUSHES; the push claims the pin on first run (server-side).
         try
         {
             var result = await PairRunner.RunOnceAsync(
@@ -369,6 +393,61 @@ public sealed class EngineActions : IEngineActions, IDisposable
             _logger.Log(LogLevel.Error, $"Sync now: pair '{id}' failed.", ex);
             throw;
         }
+    }
+
+    // Track B — "Sync now" for a COM pair that is NOT pinned to this device. Instead of reading COM
+    // locally (which this device cannot do), it signals the pinned origin device through the server
+    // (POST /api/pairs/{id}/request-sync). Returns the server's status so the UI can announce the
+    // outcome ("requested" → runs on <device>, "origin_unavailable" → that device is offline,
+    // "local" → caller IS the pinned device and should have run locally, "not_com_pinned" → use a
+    // normal run). Authenticated with the device api key, which the endpoint accepts.
+    public async Task<RequestSyncResult> RequestPairSyncAsync(string id, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+
+        var key = await RequireKeyAsync(ct);
+        _logger.Log(LogLevel.Info, $"Request sync: signalling the pinned device for pair '{id}'.");
+
+        try
+        {
+            var result = await _pairs.RequestPairSyncAsync(key, id, ct);
+            _logger.Log(LogLevel.Info, $"Request sync: pair '{id}' -> status '{result.Status}' (device '{result.DeviceName}').");
+            return result;
+        }
+        catch (SyncClientException ex) when (ex.Message.Contains("not_com_pinned", StringComparison.Ordinal))
+        {
+            // The server 409s a non-COM pair (it should be run, not signalled). Surface a stable
+            // status the UI can branch on rather than leaking the raw transport error.
+            _logger.Log(LogLevel.Warning, $"Request sync: pair '{id}' is not COM-pinned; the UI should run it directly.");
+            return new RequestSyncResult { Status = "not_com_pinned" };
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Error, $"Request sync: pair '{id}' failed.", ex);
+            throw;
+        }
+    }
+
+    // Resolves and caches THIS device's id (GET /api/devices/me). Best-effort: a failure returns
+    // null, so the caller treats "unknown id" as "not the pinned device" — the safe default that
+    // routes a COM pair to request-sync rather than a wrong-device local read.
+    private async Task<string?> ResolveDeviceIdAsync(string apiKey, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(_deviceId))
+            return _deviceId;
+
+        try
+        {
+            var me = await _pairs.GetDeviceMeAsync(apiKey, ct);
+            if (!string.IsNullOrEmpty(me.DeviceId))
+                _deviceId = me.DeviceId;
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Warning, "Sync now: could not resolve this device's id.", ex);
+        }
+
+        return _deviceId;
     }
 
     public async Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
@@ -745,6 +824,9 @@ public sealed class EngineActions : IEngineActions, IDisposable
         [Newtonsoft.Json.JsonProperty("source")] public EndpointDto? Source { get; set; }
         [Newtonsoft.Json.JsonProperty("destination")] public EndpointDto? Destination { get; set; }
         [Newtonsoft.Json.JsonProperty("intervalMin")] public int? IntervalMin { get; set; }
+        // Track B — the UI sends its own deviceId here for COM sources so the pair is pinned at
+        // creation. Null for non-COM pairs or when the device id is not yet known.
+        [Newtonsoft.Json.JsonProperty("pinnedDeviceId")] public string? PinnedDeviceId { get; set; }
     }
 
     private sealed class UpdatePairDto

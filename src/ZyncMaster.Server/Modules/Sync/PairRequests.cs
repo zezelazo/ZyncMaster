@@ -8,6 +8,12 @@ public sealed record CreatePairRequest
     public Endpoint? Source { get; init; }
     public Endpoint? Destination { get; init; }
     public int IntervalMin { get; init; }
+
+    // Track B (COM device-pinning). Optional. The App, which creates the pair and knows its own
+    // deviceId (from /api/devices/me), sends this when the pair has a COM side so the pair is pinned
+    // to the creating device up front. Ignored for a pair with no COM side. Left null by a human
+    // createPair (no deviceId); such a pair gets pinned lazily on the first /push (claim-on-first-push).
+    public string? PinnedDeviceId { get; init; }
 }
 
 public sealed record UpdatePairRequest
@@ -76,6 +82,10 @@ public sealed class CreatePairRequestValidator : AbstractValidator<CreatePairReq
     {
         RuleFor(r => r.Name).NotEmpty();
         RuleFor(r => r.IntervalMin).GreaterThanOrEqualTo(1);
+
+        // Track B — a supplied pin must fit the device-id column. Optional, so only validated when set.
+        When(r => r.PinnedDeviceId is not null, () =>
+            RuleFor(r => r.PinnedDeviceId).MaximumLength(64).WithName("pinnedDeviceId"));
 
         RuleFor(r => r.Source).NotNull();
         RuleFor(r => r.Destination).NotNull();

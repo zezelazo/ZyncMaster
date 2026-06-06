@@ -528,4 +528,58 @@ public class DeviceServiceTests
         result.Should().NotBeNull();
         result!.Name.Should().Be("Mine");
     }
+
+    // Track B — IsDeviceOnlineAsync: a live lease (LeaseUntil in the future) means the App is running.
+    [Fact]
+    public async Task IsDeviceOnline_true_when_lease_is_live()
+    {
+        var (svc, store) = Build();
+        await store.AddAsync(new Device
+        {
+            Id = "d1", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Laptop",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+            LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5),
+        });
+
+        (await svc.IsDeviceOnlineAsync("d1")).Should().BeTrue();
+    }
+
+    // Track B — an expired lease (LeaseUntil in the past) means the App is no longer running: offline.
+    [Fact]
+    public async Task IsDeviceOnline_false_when_lease_expired()
+    {
+        var (svc, store) = Build();
+        await store.AddAsync(new Device
+        {
+            Id = "d1", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Laptop",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+            LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1),
+        });
+
+        (await svc.IsDeviceOnlineAsync("d1")).Should().BeFalse();
+    }
+
+    // Track B — a device that never claimed a lease (null) is offline.
+    [Fact]
+    public async Task IsDeviceOnline_false_when_no_lease()
+    {
+        var (svc, store) = Build();
+        await store.AddAsync(new Device
+        {
+            Id = "d1", UserId = DefaultCurrentUserAccessor.DefaultUserId, Name = "Laptop",
+            ApiKeyHash = "h", CreatedUtc = DateTimeOffset.UtcNow,
+        });
+
+        (await svc.IsDeviceOnlineAsync("d1")).Should().BeFalse();
+    }
+
+    // Track B — an unknown / blank device id is offline (never throws).
+    [Fact]
+    public async Task IsDeviceOnline_false_for_unknown_or_blank_id()
+    {
+        var (svc, _) = Build();
+
+        (await svc.IsDeviceOnlineAsync("missing")).Should().BeFalse();
+        (await svc.IsDeviceOnlineAsync("")).Should().BeFalse();
+    }
 }

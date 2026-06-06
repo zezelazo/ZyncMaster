@@ -74,10 +74,20 @@ public class CronSyncRunnerPredicateTests
     }
 
     [Fact]
-    public void Com_source_or_dest_is_com_pinned()
+    public void Com_source_is_com_pinned()
     {
+        // Detection is SOURCE-ONLY (the COM side is always the source; there is no COM writer), and
+        // case-insensitive, matching PairEndpoints.IsComPinnedPair and PairRunner.IsOutlookCom.
         CronSyncRunner.IsComPinned(Row(sourceProvider: "OutlookCom")).Should().BeTrue();
-        CronSyncRunner.IsComPinned(Row(destProvider: "OutlookCom")).Should().BeTrue();
+        CronSyncRunner.IsComPinned(Row(sourceProvider: "outlookcom")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Com_destination_alone_is_not_com_pinned()
+    {
+        // A COM destination (not a real configuration) must NOT make the pair COM-pinned: the cron
+        // would otherwise wrongly skip a Graph-sourced pair that it can run server-side.
+        CronSyncRunner.IsComPinned(Row(destProvider: "OutlookCom")).Should().BeFalse();
     }
 
     [Fact]

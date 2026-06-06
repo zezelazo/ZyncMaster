@@ -124,6 +124,18 @@ public sealed class SyncPairRow
     // for the common case (no pending drains). Additive + nullable so the migration is purely
     // additive and pre-FIX-3 rows keep working unchanged.
     public string? PendingCleanupJson { get; set; }
+
+    // COM device-pinning (Track B). The id of the single device allowed to read this pair's COM
+    // source. Null for non-COM pairs and for COM pairs not yet pinned (claimed on first push). Kept
+    // as a top-level column (not inside SourceJson) so the cron/scheduler can filter on it without
+    // deserializing the endpoint JSON. Additive + nullable so the migration is purely additive.
+    public string? PinnedDeviceId { get; set; }
+
+    // Sync-now signal for a COM-pinned pair (Track B). Stamped with UtcNow by /request-sync when a
+    // caller that is not the pinned device asks to sync now; the pinned device's scheduler runs the
+    // pair on the next tick that sees a newer value, and RecordRunAsync clears it once the run lands.
+    // Null = no pending request. Additive + nullable.
+    public DateTimeOffset? SyncRequestedUtc { get; set; }
 }
 
 // Server-side run lock for a sync pair (plan v2 §B-1). Exactly one row per pair, keyed by

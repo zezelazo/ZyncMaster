@@ -49,6 +49,15 @@ public interface IEngineActions
     Task<ZyncMaster.Engine.CleanupResult> CleanupOldDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default);
     Task<int> CountManagedInDestinationAsync(string pairId, Endpoint oldDestination, CancellationToken ct = default);
     Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default);
+
+    // Track B — "Sync now" for a COM pair pinned to a DIFFERENT device. This device cannot read that
+    // device's Outlook, so instead of a local run it asks the server to signal the pinned origin
+    // device (POST /api/pairs/{id}/request-sync). Returns the server's status so the UI can announce
+    // the outcome: "requested" (the pinned device will run it shortly), "origin_unavailable" (that
+    // device is offline), "local" (the caller IS the pinned device — run locally instead), or
+    // "not_com_pinned" (a non-COM pair — run it directly). The UI decides between this and
+    // RunPairNowAsync by comparing the pair's pinnedDeviceId to the cached local deviceId.
+    Task<ZyncMaster.Engine.RequestSyncResult> RequestPairSyncAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default);
 
     // Auto-registers THIS device against the server using the signed-in identity bearer and

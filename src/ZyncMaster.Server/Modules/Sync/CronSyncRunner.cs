@@ -286,14 +286,15 @@ public sealed class CronSyncRunner
         return row.LastRunUtc.Value.AddMinutes(row.IntervalMin) <= now;
     }
 
-    // A pair is COM-pinned when either side is OutlookCom: there is no Outlook COM server-side, so
-    // it can only sync through the device push path and must be skipped by the server-side cron.
+    // A pair is COM-pinned when its SOURCE is OutlookCom: there is no Outlook COM server-side reader,
+    // so it can only sync through the device push path and must be skipped by the server-side cron. The
+    // COM side is always the source (no COM writer exists; the destination is always Graph). Detection
+    // is shared verbatim with PairEndpoints.IsComPinnedPair and PairRunner.IsOutlookCom — all three use
+    // source-only with OrdinalIgnoreCase and must agree exactly.
     public static bool IsComPinned(SyncPairRow row)
     {
         var source = PairJson.Deserialize<Endpoint>(row.SourceJson);
-        var dest = PairJson.Deserialize<Endpoint>(row.DestinationJson);
-        return string.Equals(source.Provider, ProviderRegistry.OutlookCom, StringComparison.Ordinal)
-            || string.Equals(dest.Provider, ProviderRegistry.OutlookCom, StringComparison.Ordinal);
+        return string.Equals(source.Provider, ProviderRegistry.OutlookCom, StringComparison.OrdinalIgnoreCase);
     }
 
     // Track C gate: a user is gated out of the cron fallback when their effective entitlements have
@@ -329,6 +330,8 @@ public sealed class CronSyncRunner
         State = r.State,
         LastRunUtc = r.LastRunUtc,
         LastResult = r.LastResultJson is null ? null : PairJson.Deserialize<MirrorResult>(r.LastResultJson),
+        PinnedDeviceId = r.PinnedDeviceId,
+        SyncRequestedUtc = r.SyncRequestedUtc,
     };
 }
 

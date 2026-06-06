@@ -95,6 +95,9 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<MirrorResult> RunPairNowAsync(string id, CancellationToken ct = default)
         => throw NotConfigured();
 
+    public Task<RequestSyncResult> RequestPairSyncAsync(string id, CancellationToken ct = default)
+        => throw NotConfigured();
+
     public Task<IReadOnlyList<string>> UnlinkAccountAsync(string accountRef, CancellationToken ct = default)
         => throw NotConfigured();
 

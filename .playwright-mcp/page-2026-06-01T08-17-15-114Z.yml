@@ -1,0 +1,22 @@
+- generic [active] [ref=e1]:
+  - status [ref=e2]
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e7]:
+        - img [ref=e9]
+        - generic [ref=e15]: Zync Master
+      - main [ref=e17]:
+        - generic [ref=e18]:
+          - img [ref=e20]
+          - generic [ref=e26]: Sign in to Zync Master
+          - generic [ref=e27]: Connect your Microsoft account to manage your calendar sync pairs from the web panel.
+          - button "Sign in with Microsoft" [ref=e28] [cursor=pointer]:
+            - generic:
+              - img
+            - generic [ref=e29]: Sign in with Microsoft
+      - generic [ref=e30]:
+        - generic [ref=e31]:
+          - img [ref=e34]
+          - generic [ref=e40]: Zync Master
+          - generic [ref=e41]: Mirror your calendars, quietly.
+        - generic [ref=e45]: v1.0.0

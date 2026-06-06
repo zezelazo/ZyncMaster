@@ -282,19 +282,37 @@ public static class PairEndpoints
                 IntervalMin = intervalMin,
                 State = "active",
             };
+
+            // Track B — pin the pair to the creating device when it has a COM side and the caller
+            // supplied its deviceId. A pin on a non-COM pair is ignored (there is no COM source to
+            // own); a blank pin is normalized to null. A COM pair created without a pin is claimed on
+            // its first /push instead (claim-on-first-push), so back-compat is preserved either way.
+            if (IsComPinnedPair(pair) && !string.IsNullOrWhiteSpace(req.PinnedDeviceId))
+                pair = pair with { PinnedDeviceId = req.PinnedDeviceId };
+
             await store.AddAsync(pair);
             return Results.Ok(pair);
         }).RequireCookieOrIdentityBearer();
 
-        app.MapGet("/api/pairs", async (ISyncPairStore store) =>
-            Results.Ok(await store.ListAsync())).RequireCookieOrIdentityBearer();
+        app.MapGet("/api/pairs", async (ISyncPairStore store, DeviceService devices, CancellationToken ct) =>
+        {
+            var pairs = await store.ListAsync(ct);
+            // Resolve the pinned-device name + online flag for COM-pinned pairs with ONE device list
+            // read (not one per pair). Both stores are user-scoped, so only the caller's devices are
+            // visible — a pin to a device the caller cannot see resolves to "unknown / offline".
+            var deviceMap = await BuildDeviceMapAsync(pairs, devices, ct);
+            return Results.Ok(pairs.Select(p => EnrichPair(p, deviceMap)).ToList());
+        }).RequireCookieOrIdentityBearer();
 
-        app.MapGet("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
+        app.MapGet("/api/pairs/{id}", async (string id, ISyncPairStore store, DeviceService devices, CancellationToken ct) =>
         {
             // The store filters by current user, so a pair owned by another user (or absent)
             // resolves to null -> 404. Never 403: don't reveal that the id exists elsewhere.
             var pair = await store.GetAsync(id, ct);
-            return pair is null ? Results.NotFound() : Results.Ok(pair);
+            if (pair is null)
+                return Results.NotFound();
+            var deviceMap = await BuildDeviceMapAsync(new[] { pair }, devices, ct);
+            return Results.Ok(EnrichPair(pair, deviceMap));
         }).RequireCookieOrIdentityBearer();
 
         app.MapPatch("/api/pairs/{id}", async (
@@ -639,6 +657,37 @@ public static class PairEndpoints
             if (!string.IsNullOrWhiteSpace(deviceId))
                 await devices.HeartbeatAsync(deviceId, ct).ConfigureAwait(false);
 
+            // Track B (claim-on-first-push) — a COM-pinned pair that has no pinned device yet (created
+            // before COM-pinning existed, or by a human createPair with no deviceId) is claimed by the
+            // FIRST device that pushes it. This makes pre-existing COM pairs converge onto a single
+            // owning device without a migration backfill: the device actually reading that Outlook is
+            // the one pushing, so it is the correct pin. Idempotent — once pinned, a different device's
+            // push leaves the pin untouched here (the run-lock + ordering still serialize the mirror;
+            // re-pinning would be a deliberate UI action, not a side effect of a push).
+            if (string.IsNullOrWhiteSpace(pair.PinnedDeviceId)
+                && !string.IsNullOrWhiteSpace(deviceId)
+                && IsComPinnedPair(pair))
+            {
+                pair = pair with { PinnedDeviceId = deviceId };
+                await store.UpdateAsync(pair, ct).ConfigureAwait(false);
+            }
+
+            // Track B — reject a destructive mirror from the WRONG device. Once a COM-pinned pair has
+            // an owning device, only that device may push it: a push from any other device would mirror
+            // that device's Outlook view onto the destination, clobbering the owner's events. Reject
+            // with 409 pinned_to_other_device BEFORE the run-lock and the mirror so nothing is mutated.
+            // A blank pin is the claim-on-first-push case handled above and is intentionally allowed.
+            if (IsComPinnedPair(pair)
+                && !string.IsNullOrWhiteSpace(pair.PinnedDeviceId)
+                && !string.Equals(pair.PinnedDeviceId, deviceId, StringComparison.Ordinal))
+            {
+                return Results.Conflict(new
+                {
+                    error = "pinned_to_other_device",
+                    message = "This pair's Outlook source is pinned to a different device; it can only be pushed from there.",
+                });
+            }
+
             // §B-1 — acquire the per-pair run lock INSIDE the endpoint before the destructive
             // mirror. If another executor (manual run, overlapping tick) holds it, skip with
             // 409 instead of running a second concurrent sweep against the same calendar.
@@ -667,6 +716,69 @@ public static class PairEndpoints
 
             await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
             return Results.Ok(result);
+        }).RequireCookieOrApiKeyOrIdentityBearer();
+
+        // Track B — sync-now signal for a COM-pinned pair. A pair whose source is read via Outlook COM
+        // can only sync on the ONE device that owns that Outlook (its pinnedDeviceId). When a caller
+        // that is NOT that device asks to sync now, the server stamps SyncRequestedUtc; the pinned
+        // device's scheduler sees the newer value and runs the pair on its next tick. Auth mirrors
+        // /push (cookie OR api-key OR identity-bearer) so it serves both a human in the panel and a
+        // second device. Outcomes:
+        //   404                       — pair not the caller's (user-scoped store).
+        //   409 not_com_pinned        — the pair has no COM side; sync it directly via /run instead.
+        //   200 {status:"local"}      — the CALLER is the pinned device; it should run locally, not
+        //                               request a signal (the App routes this case to a local run).
+        //   200 {status:"origin_unavailable", device} — the pinned device's lease is dead (App not
+        //                               running), so nothing can pick up the signal right now.
+        //   200 {status:"requested", device}          — signal stamped; the pinned device will run it.
+        app.MapPost("/api/pairs/{id}/request-sync", async (
+            string id,
+            HttpContext http,
+            ISyncPairStore store,
+            DeviceService devices,
+            CancellationToken ct) =>
+        {
+            var pair = await store.GetAsync(id, ct);
+            if (pair is null)
+                return Results.NotFound();
+
+            // Only COM-pinned pairs use the signal path. A Graph<->Graph pair has a server reader and
+            // is run directly via /run, so asking it to "request sync" is a client error (409), not a
+            // silent no-op that would confuse the caller into thinking a run was queued.
+            if (!IsComPinnedPair(pair))
+                return Results.Conflict(new
+                {
+                    error = "not_com_pinned",
+                    message = "This pair has no Outlook COM side; run it directly instead of requesting a device sync.",
+                });
+
+            // A COM pair with no pin yet has no device to signal. Treat it as origin-unavailable so the
+            // UI shows the same "can't reach the origin device" state rather than a misleading success;
+            // the first push from the owning device will claim the pin (claim-on-first-push).
+            if (string.IsNullOrWhiteSpace(pair.PinnedDeviceId))
+                return Results.Ok(new { status = "origin_unavailable", device = (string?)null });
+
+            var pinnedDevice = await devices.GetByIdAsync(pair.PinnedDeviceId!, ct);
+            var deviceName = pinnedDevice?.Name;
+
+            // The caller IS the pinned device (an api-key push principal carries its deviceId). It must
+            // run the pair LOCALLY rather than stamping a signal it would then service itself, so report
+            // "local" and let the App run in place.
+            var callerDeviceId = http.User.FindFirst("deviceId")?.Value;
+            if (!string.IsNullOrWhiteSpace(callerDeviceId)
+                && string.Equals(callerDeviceId, pair.PinnedDeviceId, StringComparison.Ordinal))
+                return Results.Ok(new { status = "local", device = deviceName });
+
+            // Origin must be online (live lease) to pick the signal up. A dead lease means the App is
+            // not running on the pinned device, so we report origin_unavailable instead of stamping a
+            // signal nobody will service.
+            if (!await devices.IsDeviceOnlineAsync(pair.PinnedDeviceId!, ct))
+                return Results.Ok(new { status = "origin_unavailable", device = deviceName });
+
+            // Stamp the signal. No run-lock needed: this only advances SyncRequestedUtc; a concurrent
+            // run merely clears or re-stamps it, neither of which is destructive.
+            await store.UpdateAsync(pair with { SyncRequestedUtc = DateTimeOffset.UtcNow }, ct);
+            return Results.Ok(new { status = "requested", device = deviceName });
         }).RequireCookieOrApiKeyOrIdentityBearer();
 
         app.MapPost("/api/pairs/{id}/run", async (
@@ -793,6 +905,15 @@ public static class PairEndpoints
     // Endpoint identity for the §F2 "did this side change?" check: a change to the provider,
     // account or calendar id means a different reconciliation set, so the run counters reset.
     // CalendarName is a display label only and is intentionally NOT compared.
+    // True when the pair's SOURCE is an OutlookCom (COM) endpoint, so the pair can only sync through
+    // a device's /push and is the one a pinnedDeviceId applies to. In practice the COM side is ALWAYS
+    // the source: there is no COM writer (the destination is always Graph), so a destination can never
+    // be OutlookCom. The detection rule is shared verbatim across the three executors — this method,
+    // CronSyncRunner.IsComPinned (raw row) and PairRunner.IsOutlookCom (engine) — and ALL THREE use
+    // source-only with OrdinalIgnoreCase. They must agree exactly or a pair could be run by two paths.
+    internal static bool IsComPinnedPair(SyncPair pair) =>
+        string.Equals(pair.Source.Provider, ProviderRegistry.OutlookCom, StringComparison.OrdinalIgnoreCase);
+
     private static bool EndpointsEqual(Endpoint a, Endpoint b) =>
         string.Equals(a.Provider, b.Provider, StringComparison.Ordinal)
         && string.Equals(a.AccountRef ?? "", b.AccountRef ?? "", StringComparison.Ordinal)
@@ -979,12 +1100,85 @@ public static class PairEndpoints
             Failures = new List<string> { $"Source read failed (transient): {ex.Message}" },
         };
 
+    // Track B — resolve, with a SINGLE device-list read, the name + online flag of every device a
+    // COM-pinned pair is pinned to. Returns an empty map when no pair carries a pin, so the common
+    // all-Graph case does not even touch the device store. Both stores are user-scoped, so a pin that
+    // points at a device the caller cannot see simply has no entry (treated as unknown / offline).
+    private static async Task<IReadOnlyDictionary<string, (string Name, bool Online)>> BuildDeviceMapAsync(
+        IReadOnlyCollection<SyncPair> pairs, DeviceService devices, CancellationToken ct)
+    {
+        var pinnedIds = pairs
+            .Where(p => !string.IsNullOrWhiteSpace(p.PinnedDeviceId))
+            .Select(p => p.PinnedDeviceId!)
+            .ToHashSet(StringComparer.Ordinal);
+        if (pinnedIds.Count == 0)
+            return new Dictionary<string, (string, bool)>(StringComparer.Ordinal);
+
+        var now = DateTimeOffset.UtcNow;
+        var all = await devices.ListForCurrentUserAsync(ct).ConfigureAwait(false);
+        return all
+            .Where(d => pinnedIds.Contains(d.Id))
+            .ToDictionary(
+                d => d.Id,
+                d => (d.Name, d.LeaseUntil is { } until && until > now),
+                StringComparer.Ordinal);
+    }
+
+    // Track B — projection that carries the pair plus its COM-pin resolution for the UI. For a
+    // non-COM-pinned pair (no PinnedDeviceId) the three pinned* fields are null/false but still
+    // present so the UI shape is stable. The pair's own fields (Id, Name, Source, ...) are spread by
+    // serializing the record alongside the resolved device fields.
+    private static object EnrichPair(
+        SyncPair pair, IReadOnlyDictionary<string, (string Name, bool Online)> deviceMap)
+    {
+        string? pinnedName = null;
+        var pinnedOnline = false;
+        if (!string.IsNullOrWhiteSpace(pair.PinnedDeviceId)
+            && deviceMap.TryGetValue(pair.PinnedDeviceId!, out var info))
+        {
+            pinnedName = info.Name;
+            pinnedOnline = info.Online;
+        }
+
+        return new
+        {
+            pair.Id,
+            pair.Name,
+            pair.Source,
+            pair.Destination,
+            pair.IntervalMin,
+            pair.State,
+            pair.LastRunUtc,
+            pair.LastResult,
+            pair.PendingCleanupDestinations,
+            pair.PinnedDeviceId,
+            pair.SyncRequestedUtc,
+            pinnedDeviceName = pinnedName,
+            pinnedDeviceOnline = pinnedOnline,
+        };
+    }
+
     private static Task RecordRunAsync(ISyncPairStore store, SyncPair pair, MirrorResult result, CancellationToken ct)
     {
+        var now = DateTimeOffset.UtcNow;
+        // Track B — a recorded run at/after a pending sync-now request satisfies that request, so the
+        // signal is cleared here (no extra ack endpoint). Idempotent: a later run with no pending
+        // signal leaves it null. This is the device-pinned run consuming the signal that /request-sync
+        // stamped, so the scheduler does not re-trigger the same request forever.
+        //
+        // Lost-update note: `pair` is the snapshot read at the START of this run. If /request-sync
+        // re-stamps a NEWER SyncRequestedUtc while the run is in flight, this clear (now >= requested)
+        // would still erase that newer signal, dropping one requested sync. We accept that: the
+        // contract is "at most one run per request window", and the scheduler's _lastHandledRequest
+        // already coalesces multiple stamps observed in the same window into a single run. A request
+        // that arrives mid-run is functionally indistinguishable from one coalesced into the run that
+        // is already executing, so no user-visible sync is lost — the in-flight run covers it.
+        var clearSignal = pair.SyncRequestedUtc is { } requested && now >= requested;
         var updated = pair with
         {
-            LastRunUtc = DateTimeOffset.UtcNow,
+            LastRunUtc = now,
             LastResult = result,
+            SyncRequestedUtc = clearSignal ? null : pair.SyncRequestedUtc,
         };
         return store.UpdateAsync(updated, ct);
     }

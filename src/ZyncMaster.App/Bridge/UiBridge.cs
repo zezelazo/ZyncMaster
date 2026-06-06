@@ -186,6 +186,14 @@ public sealed class UiBridge
                 var result = await _engine.RunPairNowAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(result, JsonOptions);
             }
+            case "requestPairSync":
+            {
+                // Track B — COM pair pinned to ANOTHER device: signal that device to run instead of
+                // reading COM locally. Returns { status, deviceName } so the UI can announce the
+                // outcome ("requested" / "origin_unavailable" / "local" / "not_com_pinned").
+                var result = await _engine.RequestPairSyncAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(result, JsonOptions);
+            }
             case "unlinkAccount":
             {
                 var affected = await _engine.UnlinkAccountAsync(UnwrapString(message.Payload), ct);

@@ -79,6 +79,10 @@ public static class PairRunner
         return (from, from.AddDays(windowDays));
     }
 
+    // COM detection — the COM side is ALWAYS the source (there is no COM writer; the destination is
+    // always Graph). This rule is shared verbatim with the server's PairEndpoints.IsComPinnedPair and
+    // CronSyncRunner.IsComPinned: all three use source-only with OrdinalIgnoreCase and must agree
+    // exactly, or a pair could be picked up by both the device push path and the server-side cron.
     public static bool IsOutlookCom(SyncPair pair)
         => pair != null
            && string.Equals(pair.Source.Provider, OutlookComProvider, StringComparison.OrdinalIgnoreCase);

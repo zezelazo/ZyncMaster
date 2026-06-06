@@ -40,7 +40,7 @@ public sealed class DeviceHeartbeatLoopTests
         public Task<IReadOnlyList<AccountInfo>> ListAccountsAsync(string bearer, CancellationToken ct) => throw new NotImplementedException();
         public Task<IReadOnlyList<CalendarInfo>> ListCalendarsAsync(string bearer, string accountRef, CancellationToken ct) => throw new NotImplementedException();
         public Task<CalendarInfo> CreateCalendarAsync(string bearer, string accountRef, string name, CancellationToken ct) => throw new NotImplementedException();
-        public Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct) => throw new NotImplementedException();
+        public Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct, string? pinnedDeviceId = null) => throw new NotImplementedException();
         public Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct) => throw new NotImplementedException();
         public Task<SyncPair> UpdatePairAsync(string bearer, string id, string? name, int? intervalMin, string? state, CancellationToken ct, Endpoint? source = null, Endpoint? destination = null) => throw new NotImplementedException();
         public Task<string> ExportSourceTxtAsync(string bearer, string id, int year, int month, bool includeCancelled, CancellationToken ct) => throw new NotImplementedException();
@@ -50,6 +50,7 @@ public sealed class DeviceHeartbeatLoopTests
         public Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct) => throw new NotImplementedException();
         public Task<MirrorResult> PushPairAsync(string apiKey, string id, IReadOnlyList<AppointmentRecord> events, CancellationToken ct) => throw new NotImplementedException();
         public Task<MirrorResult> RunPairAsync(string apiKey, string id, CancellationToken ct) => throw new NotImplementedException();
+        public Task<RequestSyncResult> RequestPairSyncAsync(string bearerOrKey, string id, CancellationToken ct) => throw new NotImplementedException();
         public Task<DeviceRegistration> RegisterDeviceAsync(string bearer, string deviceName, CancellationToken ct) => throw new NotImplementedException();
         public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct) => throw new NotImplementedException();
         public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct) => throw new NotImplementedException();

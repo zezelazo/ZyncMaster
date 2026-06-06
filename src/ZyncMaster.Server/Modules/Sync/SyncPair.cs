@@ -39,6 +39,22 @@ public sealed record SyncPair
     public DateTimeOffset? LastRunUtc { get; init; }
     public MirrorResult? LastResult { get; init; }
 
+    // COM device-pinning (Track B). When the pair has an OutlookCom side, exactly ONE desktop device
+    // can read that Outlook via COM, so the pair is pinned to that device's id. Null means "not pinned
+    // yet" — set on create (the App passes its own deviceId) or lazily claimed on the FIRST /push by
+    // the pushing device. A pair with no COM side leaves this null. Persisted as a top-level column on
+    // SyncPairRow (not inside the endpoint JSON) so the cron/scheduler can read it without
+    // deserializing, and emitted as `pinnedDeviceId` on the pair responses so the Engine/UI can route
+    // "Sync now" to the right device.
+    public string? PinnedDeviceId { get; init; }
+
+    // Sync-now signal for a COM-pinned pair (Track B). When a caller that is NOT the pinned device
+    // asks to sync the pair now, the server stamps this with UtcNow; the pinned device's scheduler
+    // sees a value newer than what it last handled and runs the pair immediately (in addition to the
+    // due interval). It is cleared by RecordRunAsync once a run with LastRunUtc >= SyncRequestedUtc
+    // lands, so the signal is naturally one-shot and idempotent. Null = no pending request.
+    public DateTimeOffset? SyncRequestedUtc { get; init; }
+
     // Destinations this pair previously wrote to and must still clean up (FIX 3). When a pair is
     // re-targeted (PATCH changes Destination), the OLD destination still holds the events this
     // pair created (CalImportPairId == pair.Id). The opt-in /cleanup-destination call is the

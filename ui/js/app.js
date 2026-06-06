@@ -278,8 +278,8 @@ if (mql && mql.addEventListener) {
 // ---------------- App state ----------------
 // Product version shown in About + the Settings "About" row. Hardcoded because the web UI has
 // no channel to read the host's .NET assembly version; keep it in step with the published
-// release (currently 0.2.5, beta).
-const VERSION = '0.2.5';
+// release (currently 0.2.6, beta).
+const VERSION = '0.2.6';
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -548,6 +548,23 @@ function ensureDeviceRegistered() {
   Bridge.call('ensureDevice').catch(() => {});
 }
 
+// Track B — lazy-load THIS device's record (id + name) once into live.device, the SAME cache the
+// Settings hub fills. Used by the calendar dashboard to resolve COM-pinned pairs as local vs remote.
+// Guarded by the existing live.deviceLoading flag so it never races ensureConfigData. On success it
+// triggers a soft repaint so the pin badge appears without waiting for the next user interaction.
+function ensureLocalDevice() {
+  if (!Bridge.available) return;
+  if (live.device !== null || live.deviceLoading) return;
+  live.deviceLoading = true;
+  Bridge.call('getDevice')
+    .then((d) => { live.device = d || {}; if (d && d.name) settings.deviceName = d.name; })
+    .catch(() => { live.device = {}; })
+    .finally(() => {
+      live.deviceLoading = false;
+      if (state.view === 'calendar') softRepaint();
+    });
+}
+
 // User-driven Retry from the error screen: reset the budget and probe again.
 function retryServerHealth() {
   clearHealthPoll();
@@ -566,6 +583,10 @@ async function loadPairs() {
     const list = await Bridge.call('listPairs');
     live.pairs = Array.isArray(list) ? list : [];
     live.loadedPairs = true;
+    // Track B — the dashboard needs THIS device's id to tell "Source is on this PC" from "Runs on
+    // <device>" for COM-pinned pairs. Lazy-load it once alongside the pairs (the Settings hub also
+    // loads it, but the calendar view renders first), best-effort; a failure just hides the badge.
+    ensureLocalDevice();
     return live.pairs;
   } catch (_) {
     live.pairs = live.pairs || [];
@@ -652,6 +673,31 @@ function pairViewModel(p) {
       ].filter(Boolean)
     : [];
   const total = lr ? (lr.created + lr.updated + lr.deleted + lr.skipped) : 0;
+
+  // Track B — COM device-pinning. A pair whose SOURCE is OutlookCom is read on exactly one device
+  // (the pinned origin). myDeviceId is this device's id (live.device, lazy-loaded). We classify the
+  // pair as:
+  //   comLocal    — this device IS the pinned origin (or the pin is not set yet AND this device can
+  //                 read COM): "Sync now" runs locally as before.
+  //   comRemote   — the source lives on another device: "Sync now" signals that device instead.
+  //   comOffline  — comRemote AND the server reports the pinned device's lease as expired.
+  //   comUnclaimed— the pin is not set yet AND this device CANNOT read COM (no Outlook here): there is
+  //                 no origin device for this pair yet, so we must NOT claim "Source is on this PC" and
+  //                 must not offer a local run (it would fail). Neutral "no source device yet" state.
+  const srcCom = ((p.source && p.source.provider) || '').toLowerCase() === 'outlookcom';
+  const myDeviceId = (live.device && live.device.deviceId) || '';
+  const pinnedDeviceId = p.pinnedDeviceId || '';
+  // A null-pin COM pair only counts as "local" when THIS device can actually read Outlook COM. On a
+  // device without COM (e.g. the web panel, or a machine with no Outlook) an unpinned pair has no
+  // origin yet — claiming it as local would offer a local run that immediately fails.
+  const comLocal = srcCom && (
+    (myDeviceId && pinnedDeviceId === myDeviceId)
+    || (!pinnedDeviceId && comAvailable())
+  );
+  const comRemote = srcCom && !!pinnedDeviceId && (!myDeviceId || pinnedDeviceId !== myDeviceId);
+  const comOffline = comRemote && p.pinnedDeviceOnline === false;
+  const comUnclaimed = srcCom && !pinnedDeviceId && !comAvailable();
+
   return {
     id: p.id,
     name: p.name,
@@ -664,6 +710,15 @@ function pairViewModel(p) {
     total,
     eventCount: total,
     events,
+    // COM device-pinning (Track B).
+    srcCom,
+    comLocal,
+    comRemote,
+    comOffline,
+    comUnclaimed,
+    pinnedDeviceId,
+    pinnedDeviceName: p.pinnedDeviceName || '',
+    pinnedDeviceOnline: p.pinnedDeviceOnline === true,
   };
 }
 
@@ -887,7 +942,40 @@ function pairAccordion(pair) {
 
   const substat = (lab, val) => el('span', null,
     el('span', { class: 'route__stat-label', text: lab }), el('span', { class: 'route__stat-val num', text: String(val) }));
-  const syncBtn = el('button', { class: 'pair__sync-btn', disabled: isOffline, onclick: (e) => { e.stopPropagation(); (Bridge.available && pair.id) ? runPairNow(pair.id) : runSync(); } },
+
+  // Track B — COM device-pinning. The "Sync now" button is disabled when:
+  //   comOffline   — the pair reads Outlook on ANOTHER device whose lease has expired (a local run /
+  //                  request-sync would be a no-op);
+  //   comUnclaimed — the source is COM but no device has claimed it yet AND this device cannot read
+  //                  COM, so there is no origin to run it (a local run would fail immediately).
+  // Otherwise the click routes either to a local run (this PC is the origin) or to a request-sync
+  // signal (the origin runs it).
+  const comBlocked = pair.comOffline || pair.comUnclaimed;
+  // a11y — a disabled button is not focusable and its `title` is not announced by screen readers, so
+  // carry the disabled reason in aria-label and point aria-describedby at the pin-note element below.
+  const pinNoteId = pair.id ? `pin-note-${pair.id}` : null;
+  const disabledReason = isOffline
+    ? 'Sync now unavailable — the app is offline'
+    : pair.comOffline
+      ? `Sync now unavailable — origin device ${pair.pinnedDeviceName || 'is'} is offline`
+      : pair.comUnclaimed
+        ? 'Sync now unavailable — no source device has claimed this sync yet'
+        : '';
+  const syncBtnAttrs = {
+    class: 'pair__sync-btn',
+    disabled: isOffline || comBlocked,
+    title: disabledReason,
+    onclick: (e) => {
+      e.stopPropagation();
+      if (!Bridge.available || !pair.id) { runSync(); return; }
+      if (pair.comRemote) syncPairRemote(pair); else runPairNow(pair.id);
+    },
+  };
+  if (disabledReason) {
+    syncBtnAttrs['aria-label'] = disabledReason;
+    if (pinNoteId) syncBtnAttrs['aria-describedby'] = pinNoteId;
+  }
+  const syncBtn = el('button', syncBtnAttrs,
     isSyncing ? el('span', { class: 'spinner', style: 'width:12px;height:12px;border-width:1.6px' }) : el('span', { style: 'display:inline-flex', html: icon('sync', { size: 12, stroke: 1.8 }) }),
     el('span', { class: 'num', text: isSyncing ? `${progress.done}/${progress.total}` : 'Sync now' }),
   );
@@ -898,6 +986,32 @@ function pairAccordion(pair) {
       el('span', { class: 'route__stat-val', text: isSyncing ? 'Syncing…' : isError ? 'Failed' : isOffline ? 'Offline' : 'Connected' })),
     syncBtn,
   ));
+
+  // Track B — COM device-pinning note. Tells the user WHERE this pair's Outlook source is read:
+  //   local     → "Source is on this PC" (this device runs it);
+  //   remote    → "Runs on <device>" (another device is the origin), with an "origin offline" hint
+  //               when that device's lease has expired so the signal cannot be picked up right now;
+  //   unclaimed → neutral "No source device yet" — the source is COM but no device has claimed it and
+  //               this device cannot read COM, so we do NOT assert it runs here.
+  if (pair.srcCom && (pair.comLocal || pair.comRemote || pair.comUnclaimed)) {
+    const kind = pair.comLocal ? 'local' : pair.comUnclaimed ? 'unclaimed' : (pair.comOffline ? 'offline' : 'remote');
+    const pinNoteOpts = { class: 'pair__pin-note', dataset: { kind } };
+    if (pinNoteId) pinNoteOpts.id = pinNoteId;
+    const pinNote = el('div', pinNoteOpts);
+    const noteIcon = pair.comLocal ? 'check' : pair.comUnclaimed ? 'pin' : 'sync';
+    pinNote.append(el('span', { style: 'display:inline-flex', html: icon(noteIcon, { size: 12, stroke: 1.8 }) }));
+    if (pair.comLocal) {
+      pinNote.append(el('span', { text: 'Source is on this PC' }));
+    } else if (pair.comUnclaimed) {
+      pinNote.append(el('span', { text: 'No source device yet' }));
+      pinNote.append(el('span', { class: 'pair__pin-note-sub', text: '· open the app where Outlook is installed' }));
+    } else {
+      const who = pair.pinnedDeviceName || 'another device';
+      pinNote.append(el('span', { text: `Runs on ${who}` }));
+      if (pair.comOffline) pinNote.append(el('span', { class: 'pair__pin-note-sub', text: '· origin offline' }));
+    }
+    card.append(pinNote);
+  }
 
   if (open) {
     const body = el('div', { class: 'pair__body' });
@@ -1598,6 +1712,12 @@ function renderAddPairLive(root) {
     // "All calendars" (default) or an explicit subset. The destination (step 1) stays single.
     if (a.sourceKind === 'com') {
       root.append(comSourceMultiSelect());
+      // Track B — tell the user up front that a COM source is read on THIS machine, mirroring the
+      // dashboard pin-note. The pair will be pinned to this device (completeAddPairLive sends our
+      // deviceId), so it can only sync while this computer's app is running.
+      root.append(el('div', { class: 'pair__pin-note', dataset: { kind: 'local' } },
+        el('span', { style: 'display:inline-flex', html: icon('check', { size: 12, stroke: 1.8 }) }),
+        el('span', { text: 'This sync will run on this computer (where Outlook is installed).' })));
     } else if (a.sourceKind === 'online') {
       root.append(onlineSourceMultiSelect());
     }
@@ -1835,9 +1955,18 @@ function completeAddPairLive() {
   a.submitError = null;
   if (state.view === 'add-pair') rerender();
 
+  // Track B — pin a COM source to THIS device up front, using the deviceId cached by ensureLocalDevice.
+  // The server pins the pair at creation so the dashboard shows "Source is on this PC" immediately
+  // instead of waiting for the first push to claim it. Only for create (edit keeps its existing pin)
+  // and only when the source is COM and we actually know our deviceId; otherwise omit it (the server
+  // ignores a pin on a non-COM pair, and claim-on-first-push remains the safety net).
+  const createPayload = { name: a.name, source, destination, intervalMin: a.intervalMin };
+  if (a.sourceKind === 'com' && live.device && live.device.deviceId)
+    createPayload.pinnedDeviceId = live.device.deviceId;
+
   const call = a.editId
     ? Bridge.call('updatePair', JSON.stringify({ id: a.editId, name: a.name, intervalMin: a.intervalMin, source, destination }))
-    : Bridge.call('createPair', JSON.stringify({ name: a.name, source, destination, intervalMin: a.intervalMin }));
+    : Bridge.call('createPair', JSON.stringify(createPayload));
 
   const finish = () => loadPairs().then(() => { resetAddPairLive(); navigate('calendar'); });
 
@@ -2684,8 +2813,8 @@ function renderAbout(root) {
     el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
     el('div', { class: 'about-name', text: 'Zync Master' }),
     // Version is hardcoded: the web UI has no channel to read the .NET assembly version of the
-    // host. Keep this in step with the published release (currently 0.2.5, beta). No build number.
-    el('div', { class: 'about-version num', text: 'VERSION 0.2.5 · BETA' }),
+    // host. Keep this in step with the published release (currently 0.2.6, beta). No build number.
+    el('div', { class: 'about-version num', text: 'VERSION 0.2.6 · BETA' }),
     el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
     links,
   ));
@@ -2809,6 +2938,43 @@ function runPairNow(id) {
     .then(() => loadPairs())
     .then(() => { if (state.view === 'calendar') rerenderInPlace(); })
     .catch(() => { announce('Sync failed.'); });
+}
+
+// Track B — "Sync now" for a COM pair whose Outlook source lives on ANOTHER device. This device
+// cannot read that Outlook, so it asks the server to signal the pinned origin device, which runs the
+// pair on its next scheduler tick. The reply status drives clear, non-silent feedback:
+//   requested          → the origin will run it shortly ("Requested — runs on <device>");
+//   origin_unavailable → the origin device is offline (its App is not running);
+//   local              → the caller actually IS the origin (should not happen on this branch) — run
+//                        locally as a fallback so the click is never a no-op;
+//   not_com_pinned     → not a COM pair after all — run it directly.
+function syncPairRemote(pair) {
+  if (!Bridge.available || !pair || !pair.id) return;
+  const who = pair.pinnedDeviceName || 'another device';
+  announce(`Asking ${who} to sync…`);
+  Bridge.call('requestPairSync', pair.id)
+    .then((res) => {
+      const status = (res && res.status) || '';
+      const device = (res && res.deviceName) || who;
+      if (status === 'requested') {
+        announce(`Requested — will run on ${device}.`);
+      } else if (status === 'origin_unavailable') {
+        announce(`Origin device ${device} is not available (it is offline).`);
+      } else if (status === 'local') {
+        // The server says THIS device is the origin after all — run it locally so the click works.
+        runPairNow(pair.id);
+        return;
+      } else if (status === 'not_com_pinned') {
+        runPairNow(pair.id);
+        return;
+      } else {
+        // Unknown / unexpected status — do NOT claim success (it might be a no-op). Report a neutral,
+        // honest outcome so the user is not misled into thinking the origin definitely got the signal.
+        announce('Could not confirm the request to the origin device.');
+      }
+      return loadPairs().then(() => { if (state.view === 'calendar') rerenderInPlace(); });
+    })
+    .catch(() => { announce('Could not request a sync from the origin device.'); });
 }
 function setPairState(id, newState) {
   if (!Bridge.available || !id) return;

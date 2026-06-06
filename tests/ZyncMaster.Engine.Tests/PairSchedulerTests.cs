@@ -68,7 +68,7 @@ public sealed class PairSchedulerTests
             => Task.FromResult((IReadOnlyList<CalendarInfo>)Array.Empty<CalendarInfo>());
         public Task<CalendarInfo> CreateCalendarAsync(string bearer, string accountRef, string name, CancellationToken ct)
             => Task.FromResult(new CalendarInfo());
-        public Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct)
+        public Task<SyncPair> CreatePairAsync(string bearer, string name, Endpoint source, Endpoint destination, int intervalMin, CancellationToken ct, string? pinnedDeviceId = null)
             => Task.FromResult(new SyncPair());
         public bool ThrowOnListPairs;
         public Task<IReadOnlyList<SyncPair>> ListPairsAsync(string bearer, CancellationToken ct)
@@ -101,14 +101,17 @@ public sealed class PairSchedulerTests
                 throw new InvalidOperationException("boom " + id);
             return Task.FromResult(new MirrorResult { Updated = 1 });
         }
+        public Task<RequestSyncResult> RequestPairSyncAsync(string bearerOrKey, string id, CancellationToken ct)
+            => Task.FromResult(new RequestSyncResult { Status = "requested" });
         public Task<IReadOnlyList<string>> UnlinkAccountAsync(string bearer, string accountRef, CancellationToken ct)
             => Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
         public Task<DateTimeOffset?> HeartbeatAsync(string apiKey, CancellationToken ct)
             => Task.FromResult<DateTimeOffset?>(DateTimeOffset.UtcNow);
         public Task<DeviceRegistration> RegisterDeviceAsync(string bearer, string deviceName, CancellationToken ct)
             => Task.FromResult(new DeviceRegistration());
+        public string DeviceId = "";
         public Task<DeviceInfo> GetDeviceMeAsync(string apiKey, CancellationToken ct)
-            => Task.FromResult(new DeviceInfo());
+            => Task.FromResult(new DeviceInfo { DeviceId = DeviceId });
         public Task<DeviceInfo> RenameDeviceAsync(string apiKey, string name, CancellationToken ct)
             => Task.FromResult(new DeviceInfo { Name = name });
         public Task<bool> CheckDeviceNameAvailableAsync(string apiKey, string name, CancellationToken ct)
@@ -388,5 +391,100 @@ public sealed class PairSchedulerTests
         await sched.TickAsync(CancellationToken.None);
 
         logger.Entries.Should().Contain(e => e.Level == LogLevel.Warning && e.Message.Contains("list pairs"));
+    }
+
+    // ---------------- Track B: COM device-pinning ----------------
+
+    private static SyncPair ComPair(string id, string? pinnedDeviceId, DateTimeOffset? syncRequested = null, string state = "active", int intervalMin = 10)
+        => new SyncPair
+        {
+            Id = id,
+            Name = id,
+            State = state,
+            IntervalMin = intervalMin,
+            Source = new Endpoint { Provider = "OutlookCom", CalendarId = "local", CalendarName = "Local" },
+            Destination = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "a", CalendarId = "d", CalendarName = "D" },
+            PinnedDeviceId = pinnedDeviceId,
+            SyncRequestedUtc = syncRequested,
+        };
+
+    [Fact]
+    public async Task Tick_ComPairPinnedToAnotherDevice_IsNotRun()
+    {
+        // This device resolves to "dev-A"; the pair is pinned to "dev-B" -> must be skipped (no read/push).
+        var client = new FakePairsClient { DeviceId = "dev-A", Pairs = { ComPair("p1", pinnedDeviceId: "dev-B") } };
+        var source = new FakeSource();
+        var sched = Make(client, source, new MutableClock(), new FakeKeyStore("k"));
+
+        await sched.TickAsync(CancellationToken.None);
+
+        client.PushedPairIds.Should().BeEmpty();
+        source.ReadCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Tick_ComPairPinnedToThisDevice_IsRun()
+    {
+        var client = new FakePairsClient { DeviceId = "dev-A", Pairs = { ComPair("p1", pinnedDeviceId: "dev-A") } };
+        var source = new FakeSource();
+        var sched = Make(client, source, new MutableClock(), new FakeKeyStore("k"));
+
+        await sched.TickAsync(CancellationToken.None);
+
+        client.PushedPairIds.Should().ContainSingle().Which.Should().Be("p1");
+        source.ReadCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Tick_ComPairNotPinned_IsRun_AndClaimedByThisDevice()
+    {
+        // A COM pair with no pin yet is claimed on first run (server stamps the pin on push), so the
+        // local scheduler must NOT skip it.
+        var client = new FakePairsClient { DeviceId = "dev-A", Pairs = { ComPair("p1", pinnedDeviceId: null) } };
+        var source = new FakeSource();
+        var sched = Make(client, source, new MutableClock(), new FakeKeyStore("k"));
+
+        await sched.TickAsync(CancellationToken.None);
+
+        client.PushedPairIds.Should().ContainSingle().Which.Should().Be("p1");
+    }
+
+    [Fact]
+    public async Task Tick_SyncRequested_RunsImmediatelyEvenWhenNotDue()
+    {
+        var clock = new MutableClock();
+        var client = new FakePairsClient { DeviceId = "dev-A", Pairs = { ComPair("p1", pinnedDeviceId: "dev-A") } };
+        var source = new FakeSource();
+        var sched = Make(client, source, clock, new FakeKeyStore("k"));
+
+        // First tick runs it once and schedules next run 10 min out.
+        await sched.TickAsync(CancellationToken.None);
+        client.PushedPairIds.Should().HaveCount(1);
+
+        // Only 1 minute later (not due) — but a fresh sync-now stamp arrives -> run again immediately.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        client.Pairs[0] = ComPair("p1", pinnedDeviceId: "dev-A", syncRequested: clock.UtcNow);
+        await sched.TickAsync(CancellationToken.None);
+        client.PushedPairIds.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Tick_SameSyncRequestStamp_DoesNotRunTwice()
+    {
+        var clock = new MutableClock();
+        var stamp = clock.UtcNow;
+        var client = new FakePairsClient { DeviceId = "dev-A", Pairs = { ComPair("p1", pinnedDeviceId: "dev-A", syncRequested: stamp) } };
+        var source = new FakeSource();
+        var sched = Make(client, source, clock, new FakeKeyStore("k"));
+
+        // First tick handles the signal (and the initial "no prior run" due) -> one push.
+        await sched.TickAsync(CancellationToken.None);
+        client.PushedPairIds.Should().HaveCount(1);
+
+        // 1 minute later, not due, and the SAME stamp is still present (server hasn't cleared it yet):
+        // the scheduler must NOT run it again off the same signal.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await sched.TickAsync(CancellationToken.None);
+        client.PushedPairIds.Should().HaveCount(1);
     }
 }

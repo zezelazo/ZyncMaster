@@ -543,4 +543,109 @@ public class EngineActionsExportAndCalendarTests
         Func<Task> act = () => actions.RunPairNowAsync("p1", CancellationToken.None);
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
+
+    // ---------------- Track B: COM device-pinning routing ----------------
+
+    private static SyncPair ComPinnedPair(string id, string pinnedDeviceId)
+        => new SyncPair
+        {
+            Id = id,
+            Name = id,
+            State = "active",
+            IntervalMin = 10,
+            Source = new Endpoint { Provider = "OutlookCom", CalendarId = "local", CalendarName = "Local" },
+            Destination = new Endpoint { Provider = "MicrosoftGraph", AccountRef = "a", CalendarId = "d", CalendarName = "D" },
+            PinnedDeviceId = pinnedDeviceId,
+        };
+
+    [Fact]
+    public async Task RunPairNow_ComPinnedToThisDevice_RunsLocally()
+    {
+        var settings = new EngineSettings { ServerBaseUrl = "https://server.test", SyncWindowDays = 14 };
+        var clock = new Mock<IClock>();
+        clock.SetupGet(c => c.UtcNow).Returns(new DateTimeOffset(2026, 6, 1, 9, 0, 0, TimeSpan.Zero));
+
+        var events = (IReadOnlyList<AppointmentRecord>)new[] { new AppointmentRecord { Id = "e1", Subject = "x" } };
+        var comSource = new Mock<ICalendarSource>();
+        comSource.Setup(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(events);
+
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.ListPairsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<SyncPair>)new[] { ComPinnedPair("p1", "dev-A") });
+        pairs.Setup(p => p.GetDeviceMeAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DeviceInfo { DeviceId = "dev-A" });
+        pairs.Setup(p => p.PushPairAsync("device-key", "p1", events, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MirrorResult { Created = 1 });
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(), pairs, SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            settings: settings, keyStore: KeyStore("device-key").Object, comSource: comSource.Object, clock: clock.Object);
+
+        var result = await actions.RunPairNowAsync("p1", CancellationToken.None);
+
+        result.Created.Should().Be(1);
+        pairs.Verify(p => p.PushPairAsync("device-key", "p1", events, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunPairNow_ComPinnedToAnotherDevice_Throws()
+    {
+        var comSource = new Mock<ICalendarSource>();
+
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.ListPairsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<SyncPair>)new[] { ComPinnedPair("p1", "dev-B") });
+        pairs.Setup(p => p.GetDeviceMeAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DeviceInfo { DeviceId = "dev-A" });
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(), pairs, SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            keyStore: KeyStore("device-key").Object, comSource: comSource.Object);
+
+        Func<Task> act = () => actions.RunPairNowAsync("p1", CancellationToken.None);
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        // It must NOT read COM or push for a pair owned by another device.
+        comSource.Verify(s => s.ReadWindowAsync(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()), Times.Never);
+        pairs.Verify(p => p.PushPairAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<AppointmentRecord>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RequestPairSync_returns_server_status_and_device()
+    {
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.RequestPairSyncAsync("device-key", "p1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RequestSyncResult { Status = "requested", DeviceName = "Studio PC" });
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(), pairs, SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            keyStore: KeyStore("device-key").Object);
+
+        var result = await actions.RequestPairSyncAsync("p1", CancellationToken.None);
+
+        result.Status.Should().Be("requested");
+        result.DeviceName.Should().Be("Studio PC");
+        pairs.Verify(p => p.RequestPairSyncAsync("device-key", "p1", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RequestPairSync_maps_not_com_pinned_409_to_status()
+    {
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.RequestPairSyncAsync("device-key", "p1", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SyncClientException("request POST /api/pairs/p1/request-sync failed with status 409: {\"error\":\"not_com_pinned\"}"));
+
+        var actions = Build(
+            new Mock<ICalExportRunner>(), pairs, SignedIn("bearer-1"),
+            _ => Task.FromResult<string?>(null),
+            keyStore: KeyStore("device-key").Object);
+
+        var result = await actions.RequestPairSyncAsync("p1", CancellationToken.None);
+
+        result.Status.Should().Be("not_com_pinned");
+    }
 }

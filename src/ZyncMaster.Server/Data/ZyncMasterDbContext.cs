@@ -173,7 +173,11 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.SourceJson).IsRequired();
             e.Property(x => x.DestinationJson).IsRequired();
             e.Property(x => x.State).HasMaxLength(32).IsRequired();
+            // COM device-pinning (Track B). Nullable column capped to the device-id length; indexed
+            // so each device's scheduler can cheaply select the pairs pinned to it.
+            e.Property(x => x.PinnedDeviceId).HasMaxLength(64);
             e.HasIndex(x => x.UserId);
+            e.HasIndex(x => x.PinnedDeviceId);
         });
 
         b.Entity<SyncRunLockRow>(e =>
