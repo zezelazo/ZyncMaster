@@ -331,14 +331,15 @@ public static class CalendarConnectEndpoints
                 await RevokeAtIdpAsync(account, refreshToken, ct);
             }
 
-            // Track A-3 — disable every pair that references this account (source or destination)
+            // Track A-3 — DELETE every pair that references this account (source or destination)
             // before the delete, so a removed account never leaves a pair pointing at a forgotten
             // account that would later fail to resolve a token. Each pair endpoint's AccountRef may
             // be a legacy UPN or a pool accountId; resolve both sides through the adapter and
             // compare on the canonical accountId. Pairs for other accounts/users are untouched
-            // (the pair store is user-scoped). The response contract stays 204 NoContent (the
-            // disabled pairs are observable via GET /api/pairs).
-            await DisablePairsForAccountAsync(id, pairs, adapter, ct);
+            // (the pair store is user-scoped). The destination calendar's events are intentionally
+            // left intact. The response contract stays 204 NoContent (the deleted pairs are
+            // observable by their absence from GET /api/pairs).
+            await DeletePairsForAccountAsync(id, pairs, adapter, ct);
 
             await accounts.RemoveAsync(id, ct);
 
@@ -401,15 +402,18 @@ public static class CalendarConnectEndpoints
         }).RequireIdentityBearer();
     }
 
-    // Track A-3 — disable every pair whose source or destination resolves to the given accountId.
-    // Returns the ids of the pairs that were disabled (already-disabled pairs are left as-is and
-    // not reported again). Comparison is on the canonical accountId so a legacy-UPN endpoint and a
-    // pool-accountId endpoint for the same underlying account both match.
-    internal static async Task<List<string>> DisablePairsForAccountAsync(
+    // Track A-3 — DELETE every pair whose source or destination resolves to the given accountId.
+    // Returns the ids of the pairs that were deleted (consumed as affectedPairIds by the callers).
+    // Comparison is on the canonical accountId so a legacy-UPN endpoint and a pool-accountId endpoint
+    // for the same underlying account both match. The destination calendar's events are NEVER touched
+    // — forget is fire-and-forget w.r.t. the destination. A deleted pair's SyncRunLock row (keyed by
+    // pairId) is self-expiring (LockedUntil) and the pair never runs again, so it needs no extra
+    // cleanup; the pinned-device id lived on the SyncPairRow and is removed with it.
+    internal static async Task<List<string>> DeletePairsForAccountAsync(
         string accountId, ISyncPairStore pairs, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
     {
         var all = await pairs.ListAsync(ct);
-        var affected = new List<string>();
+        var deleted = new List<string>();
 
         foreach (var pair in all)
         {
@@ -422,13 +426,11 @@ public static class CalendarConnectEndpoints
             if (!references)
                 continue;
 
-            affected.Add(pair.Id);
-            if (string.Equals(pair.State, "disabled", StringComparison.Ordinal))
-                continue;
-            await pairs.UpdateAsync(pair with { State = "disabled" }, ct);
+            deleted.Add(pair.Id);
+            await pairs.RemoveAsync(pair.Id, ct);
         }
 
-        return affected;
+        return deleted;
     }
 
     // Resolves the canonical accountId an endpoint points at. OutlookCom endpoints have no server
