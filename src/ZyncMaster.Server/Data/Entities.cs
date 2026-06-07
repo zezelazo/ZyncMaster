@@ -171,6 +171,32 @@ public sealed class UserToggleRow
     public bool CloudFallbackSync { get; set; } = true;
 }
 
+public sealed class ClipboardItemRow
+{
+    public string Id { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string Type { get; set; } = "Text";        // enum name
+    public string OriginDeviceId { get; set; } = "";
+    public string? OriginDeviceName { get; set; }
+    public DateTimeOffset CreatedUtc { get; set; }
+    public long? SizeBytes { get; set; }
+    public byte[] Payload { get; set; } = System.Array.Empty<byte>();
+    public byte[]? Thumbnail { get; set; }
+    public string? Preview { get; set; }
+}
+
+public sealed class ClipboardDeviceSettingsRow
+{
+    public string DeviceId { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public bool AutoSync { get; set; } = true;
+    public bool Send { get; set; } = true;
+    public bool Receive { get; set; } = true;
+    public string ViewerHotkey { get; set; } = "Ctrl+Win+Q";
+    public string Density { get; set; } = "rich";
+    public bool ShowHints { get; set; } = true;
+}
+
 public sealed class SyncStateRow
 {
     // Surrogate key (UserId|DeviceId). The uniqueness guarantee is the composite

@@ -54,6 +54,8 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<IdentityAccessTokenRow> IdentityAccessTokens => Set<IdentityAccessTokenRow>();
     public DbSet<IdentityRefreshTokenRow> IdentityRefreshTokens => Set<IdentityRefreshTokenRow>();
     public DbSet<MagicLinkRow> MagicLinks => Set<MagicLinkRow>();
+    public DbSet<ClipboardItemRow> ClipboardItems => Set<ClipboardItemRow>();
+    public DbSet<ClipboardDeviceSettingsRow> ClipboardDeviceSettings => Set<ClipboardDeviceSettingsRow>();
 
     // Data Protection key ring lives in the DB so keys survive restarts and are shared
     // across instances (see AddDataProtection().PersistKeysToDbContext in Program.cs).
@@ -276,6 +278,31 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.HasIndex(x => x.Email);
             // No FK to Users: a magic-link is requested by EMAIL and may resolve to a brand-new
             // user only at callback time, so it deliberately does not reference a UserRow.
+        });
+
+        b.Entity<ClipboardItemRow>(e =>
+        {
+            e.ToTable("ClipboardItems");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Type).HasMaxLength(16).IsRequired();
+            e.Property(x => x.OriginDeviceId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.OriginDeviceName).HasMaxLength(256);
+            // List newest-first per user: the history query filters by UserId and orders by CreatedUtc.
+            e.HasIndex(x => new { x.UserId, x.CreatedUtc });
+        });
+
+        b.Entity<ClipboardDeviceSettingsRow>(e =>
+        {
+            e.ToTable("ClipboardDeviceSettings");
+            // One row per device; DeviceId is the natural primary key.
+            e.HasKey(x => x.DeviceId);
+            e.Property(x => x.DeviceId).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ViewerHotkey).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Density).HasMaxLength(16).IsRequired();
+            e.HasIndex(x => x.UserId);
         });
     }
 }
