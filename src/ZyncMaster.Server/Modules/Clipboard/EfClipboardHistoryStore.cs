@@ -44,9 +44,10 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
         db.ClipboardItems.Add(ToRow(item with { UserId = _user.UserId }));
         await db.SaveChangesAsync(ct);
 
-        // FIFO cap: drop everything past the newest MaxItemsPerUser rows. SQLite can't
-        // ORDER BY a DateTimeOffset in SQL (same limitation EfDeviceStore documents), so
-        // the rows are materialised and ordered client-side — correct on both providers.
+        // FIFO cap: drop everything past the newest MaxItemsPerUser rows. SQLite's EF provider
+        // cannot translate DateTimeOffset ordering/compares to SQL; materialise then order in
+        // memory — same root cause the EfDeviceStore handles for its DateTimeOffset predicates.
+        // Correct on both providers.
         var byNewest = (await db.ClipboardItems
                 .Where(x => x.UserId == _user.UserId)
                 .Select(x => new { x.Id, x.CreatedUtc })

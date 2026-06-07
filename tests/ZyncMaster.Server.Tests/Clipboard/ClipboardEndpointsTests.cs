@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -6,7 +7,9 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -30,10 +33,19 @@ public class ClipboardEndpointsTests
         public WebApplicationFactory<Program> Factory { get; }
         public CookieAuthHelper.FakeIdentityTokenService Identity { get; } = new();
 
-        public Harness()
+        public Harness(long? hardMaxImageBytes = null)
         {
             Inner = new ServerTestFactory();
-            Factory = Inner.WithFakeIdentity(Identity);
+            var withIdentity = Inner.WithFakeIdentity(Identity);
+            // Optionally shrink the clipboard image ceiling so a small decoded payload can trip
+            // the HardMax guard. Chained last so this config wins over appsettings.
+            Factory = hardMaxImageBytes is { } cap
+                ? withIdentity.WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, config) =>
+                    config.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Clipboard:HardMaxImageBytes"] = cap.ToString(),
+                    })))
+                : withIdentity;
         }
 
         // Signs in the given identity through the real OAuth flow (creates the user row) and
@@ -130,7 +142,7 @@ public class ClipboardEndpointsTests
     }
 
     [Fact]
-    public async Task Publish_File_type_returns_422()
+    public async Task Publish_File_type_returns_400()
     {
         using var h = new Harness();
         var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
@@ -139,7 +151,7 @@ public class ClipboardEndpointsTests
         var resp = await device.PostAsJsonAsync("/api/clipboard/items",
             PublishBody("file-1", "File", "dev-a", B64("data"), sizeBytes: 4));
 
-        resp.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
         // Nothing was persisted for the rejected File item.
         var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
@@ -182,7 +194,7 @@ public class ClipboardEndpointsTests
     }
 
     [Fact]
-    public async Task Settings_patch_invalid_density_returns_422()
+    public async Task Settings_patch_invalid_density_returns_400()
     {
         using var h = new Harness();
         var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
@@ -198,7 +210,7 @@ public class ClipboardEndpointsTests
             showHints = true,
         });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
@@ -257,5 +269,44 @@ public class ClipboardEndpointsTests
         var resp = await h.Anonymous().PostAsJsonAsync("/api/clipboard/items",
             PublishBody("x", "Text", "dev-x", B64("nope")));
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Publish_Image_over_hard_max_returns_413_even_when_client_understates_size()
+    {
+        // Hard ceiling is 8 bytes; the real decoded payload is 16 bytes but the client lies
+        // (sizeBytes: 1). The server must reject on the ACTUAL byte count, not the claim.
+        using var h = new Harness(hardMaxImageBytes: 8);
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var payload = B64("0123456789abcdef"); // 16 bytes decoded
+        var resp = await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("img-big", "Image", "dev-a", payload, sizeBytes: 1));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+
+        // Nothing was stored for the rejected image.
+        var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        history.GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Publish_Image_stores_actual_payload_length_not_client_size()
+    {
+        // Even within the ceiling, the server recomputes SizeBytes from the decoded payload and
+        // ignores the client-supplied value (here a wildly understated 1).
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var payload = B64("0123456789abcdef"); // 16 bytes decoded
+        var publish = await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("img-1", "Image", "dev-a", payload, sizeBytes: 1));
+        publish.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        history.GetArrayLength().Should().Be(1);
+        history[0].GetProperty("sizeBytes").GetInt64().Should().Be(16);
     }
 }

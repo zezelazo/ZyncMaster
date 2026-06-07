@@ -40,21 +40,26 @@ public static class ClipboardDto
     }
 
     // Publish request -> domain item. Stamps the resolved user id and decodes the base64 payloads.
-    // Throws FormatException on malformed base64 (the endpoint maps that to 422). The Type is known
+    // Throws FormatException on malformed base64 (the endpoint maps that to 400). The Type is known
     // valid (the validator rejects anything but Text/Image and blocks File) before this runs.
     public static ClipboardItem ToDomain(PublishItemRequest req, string userId)
     {
         ArgumentNullException.ThrowIfNull(req);
+        var type = Enum.Parse<ClipboardItemType>(req.Type);
+        var payload = Convert.FromBase64String(req.PayloadBase64);
         return new ClipboardItem
         {
             Id = req.Id,
             UserId = userId,
-            Type = Enum.Parse<ClipboardItemType>(req.Type),
+            Type = type,
             OriginDeviceId = req.OriginDeviceId,
             OriginDeviceName = req.OriginDeviceName,
             CreatedUtc = DateTimeOffset.UtcNow,
-            SizeBytes = req.SizeBytes,
-            Payload = Convert.FromBase64String(req.PayloadBase64),
+            // The server is authoritative on image size: use the ACTUAL decoded payload length,
+            // never the client-supplied SizeBytes (which could understate it to slip past the
+            // store's HardMax / per-user image-total guards). Text carries no size.
+            SizeBytes = type == ClipboardItemType.Image ? payload.Length : null,
+            Payload = payload,
             Thumbnail = string.IsNullOrEmpty(req.ThumbnailBase64)
                 ? null
                 : Convert.FromBase64String(req.ThumbnailBase64),

@@ -39,8 +39,7 @@ public static class ClipboardEndpoints
         {
             var validation = new PublishItemRequestValidator().Validate(req);
             if (!validation.IsValid)
-                return Results.ValidationProblem(validation.ToDictionary(),
-                    statusCode: StatusCodes.Status422UnprocessableEntity);
+                return Results.ValidationProblem(validation.ToDictionary());
 
             ClipboardItem item;
             try
@@ -49,11 +48,11 @@ public static class ClipboardEndpoints
             }
             catch (FormatException)
             {
-                // PayloadBase64 / ThumbnailBase64 not valid base64 — a malformed request, 422.
+                // PayloadBase64 / ThumbnailBase64 not valid base64 — a malformed request, 400.
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 {
                     ["payloadBase64"] = new[] { "Payload must be valid base64." },
-                }, statusCode: StatusCodes.Status422UnprocessableEntity);
+                });
             }
 
             try
@@ -93,8 +92,7 @@ public static class ClipboardEndpoints
         {
             var validation = new UpdateClipboardSettingsRequestValidator().Validate(req);
             if (!validation.IsValid)
-                return Results.ValidationProblem(validation.ToDictionary(),
-                    statusCode: StatusCodes.Status422UnprocessableEntity);
+                return Results.ValidationProblem(validation.ToDictionary());
 
             await settings.UpsertAsync(new ClipboardDeviceSettings
             {
@@ -121,8 +119,7 @@ public static class ClipboardEndpoints
         {
             var validation = new RelayKeyRequestValidator().Validate(req);
             if (!validation.IsValid)
-                return Results.ValidationProblem(validation.ToDictionary(),
-                    statusCode: StatusCodes.Status422UnprocessableEntity);
+                return Results.ValidationProblem(validation.ToDictionary());
 
             byte[] wrapped;
             try
@@ -134,7 +131,7 @@ public static class ClipboardEndpoints
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 {
                     ["wrappedKeyBase64"] = new[] { "Wrapped key must be valid base64." },
-                }, statusCode: StatusCodes.Status422UnprocessableEntity);
+                });
             }
 
             var delivered = await broadcaster.RelayKeyAsync(currentUser.UserId, new WrappedKeyEnvelope
