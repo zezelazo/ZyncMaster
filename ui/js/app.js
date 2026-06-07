@@ -1508,7 +1508,7 @@ function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
 
   const accounts = live.accounts || [];
   if (accounts.length === 0) {
-    list.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts. Connect one on the server first.' }));
+    list.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
   }
 
   accounts.forEach((acc) => {
@@ -1533,14 +1533,19 @@ function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
         el('div', { class: 'cal-item__check', html: selected ? icon('check', { size: 12, stroke: 2.6 }) : '' })));
     });
 
-    // "+ New calendar" — destination only. Reveals an inline name field; confirming creates the
-    // calendar on this account and auto-selects it (mirrors the Connect-account inline states).
-    if (allowCreate) list.append(newCalendarRow(acc, onPick));
+    // "+ New calendar" — destination only, and only on a WRITABLE account. Creating a calendar is a
+    // Graph write, so a read-only destination account must be upgraded first (handled in the select
+    // path); offering create here would write before the upgrade and fail. Reveals an inline name
+    // field; confirming creates the calendar on this account and auto-selects it.
+    if (allowCreate && acc.scope !== 'read') list.append(newCalendarRow(acc, onPick));
   });
 
   // Inline "+ Add account" for the destination step — a destination must be writable, so connect
-  // read/write. Only shown on the destination picker (allowCreate marks the destination step).
-  if (allowCreate) list.append(addAccountRow('readwrite', (newRef) => { a.dstAccountRef = newRef; }));
+  // read/write. Only shown on the destination picker (allowCreate marks the destination step). Clear
+  // any previously chosen calendar so Continue can't point at the old account's calendar.
+  if (allowCreate) list.append(addAccountRow('readwrite', (newRef) => {
+    a.dstAccountRef = newRef; a.dstCalendarId = null; a.dstCalendarName = null;
+  }));
 
   wrap.append(list);
   return wrap;
@@ -1595,8 +1600,12 @@ function newCalendarRow(acc, onPick) {
 // account was already connected — Phase B idempotency — in which case we just re-render and the user
 // taps it in the list). `scope` is 'read' for the source step, 'readwrite' for the destination step.
 function addAccountRow(scope, onAdded) {
-  const row = el('div', { class: 'cal-new' });
-  const trigger = el('button', { class: 'cal-new__trigger connect-cal', type: 'button' },
+  // role=listitem so it traverses cleanly when appended inside the wizard's role=list calendar list.
+  // The trigger keeps `connect-cal__label` (connectAccount swaps that span to "Connecting…") but NOT
+  // `connect-cal` itself, so it shares newCalendarRow's left-aligned pill look instead of stretching
+  // full-width — the two inline "+ New calendar" / "+ Add account" rows then render consistently.
+  const row = el('div', { class: 'cal-new', role: 'listitem' });
+  const trigger = el('button', { class: 'cal-new__trigger', type: 'button' },
     iconEl('plus', 13, 2.2), el('span', { class: 'connect-cal__label', text: 'Add account' }));
   trigger.addEventListener('click', () => {
     connectAccount({ scope, btn: trigger, wrap: row, onConnected: (newRef) => {
@@ -1703,15 +1712,18 @@ function comSourceMultiSelect() {
 function onlineSourceMultiSelect() {
   const a = addPairLive;
   const wrap = el('div', { class: 'glass glass--card cal-multi', style: 'padding:4px' });
-  // Flipping All on/off makes a pending subset account-switch confirm meaningless — clear it.
-  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; a.srcSwitchPrompt = null; }));
 
   const accounts = live.accounts || [];
   if (accounts.length === 0) {
+    // No "All calendars" toggle in the empty state — it would set srcAllCalendars with no account
+    // pinned, leaving nothing actionable. Just the notice + the inline Add-account affordance.
     wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
     wrap.append(addAccountRow('read', (newRef) => { a.srcAccountRef = newRef; a.srcSwitchPrompt = null; }));
     return wrap;
   }
+
+  // Flipping All on/off makes a pending subset account-switch confirm meaningless — clear it.
+  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; a.srcSwitchPrompt = null; }));
 
   // The whole set of accounts is a single list of grouped calendars. role=list + per-account
   // role=group (labelled by the account name) gives assistive tech the account→calendars
@@ -2343,7 +2355,7 @@ function ensureCalendarAccounts(view) {
   // deleted. Without this, opening Calendar Settings without first visiting the pair list leaves
   // live.pairs === null, and confirmDisconnectAccount would under-warn ("no syncs") about a delete
   // the server will still perform. loadPairs() is idempotent/cached, so this is cheap on repeat.
-  if (Bridge.desktopApp && live.pairs === null) loadPairs().catch(() => {});
+  if (Bridge.desktopApp && live.pairs === null) loadPairs();
   if (live.accounts !== null) return;
   loadAccounts().finally(() => { if (state.view === view) softRepaint(); });
 }
@@ -2639,7 +2651,8 @@ function accountCard(acc) {
   const scopeLabel = acc.scope === 'read' ? 'Read-only (source)'
     : (acc.scope === 'readwrite' ? 'Read & write' : '');
   const subEl = el('div', { class: 'acct-text__sub cfg-row__hint', text: sub });
-  if (scopeLabel) subEl.append(el('span', { class: 'cfg-row__hint', text: ` · ${scopeLabel}` }));
+  // Own class (not a nested cfg-row__hint) so the muted styling isn't applied twice (compounded).
+  if (scopeLabel) subEl.append(el('span', { class: 'acct-text__scope', text: ` · ${scopeLabel}` }));
 
   const text = el('div', { class: 'acct-text' },
     el('div', { class: 'acct-text__title', text: title }),
@@ -3524,7 +3537,7 @@ function connectAccount({ scope, btn, wrap, onConnected }) {
   }
   const removeCancel = () => { if (cancelBtn && cancelBtn.parentNode) cancelBtn.parentNode.removeChild(cancelBtn); cancelBtn = null; };
 
-  Bridge.call('connectCalendar', JSON.stringify({ scope: scope === 'read' ? 'read' : 'readwrite' }), 210000)
+  Bridge.call('connectCalendar', JSON.stringify({ scope: scope === 'readwrite' ? 'readwrite' : 'read' }), 210000)
     .then((r) => {
       if (r && r.connected) {
         announce('Calendar account connected.');

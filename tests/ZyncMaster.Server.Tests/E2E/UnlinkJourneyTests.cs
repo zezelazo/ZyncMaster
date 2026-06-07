@@ -13,8 +13,8 @@ using Xunit;
 namespace ZyncMaster.Server.Tests.E2E;
 
 // FULL unlink journey: connect an account, create a pair that targets it, then DELETE the
-// account. The unlink must DELETE the referencing pair AND forget the account, so any later
-// device push/run against that pair can no longer mirror to a live account -> 409.
+// account. The unlink must DELETE the referencing pair AND forget the account: a later push at
+// that (now gone) pair is a 404, and a generic device sync with no connected account left is a 409.
 public class UnlinkJourneyTests
 {
     [Fact]
@@ -37,7 +37,7 @@ public class UnlinkJourneyTests
         });
         ok.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // Unlink the account. The cascade disables the referencing pair and reports its id.
+        // Unlink the account. The cascade deletes the referencing pair and reports its id.
         var unlink = await panel.DeleteAsync("/api/accounts/zeze@test");
         unlink.StatusCode.Should().Be(HttpStatusCode.OK);
         using (var doc = JsonDocument.Parse(await unlink.Content.ReadAsStringAsync()))

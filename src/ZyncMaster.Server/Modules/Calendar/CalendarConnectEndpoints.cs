@@ -494,8 +494,10 @@ public static class CalendarConnectEndpoints
         return Task.CompletedTask;
     }
 
-    // Case/whitespace-insensitive mailbox key for dedup. Mirrors the listing's collapse-by-email so
-    // a re-connect of the same casilla is treated as the same account.
+    // Case/whitespace-insensitive mailbox key for dedup, so a re-connect of the same casilla is
+    // treated as the same account. Keep this in sync with PairEndpoints.NormalizeMailbox (the
+    // account-listing's collapse-by-email): if one's trimming/casing rules change, the other must too,
+    // or dedup-on-connect and collapse-on-list would diverge.
     private static string NormalizeEmail(string? email) =>
         (email ?? "").Trim().ToLowerInvariant();
 
