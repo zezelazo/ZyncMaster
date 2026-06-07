@@ -10,7 +10,25 @@ complementing the deterministic .NET API e2e in
 
 ## What it covers
 
-`tests/panel.spec.js` drives `app.js`'s boot path in a real Chromium:
+### `tests/clipboard-viewer.spec.js` — clipboard paste overlay (self-contained)
+
+Drives the served `ui/clipboard-viewer.html` (the frameless overlay the desktop App pops up on
+the global viewer hotkey) in a real Chromium. **No running Server is needed**: the spec serves the
+viewer page + its CSS/JS straight from `ui/` via route interception, and injects a mock
+`window.chrome.webview` so `clipboard-viewer.js` picks its native transport. The mock answers the
+shared-bridge actions (`getClipboardDevices`, `getClipboardHistory`) and records
+`pasteClipboardEntry` / `closeClipboardViewer`. It asserts the rich render (filters + meta + help),
+arrow-key selection, `PageDown` jumping to item #11, the `Img` filter hiding text rows, that a long
+URL row never overflows (`scrollWidth <= clientWidth`), that mini density hides filters/meta/help,
+and that `Enter` pastes the selected item's id. Run it on its own (it ignores `BASE_URL`):
+
+```
+npx playwright test clipboard-viewer
+```
+
+### `tests/panel.spec.js` — Server web panel (needs a running Server)
+
+Drives `app.js`'s boot path in a real Chromium:
 
 1. **Unauthenticated** — load `/`, the panel probes `GET /health` (200 ⇒ web mode), calls
    `getStatus` (⇒ `GET /api/me`, 401 with no session). Asserts the **sign-in gate** renders
