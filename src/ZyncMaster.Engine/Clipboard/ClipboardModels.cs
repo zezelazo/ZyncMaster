@@ -7,6 +7,10 @@ public sealed record ClipboardEntry
     public required string Id { get; init; }
     public required ClipboardEntryType Type { get; init; }
     public string? Text { get; init; }
+    // Encrypted text payload used ONLY on the transport boundary: the ClipboardService sets this
+    // (= TextCrypto.Encrypt(key, Text)) before PublishAsync, and the transport delivers it here on
+    // receive (Text stays null until the service decrypts it). For images the bytes ride ImageBytes.
+    public byte[]? CipherText { get; init; }
     public byte[]? ImageBytes { get; init; }
     public byte[]? Thumbnail { get; init; }
     public long? SizeBytes { get; init; }
