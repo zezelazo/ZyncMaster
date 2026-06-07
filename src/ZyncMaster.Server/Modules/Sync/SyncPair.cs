@@ -93,4 +93,9 @@ public sealed record AccountInfo
     public required string DisplayName { get; init; }
     public string Email { get; init; } = "";
     public bool IsDefault { get; init; }
+
+    // Consent level of the connected account: "read" | "readwrite" ("" for legacy accounts whose
+    // scope is not tracked). Lets the wizard distinguish a read-only source from a read/write
+    // destination and the Calendar list render a per-account scope badge.
+    public string Scope { get; init; } = "";
 }

@@ -61,6 +61,10 @@ public static class PairEndpoints
                     DisplayName = AccountDisplayName(account),
                     Email = account.AccountEmail ?? "",
                     IsDefault = false,
+                    // Surface the pool account's consent level ("read" | "readwrite") so the wizard can
+                    // tell a read-only source from a read/write destination. Legacy accounts have no
+                    // tracked scope and keep the record default ("").
+                    Scope = account.Scope.ToString().ToLowerInvariant(),
                 });
             }
 
