@@ -261,6 +261,16 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 builder.Services.AddSingleton<ISyncRunLock, EfSyncRunLock>();
 
+// Clipboard module (Plan 1 / F1a). Options bind from the "Clipboard" config section; the WS
+// presence registry and the fan-out broadcaster are process-local singletons; the EF-backed
+// history + settings stores are singletons over the DbContext factory like the other Ef*Store
+// registrations (they resolve the ambient user per call through the singleton-safe accessor).
+builder.Services.Configure<ClipboardOptions>(builder.Configuration.GetSection("Clipboard"));
+builder.Services.AddSingleton<ClipboardConnectionRegistry>();
+builder.Services.AddSingleton<ClipboardBroadcaster>();
+builder.Services.AddSingleton<IClipboardHistoryStore, EfClipboardHistoryStore>();
+builder.Services.AddSingleton<IClipboardSettingsStore, EfClipboardSettingsStore>();
+
 // Track C — plan/entitlements seam. Today's impl returns everything unlocked (∩ the user's
 // toggles). SWAP: replace DefaultEntitlementsService with PlanBasedEntitlementsService here (one
 // line) when plan gating (Free/PRO) goes live; nothing downstream changes.
@@ -422,6 +432,10 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
+// WebSockets must be enabled before the endpoints that accept an upgrade (/ws/clipboard) and
+// before auth so the upgrade request is authenticated like any other request.
+app.UseWebSockets();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -525,6 +539,7 @@ app.MapPanelEndpoints();
 app.MapPairEndpoints();
 app.MapPairApprovalEndpoints();
 app.MapEntitlementEndpoints();
+app.MapClipboardEndpoints();
 
 app.Run();
 
