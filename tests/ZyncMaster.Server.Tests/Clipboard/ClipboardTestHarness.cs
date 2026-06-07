@@ -62,6 +62,12 @@ internal static class ClipboardTestHarness
             Options.Create(opts ?? new ClipboardOptions()));
     }
 
+    public static IClipboardSettingsStore SettingsStore(string userId, bool shareDb = false)
+    {
+        var db = shareDb ? SharedDb() : new Db();
+        return new EfClipboardSettingsStore(db.Factory, new FixedCurrentUser(userId));
+    }
+
     private static Db SharedDb()
     {
         lock (SharedLock)
