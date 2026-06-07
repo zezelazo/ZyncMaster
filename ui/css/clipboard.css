@@ -1,0 +1,375 @@
+/* =========================================================
+   CLIPBOARD module — viewer overlay + settings screen.
+   Built on the shared liquid-glass tokens (tokens.css / glass.css) and the
+   existing component vocabulary (.segmented, .toggle, .cfg-row, .status-dot,
+   .section-head). NO hardcoded hex — every colour comes from a CSS variable.
+   Palette: azure / cyan / blue (no violet). Mocks of record:
+   viewer-glass-v3, rich-vs-mini-final2, mini-narrow, condensed-image-expand,
+   hints-toggle, glass-settings, settings-natural-accordion.
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   VIEWER OVERLAY
+   The viewer is its own frameless window (ui/clipboard-viewer.html). The body
+   is transparent so the glass card floats over the OS / aurora behind it.
+   --------------------------------------------------------- */
+.cb-viewer-body {
+  margin: 0;
+  background: transparent;
+  /* A faint aurora wash so the glass has something to refract even when the host
+     window is fully transparent. pointer-events none keeps the card clickable. */
+  overflow: hidden;
+}
+.cb-viewer-body::before {
+  content: '';
+  position: fixed; inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 50% at 18% 8%, rgba(30, 74, 122, 0.45), transparent 60%),
+    radial-gradient(55% 45% at 85% 18%, rgba(42, 58, 107, 0.42), transparent 60%),
+    radial-gradient(60% 55% at 70% 95%, rgba(107, 58, 42, 0.32), transparent 55%);
+  z-index: 0;
+}
+[data-theme="light"] .cb-viewer-body::before {
+  background:
+    radial-gradient(60% 50% at 18% 8%, rgba(120, 150, 190, 0.35), transparent 60%),
+    radial-gradient(55% 45% at 85% 18%, rgba(150, 140, 175, 0.30), transparent 60%);
+}
+
+.cb-stage {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px;
+}
+
+/* The glass card. Recipe matches glass.css but tuned for the dense list:
+   blur(28px) saturate(180%), top specular rim, layered stroke + drop shadow. */
+.cb-viewer {
+  width: 316px;           /* rich default; mini overrides below */
+  max-width: 100%;
+  color: var(--ink-1);
+  border-radius: var(--r-lg);
+  padding: 8px;
+  overflow: hidden;
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--glass-stroke);
+  box-shadow:
+    var(--glass-shadow),
+    inset 0 1px 0 0 var(--glass-rim),
+    inset 0 0 0 1px var(--glass-stroke-2);
+  font-family: var(--font);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 24px);
+}
+.cb-viewer--mini { width: 240px; }
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .cb-viewer { background: var(--bg-2); }
+  [data-theme="light"] .cb-viewer { background: #ffffff; }
+}
+
+/* Header: status dot + "Clipboard · N items". */
+.cb-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 8px;
+  font-size: var(--t-micro);
+  font-weight: var(--w-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-3);
+  flex: none;
+}
+.cb-top__dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 4px var(--ok-soft);
+  flex: none;
+}
+
+/* Filter segmented control (rich only). Reuses the segmented look. */
+.cb-filter {
+  display: flex;
+  padding: 3px; gap: 2px;
+  background: var(--ctrl-fill);
+  border: 1px solid var(--ctrl-stroke);
+  border-radius: var(--r-pill);
+  margin: 0 4px 8px;
+  flex: none;
+}
+.cb-filter__item {
+  flex: 1; min-width: 0;
+  text-align: center;
+  height: 24px; line-height: 24px;
+  border-radius: var(--r-pill);
+  font-size: 11.5px; font-weight: 600;
+  color: var(--ink-2);
+  background: none; border: 0; cursor: pointer;
+  font-family: inherit;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color var(--d-fast), background var(--d-fast);
+}
+.cb-filter__item[aria-pressed="true"] { color: #0e1320; }
+[data-theme="dark"] .cb-filter__item[aria-pressed="true"] { background: rgba(255, 255, 255, 0.92); }
+[data-theme="light"] .cb-filter__item[aria-pressed="true"] { background: var(--azure); color: #fff; }
+
+/* Scrollable list region. */
+.cb-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-4) transparent;
+}
+.cb-list::-webkit-scrollbar { width: 8px; }
+.cb-list::-webkit-scrollbar-thumb { background: var(--ink-4); border-radius: var(--r-pill); }
+.cb-list::-webkit-scrollbar-track { background: transparent; }
+
+/* Group label (rich): "1 – 10" style section header. */
+.cb-group {
+  font-size: var(--t-micro);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--ink-3);
+  padding: 7px 6px 3px;
+}
+
+/* Subtle centred group indicator (mini): a hairline + mark, NOT a date or arrow. */
+.cb-group-ind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.cb-group-ind__line { flex: 1; height: 1px; background: var(--glass-stroke-2); }
+.cb-group-ind__mark { font-size: 9px; color: var(--ink-3); letter-spacing: 0.08em; line-height: 1; }
+
+/* List row. 21px avatar column + flexible body. min-width:0 on body so long
+   URLs/tokens ellipsize instead of overflowing the grid. */
+.cb-row {
+  display: grid;
+  grid-template-columns: 21px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 5px 9px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.cb-row + .cb-row { border-top: 1px solid var(--glass-stroke-2); }
+.cb-row.is-selected,
+.cb-row.is-selected.cb-row--img {
+  background: var(--azure-soft);
+  box-shadow: inset 0 0 0 1px var(--azure-edge);
+}
+.cb-row:hover:not(.is-selected) { background: var(--ctrl-hover); }
+
+.cb-body { min-width: 0; }
+.cb-title {
+  font-size: 12.5px;
+  line-height: var(--lh-meta);
+  color: var(--ink-1);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-viewer--mini .cb-title { font-size: 12px; }
+.cb-meta {
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+.cb-meta__from { color: var(--azure-2); }
+.cb-meta__sep { opacity: 0.5; margin: 0 5px; }
+/* Inline size for files in mini mode (no separate meta line there). */
+.cb-title__size { color: var(--ink-3); font-size: 10px; font-weight: 400; }
+
+/* Avatar tints: Text (azure), File (terra), Image (hatched neutral). */
+.cb-av {
+  width: 20px; height: 20px;
+  border-radius: 6px;
+  display: grid; place-items: center;
+  font-size: 9.5px; font-weight: 700;
+  color: var(--azure-2);
+  background: var(--azure-soft);
+  border: 1px solid var(--azure-edge);
+  flex: none;
+}
+.cb-av--file {
+  color: var(--terra);
+  background: var(--terra-soft);
+  border-color: var(--terra-edge);
+}
+.cb-av--img {
+  background: repeating-linear-gradient(45deg, var(--bg-2), var(--bg-2) 4px, var(--bg-3) 4px, var(--bg-3) 8px);
+  border-color: var(--glass-stroke);
+}
+
+/* Selected-image expand preview (rich only). The selected image row grows to a
+   single column and shows a large thumbnail keeping aspect ratio. */
+.cb-row--img.is-selected {
+  grid-template-columns: 1fr;
+  gap: 7px;
+  padding: 8px 9px;
+}
+.cb-row--img.is-selected .cb-row__head {
+  display: grid;
+  grid-template-columns: 21px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+}
+/* In the un-expanded state the head IS the row content (no wrapper grid needed). */
+.cb-row:not(.cb-row--img) .cb-row__head,
+.cb-row--img:not(.is-selected) .cb-row__head { display: contents; }
+
+.cb-preview {
+  width: 100%;
+  max-height: 160px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--glass-stroke);
+  display: block;
+  object-fit: contain;       /* keep aspect ratio */
+  background: var(--glass-fill-2);
+}
+/* Typed image tile fallback when no preview data URI is available. */
+.cb-preview--tile {
+  height: 120px;
+  display: grid; place-items: center;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  background: repeating-linear-gradient(45deg, var(--bg-2), var(--bg-2) 10px, var(--bg-3) 10px, var(--bg-3) 20px);
+}
+
+/* Help bar (rich, only when showHints). Single line, ellipsized. */
+.cb-help {
+  margin-top: 8px;
+  padding: 7px 8px 2px;
+  border-top: 1px solid var(--glass-stroke-2);
+  font-size: 10px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+}
+.cb-help b { color: var(--ink-2); }
+
+/* Empty state. */
+.cb-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+}
+
+/* ---------------------------------------------------------
+   SETTINGS SCREEN (inside the main app, Settings > Clipboard)
+   Reuses .glass--card .config-section / .cfg-row / .toggle / .segmented from
+   components.css. These classes add only the clipboard-specific bits: the hotkey
+   chip, the devices accordion header + chevron, and the per-device rows.
+   --------------------------------------------------------- */
+
+/* Hotkey display/edit chip. Monospace, captures the next chord when focused. */
+.cb-hotkey {
+  font-family: var(--font-num);
+  font-size: 12px;
+  background: var(--ctrl-fill);
+  border: 1px solid var(--ctrl-stroke);
+  color: var(--ink-2);
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cb-hotkey:hover { background: var(--ctrl-hover); color: var(--ink-1); }
+.cb-hotkey.is-capturing {
+  border-color: var(--azure-edge);
+  color: var(--azure-2);
+  background: var(--azure-soft);
+}
+
+/* Accordion header — a section-head look with a CLEAR chevron in a ~26px circle.
+   It is NOT a button-box; it is a section header that happens to be clickable. */
+.cb-acc {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 6px 6px 10px;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  background: none; border: 0; width: 100%;
+  text-align: left;
+  font-family: inherit;
+}
+.cb-acc:hover { background: var(--ctrl-hover); }
+.cb-acc__title {
+  font-size: var(--t-micro);
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+}
+.cb-acc__title b { color: var(--ink-2); font-weight: 700; }
+.cb-acc__chev {
+  width: 26px; height: 26px;
+  flex: none;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--ctrl-fill);
+  border: 1px solid var(--ctrl-stroke);
+}
+.cb-acc__chev svg { width: 15px; height: 15px; transition: transform var(--d-base) var(--ease-out); }
+.cb-acc[aria-expanded="true"] .cb-acc__chev svg { transform: rotate(180deg); }
+
+/* Per-device row inside the accordion. */
+.cb-dev {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 10px;
+  border-radius: var(--r-sm);
+}
+.cb-dev + .cb-dev { border-top: 1px solid var(--glass-stroke-2); }
+.cb-dev__info { flex: 1; min-width: 0; }
+.cb-dev__name {
+  font-size: 13px; color: var(--ink-1); font-weight: 500;
+  display: flex; align-items: center; gap: 6px;
+  overflow: hidden;
+}
+.cb-dev__name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb-dev__badge {
+  font-size: 9.5px;
+  color: var(--azure-2);
+  border: 1px solid var(--azure-edge);
+  background: var(--azure-soft);
+  border-radius: 5px;
+  padding: 0 6px;
+  font-weight: 600;
+  flex: none;
+}
+.cb-dev__sub { font-size: 11px; color: var(--ink-3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The two compact per-device toggles (send / receive), each with a tiny caption. */
+.cb-dev__toggles { display: flex; gap: 12px; align-items: center; flex: none; }
+.cb-dev__tg { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.cb-dev__tg small { font-size: 9px; color: var(--ink-3); }
+
+/* Compact toggle variant for the per-device rows (smaller than the .toggle default). */
+.toggle.toggle--sm { width: 32px; height: 18px; }
+.toggle.toggle--sm::after { width: 14px; height: 14px; }
+.toggle.toggle--sm[aria-checked="true"]::after { left: 16px; }
