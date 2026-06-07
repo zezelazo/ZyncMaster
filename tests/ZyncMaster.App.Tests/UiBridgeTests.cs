@@ -354,6 +354,14 @@ public class UiBridgeTests
             return ConnectOutcomeToReturn;
         }
 
+        public string? UpgradeAccountScopeArg;
+        public async Task<ConnectCalendarOutcome> UpgradeAccountScopeAsync(string accountId, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            UpgradeAccountScopeArg = accountId;
+            return ConnectOutcomeToReturn;
+        }
+
         public async Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
         {
             if (Throw != null) await Throw();
@@ -1200,6 +1208,43 @@ public class UiBridgeTests
 
         var reply = LastReply(transport);
         // The bridge reply is still ok=true (the action ran); the business failure rides the payload.
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("connected").GetBoolean().Should().BeFalse();
+        payload.GetProperty("error").GetString().Should().Contain("Sign in");
+    }
+
+    [Fact]
+    public void UpgradeAccountScope_passes_account_id_and_returns_outcome()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        // The UI sends the accountRef as a JSON string, like deletePair/unlinkAccount.
+        transport.PushInbound(Message("upgradeAccountScope", "u1", "\"acc-7\""));
+
+        engine.UpgradeAccountScopeArg.Should().Be("acc-7");
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("u1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("connected").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void UpgradeAccountScope_failure_outcome_is_serialized_ok_with_error_in_payload()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions
+        {
+            ConnectOutcomeToReturn = ConnectCalendarOutcome.Fail("Sign in before connecting a calendar account."),
+        };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("upgradeAccountScope", "u2", "\"acc-7\""));
+
+        var reply = LastReply(transport);
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
         var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
         payload.GetProperty("connected").GetBoolean().Should().BeFalse();

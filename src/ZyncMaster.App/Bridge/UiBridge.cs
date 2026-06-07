@@ -289,6 +289,12 @@ public sealed class UiBridge
                 var outcome = await _engine.ConnectCalendarAsync(scope, ct);
                 return JsonSerializer.Serialize(outcome, JsonOptions);
             }
+            case "upgradeAccountScope":
+            {
+                var accountId = UnwrapString(message.Payload);
+                var outcome = await _engine.UpgradeAccountScopeAsync(accountId, ct);
+                return JsonSerializer.Serialize(outcome, JsonOptions);
+            }
             case "listCalendarAccounts":
             {
                 var accounts = await _engine.ListCalendarAccountsAsync(ct);

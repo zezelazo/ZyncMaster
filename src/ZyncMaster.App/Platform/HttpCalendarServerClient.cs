@@ -47,6 +47,24 @@ public sealed class HttpCalendarServerClient : ICalendarServerClient
         return string.IsNullOrEmpty(dto?.AuthorizeUrl) ? null : dto.AuthorizeUrl;
     }
 
+    public async Task<string?> UpgradeAccountScopeAsync(
+        string accessToken, string accountId, int port, string nonce, CancellationToken ct = default)
+    {
+        using var req = new HttpRequestMessage(
+            HttpMethod.Post, $"{_baseUrl}/api/calendar/accounts/{Uri.EscapeDataString(accountId)}/upgrade-scope")
+        {
+            Content = JsonContent.Create(new { port, nonce }),
+        };
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var resp = await _http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+            return null;
+
+        var dto = await resp.Content.ReadFromJsonAsync<StartBundle>(JsonOptions, ct);
+        return string.IsNullOrEmpty(dto?.AuthorizeUrl) ? null : dto.AuthorizeUrl;
+    }
+
     public async Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(
         string accessToken, CancellationToken ct = default)
     {

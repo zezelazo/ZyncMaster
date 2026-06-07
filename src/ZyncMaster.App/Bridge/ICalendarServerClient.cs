@@ -29,6 +29,12 @@ public interface ICalendarServerClient
     Task<string?> StartGraphConnectAsync(
         string accessToken, string scope, int port, string nonce, CancellationToken ct = default);
 
+    // POST /api/calendar/accounts/{id}/upgrade-scope with { port, nonce } and the identity access
+    // token as Bearer. Returns the Microsoft authorize URL to open in the system browser to grant
+    // read/write on an already-connected (read-only) account, or null when the Server rejects it.
+    Task<string?> UpgradeAccountScopeAsync(
+        string accessToken, string accountId, int port, string nonce, CancellationToken ct = default);
+
     // GET /api/calendar/accounts with the identity access token as Bearer. Returns the caller's
     // connected calendar accounts (never the refresh token), or an empty list on a non-2xx.
     Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(

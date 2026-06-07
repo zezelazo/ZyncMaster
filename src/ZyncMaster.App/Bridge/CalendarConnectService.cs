@@ -58,7 +58,30 @@ public sealed class CalendarConnectService
 
     // Connects a Graph calendar account at the requested scope ("read" | "readwrite"). The scope is
     // forwarded verbatim to the Server, which validates it and defaults blank to read/write.
-    public async Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default)
+    public Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default)
+        => RunInteractiveConnectAsync(
+            (token, port, nonce, attemptToken) =>
+                _server.StartGraphConnectAsync(token, scope ?? "readwrite", port, nonce, attemptToken),
+            ct);
+
+    // Upgrades an already-connected, read-only account to read/write by re-running the SAME
+    // interactive browser+loopback consent flow as a fresh connect — only the Server call differs
+    // (POST .../accounts/{id}/upgrade-scope instead of the fresh-connect start). On success the
+    // Server has persisted the broader scope; the outcome mirrors ConnectCalendarAsync so the wizard
+    // can treat a granted upgrade exactly like a connect.
+    public Task<ConnectCalendarOutcome> UpgradeAccountScopeAsync(string accountId, CancellationToken ct = default)
+        => RunInteractiveConnectAsync(
+            (token, port, nonce, attemptToken) =>
+                _server.UpgradeAccountScopeAsync(token, accountId, port, nonce, attemptToken),
+            ct);
+
+    // The shared trunk of the interactive connect/upgrade flow. It loads the identity bearer, raises
+    // the loopback, asks the Server for the Microsoft authorize URL via the supplied startUrl
+    // delegate (the ONLY thing that differs between connect and upgrade), opens the system browser,
+    // and awaits + verifies the single nonce-checked callback. Single-attempt-in-flight bookkeeping
+    // and cancel/timeout handling are identical for both callers.
+    private async Task<ConnectCalendarOutcome> RunInteractiveConnectAsync(
+        Func<string, int, string, CancellationToken, Task<string?>> startUrl, CancellationToken ct)
     {
         // Must be signed in: the connect is gated by the IdentityBearer and persisted under that
         // user. No identity -> a clear outcome, and crucially NO browser open.
@@ -73,8 +96,7 @@ public sealed class CalendarConnectService
         {
             await loopback.StartAsync(attemptCts.Token);
 
-            var authorizeUrl = await _server.StartGraphConnectAsync(
-                tokens.AccessToken, scope ?? "readwrite", loopback.Port, nonce, attemptCts.Token);
+            var authorizeUrl = await startUrl(tokens.AccessToken, loopback.Port, nonce, attemptCts.Token);
             if (string.IsNullOrEmpty(authorizeUrl))
                 return ConnectCalendarOutcome.Fail("Could not start the calendar connection on the server.");
 

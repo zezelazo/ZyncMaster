@@ -123,6 +123,10 @@ public interface IEngineActions
     //     Opens the browser, awaits the loopback callback, verifies the nonce, and reports Connected.
     //   ListCalendarAccountsAsync — the signed-in user's connected calendar accounts (IdentityBearer).
     Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default);
+    //   UpgradeAccountScopeAsync(accountId) — re-run the interactive consent to grant read/write on an
+    //     already-connected (read-only) account, so it can become a sync destination. Same
+    //     browser+loopback flow as ConnectCalendarAsync; reports Connected when the grant completes.
+    Task<ConnectCalendarOutcome> UpgradeAccountScopeAsync(string accountId, CancellationToken ct = default);
     Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default);
 
     // Opens the bundled THIRD-PARTY-NOTICES file (the open-source license notices) in the system's
