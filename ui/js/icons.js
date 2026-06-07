@@ -69,6 +69,14 @@ const STROKE_PATHS = {
     '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
   sparkle:
     '<path d="M12 4v6M12 14v6M4 12h6M14 12h6"/>',
+  trash:
+    '<path d="M4 7h16"/><path d="M9 7V5.5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M6 7l1 12a1.5 1.5 0 0 0 1.5 1.4h7A1.5 1.5 0 0 0 17 19L18 7"/><path d="M10 11v6M14 11v6"/>',
+  disable:
+    '<circle cx="12" cy="12" r="8"/><path d="M6.5 6.5l11 11"/>',
+  download:
+    '<path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/>',
+  pencil:
+    '<path d="M14.5 5.5l4 4"/><path d="M4 20l1-4L16 5a2 2 0 0 1 3 3L8 19z"/>',
 };
 
 // The brand mark — two interlocking arcs forming a sync loop. A gradient version

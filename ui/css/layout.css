@@ -390,19 +390,28 @@
 .pair__chevron svg { width: 14px; height: 14px; }
 .pair__chevron--open { transform: rotate(180deg); color: var(--ink-2); }
 
+/* Stats row (Events / Next / Status). Wraps gracefully in a narrow (~340px) window instead of
+   pushing anything off-screen — the Sync now button no longer shares this row. */
 .pair__substats {
-  display: flex; align-items: center; gap: 14px;
-  padding: 8px 14px 12px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+  padding: 8px 14px 8px;
   font-size: 11.5px;
 }
 .pair__substats > span { display: inline-flex; align-items: baseline; gap: 6px; }
 .pair__substats > span .route__stat-label { color: var(--ink-3); }
 .pair__substats > span .route__stat-val   { color: var(--ink-1); font-weight: 600; }
+/* Sync now lives on its own full-width row (point 2): the button can never be clipped at the right
+   edge, and it spans the card so it is an easy target. */
+.pair__sync-row {
+  display: flex;
+  padding: 0 14px 12px;
+}
 .pair__sync-btn {
   position: relative;
-  margin-left: auto;
+  width: 100%;
+  justify-content: center;
   display: inline-flex; align-items: center; gap: 6px;
-  height: 28px;
+  height: 30px;
   padding: 0 12px;
   font-size: 11.5px; font-weight: 600;
   color: var(--terra);
@@ -446,21 +455,21 @@
   border-color: var(--azure-edge);
 }
 .pair__sync-btn[aria-busy="true"] .spinner { border-color: var(--azure-edge); border-top-color: var(--azure); }
-/* Attempt counter pill — subtle, grabs the free space so it sits just left of the Sync button
-   (which keeps its own margin-left:auto). When present it owns the auto margin instead. */
+/* Attempt counter pill — subtle sub-badge. Now relocated next to "Recent events" (it used to sit
+   in the header row and crowd out the Sync now button). Sits to the right of that head via its own
+   auto margin; the head's count number keeps its natural place. */
 .pair__attempts {
   display: inline-flex; align-items: center;
-  height: 20px; padding: 0 8px;
+  height: 18px; padding: 0 8px;
   margin-left: auto;
-  font-size: 10.5px; font-weight: 600;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.02em; text-transform: none;
   color: var(--ink-2);
   background: var(--ctrl-fill);
   border: 1px solid var(--ctrl-stroke);
   border-radius: var(--r-pill);
   white-space: nowrap;
 }
-/* When the attempt pill is present it takes the auto margin; the button then just follows it. */
-.pair__attempts + .pair__sync-btn { margin-left: 0; }
 [data-theme="light"] .pair__sync-btn:hover:not([disabled]) { background: rgba(184,82,48,0.18); }
 @media (prefers-reduced-motion: reduce) {
   .pair__sync-btn:hover:not([disabled])::before { animation: none; }
@@ -476,20 +485,24 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 .pair__activity-head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 8px;
   /* More separation from the SOURCE/DESTINATION route-detail card above (point 4). */
   padding: var(--s-5) 10px var(--s-1);
   font-size: 10.5px; font-weight: 600;
   color: var(--ink-3);
   text-transform: uppercase; letter-spacing: 0.08em;
 }
+/* The "N" count sits right after the "Recent events" label; the Attempt pill (when present) takes
+   the remaining space via its own margin-left:auto. */
+.pair__activity-head > .num { color: var(--ink-2); }
 .pair__activity { padding: 0 4px 2px; }
 .pair__activity .activity__row { padding: 7px 8px; }
 .pair__activity .activity__row + .activity__row { border-top: 1px solid var(--glass-stroke-2); }
 .pair__body .route__progress { margin: 4px 8px 10px; }
 
-/* Footer controls — Pause / Disable / Export .txt / Edit / Delete on a SINGLE line (point 5).
-   No wrap; buttons shrink their padding (and may shed the icon label gap) before overflowing.
+/* Footer controls — Pause / Disable / Export .txt / Edit / Delete on a SINGLE line (point 1).
+   ICON-ONLY square buttons: each carries an aria-label + title (tooltip), no visible text that
+   could be truncated. Five 30px squares with small gaps fit comfortably in a ~340px window.
    Delete is pushed to the far right and uses the error accent. */
 .pair__controls {
   display: flex; align-items: center;
@@ -499,22 +512,24 @@
   padding: 0 4px;
 }
 .pair__ctrl-btn {
-  height: 30px;
-  padding: 0 9px;
-  flex: 0 1 auto;
-  min-width: 0;
-  white-space: nowrap;
+  width: 30px; height: 30px;
+  padding: 0;
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.pair__ctrl-btn-label {
-  font-size: 12px;
-  overflow: hidden; text-overflow: ellipsis;
+.pair__ctrl-btn svg { width: 15px; height: 15px; }
+.pair__ctrl-btn--danger {
+  color: var(--err);
+  margin-left: auto;
+  border-color: var(--err-edge, rgba(227,103,116,0.32));
 }
-.pair__ctrl-btn--danger { color: var(--err); margin-left: auto; }
-/* Narrow windows: tighten padding and the icon→label gap so all five still fit one line. */
-@media (max-width: 380px) {
+.pair__ctrl-btn--danger:hover:not([disabled]) {
+  background: var(--err-soft);
+  border-color: rgba(227,103,116,0.5);
+}
+/* Very narrow windows: tighten the gaps a touch so the five squares always stay on one line. */
+@media (max-width: 360px) {
   .pair__controls { gap: 4px; }
-  .pair__ctrl-btn { padding: 0 7px; gap: 4px; }
-  .pair__ctrl-btn-label { font-size: 11.5px; }
 }
 
 .pair:not(.is-open) .pair__substats { padding-bottom: 14px; }

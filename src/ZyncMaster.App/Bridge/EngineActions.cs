@@ -402,8 +402,12 @@ public sealed class EngineActions : IEngineActions, IDisposable
                     _pairs, _comSource, pair, key, _clock.UtcNow, _engineSettings, c, _logger);
             }, ct);
 
-            _logger.Log(LogLevel.Info,
-                $"Sync now: pair '{id}' done (created {result.Created}, updated {result.Updated}, deleted {result.Deleted}, skipped {result.Skipped}).");
+            if (result.RunInProgress)
+                _logger.Log(LogLevel.Info,
+                    $"Sync now: pair '{id}' is already syncing (a scheduled run is in progress); this manual run was skipped.");
+            else
+                _logger.Log(LogLevel.Info,
+                    $"Sync now: pair '{id}' done (created {result.Created}, updated {result.Updated}, deleted {result.Deleted}, skipped {result.Skipped}).");
             return result;
         }
         catch (Exception ex)

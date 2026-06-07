@@ -262,6 +262,8 @@
 .chip--deleted { color: var(--err);   background: var(--err-soft);   border-color: rgba(227,103,116,0.4); }
 .chip--skipped { color: var(--ink-2); background: var(--ctrl-fill);  border-color: var(--ctrl-stroke); }
 .chip--ok      { color: var(--ok);    background: var(--ok-soft);    border-color: rgba(78,192,127,0.4); }
+/* Benign/info outcome (e.g. "already syncing") — neutral azure, never read as a failure. */
+.chip--info    { color: var(--azure); background: var(--azure-soft); border-color: var(--azure-edge); }
 
 /* =========================================================
    ACTIVITY

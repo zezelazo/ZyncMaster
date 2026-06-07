@@ -278,8 +278,8 @@ if (mql && mql.addEventListener) {
 // ---------------- App state ----------------
 // Product version shown in About + the Settings "About" row. Hardcoded because the web UI has
 // no channel to read the host's .NET assembly version; keep it in step with the published
-// release (currently 0.2.8, beta).
-const VERSION = '0.2.8';
+// release (currently 0.2.9, beta).
+const VERSION = '0.2.9';
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -862,6 +862,9 @@ function actionChip(kind) {
     deleted: ['chip--deleted', 'Deleted'], skipped: ['chip--skipped', 'Skipped'],
     // Session-log outcomes: a whole sync attempt's result.
     ok: ['chip--ok', 'OK'], failed: ['chip--deleted', 'Failed'], requested: ['chip--created', 'Requested'],
+    // Benign/info outcome (e.g. a scheduled run was already in progress, so the manual one was
+    // skipped). Neutral azure chip — NOT a failure.
+    info: ['chip--info', 'Info'],
   };
   const [cls, txt] = map[kind] || map.skipped;
   return el('span', { class: `chip ${cls}`, text: txt });
@@ -1102,19 +1105,21 @@ function pairAccordion(pair) {
     spinning ? el('span', { class: 'spinner', style: 'width:12px;height:12px;border-width:1.6px' }) : el('span', { style: 'display:inline-flex', html: icon('sync', { size: 12, stroke: 1.8 }) }),
     el('span', { class: 'num', text: syncBtnLabel }),
   );
-  // Attempt counter (this session). Subtle pill next to the button; only shown after the first try.
+  // Header layout (point 2): in a ~340px window all five items + the button cannot share one row
+  // without the "Sync now" button being clipped at the right edge. So the stats (Events / Next /
+  // Status) sit on their own row, and "Sync now" gets a dedicated full-width row directly below —
+  // the button is therefore always complete and clickable. "Attempt N" is moved OUT of this row (it
+  // was the item pushing the button off-screen) and is rendered as a sub-badge next to "Recent
+  // events" further down.
   const substatChildren = [
     substat('Events', pair.eventCount),
     el('span', null, el('span', { class: 'route__stat-label', text: 'Next' }), el('span', { class: 'route__stat-val num', text: nextStr })),
     el('span', null, el('span', { class: 'route__stat-label', text: 'Status' }),
       el('span', { class: 'route__stat-val', text: (isSyncing || busy) ? 'Syncing…' : isError ? 'Failed' : isOffline ? 'Offline' : 'Connected' })),
   ];
-  if (pair.attempts > 0) {
-    substatChildren.push(el('span', { class: 'pair__attempts', title: `${pair.attempts} sync ${pair.attempts === 1 ? 'attempt' : 'attempts'} this session` },
-      el('span', { class: 'num', text: `Attempt ${pair.attempts}` })));
-  }
-  substatChildren.push(syncBtn);
   card.append(el('div', { class: 'pair__substats' }, ...substatChildren));
+  // Sync now on its own row, full-width — never clipped.
+  card.append(el('div', { class: 'pair__sync-row' }, syncBtn));
 
   // Track B — COM device-pinning note. Tells the user WHERE this pair's Outlook source is read:
   //   local     → "Source is on this PC" (this device runs it);
@@ -1170,9 +1175,15 @@ function pairAccordion(pair) {
 
     // RECENT EVENTS — driven by the per-pair session log (every attempt, ok + fail) when present,
     // otherwise the last-run summary from the server. The counter reflects how many rows are shown.
-    body.append(el('div', { class: 'pair__activity-head' },
+    const activityHead = el('div', { class: 'pair__activity-head' },
       el('span', { text: 'Recent events' }),
-      el('span', { class: 'num', text: String(pair.events.length) })));
+      el('span', { class: 'num', text: String(pair.events.length) }));
+    // "Attempt N" relocated here (out of the cramped header row) as a subtle sub-badge.
+    if (pair.attempts > 0) {
+      activityHead.append(el('span', { class: 'pair__attempts', title: `${pair.attempts} sync ${pair.attempts === 1 ? 'attempt' : 'attempts'} this session` },
+        el('span', { class: 'num', text: `Attempt ${pair.attempts}` })));
+    }
+    body.append(activityHead);
     const act = el('div', { class: 'pair__activity' });
     if (pair.events.length) pair.events.forEach((row) => act.append(activityRow(row)));
     else act.append(el('div', { class: 'activity__sub', style: 'padding:8px 2px', text: 'No changes yet.' }));
@@ -1182,18 +1193,21 @@ function pairAccordion(pair) {
     if (Bridge.available && pair.id) {
       const paused = pair.serverState === 'paused';
       const disabled = pair.serverState === 'disabled';
-      // Footer controls live on a SINGLE line (point 5): the .pair__controls flex row is no-wrap and
-      // its .pair__ctrl-btn children shrink their horizontal padding so all five fit even in a narrow
-      // window, instead of wrapping onto a second row. Layout/sizing lives in layout.css.
+      // Footer controls live on a SINGLE line and are ICON-ONLY so all five fit, uncut, even in a
+      // ~340px-wide window. Each button carries an aria-label + title (tooltip) describing its action;
+      // there is no visible text label to truncate. Layout/sizing lives in layout.css (.pair__ctrl-btn
+      // is a fixed square icon button). Delete sits last, tinted with --err.
       const controls = el('div', { class: 'pair__controls' });
 
-      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn',
+      const pauseLabel = paused ? 'Resume' : 'Pause';
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn', 'aria-label': pauseLabel, title: pauseLabel,
         onclick: (e) => { e.stopPropagation(); setPairState(pair.id, paused ? 'active' : 'paused'); } },
-        iconEl(paused ? 'sync' : 'pause', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: paused ? 'Resume' : 'Pause' })));
+        iconEl(paused ? 'sync' : 'pause', 15, 1.8)));
 
-      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn',
+      const disableLabel = disabled ? 'Enable' : 'Disable';
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn', 'aria-label': disableLabel, title: disableLabel,
         onclick: (e) => { e.stopPropagation(); setPairState(pair.id, disabled ? 'active' : 'disabled'); } },
-        iconEl(disabled ? 'check' : 'close', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: disabled ? 'Enable' : 'Disable' })));
+        iconEl(disabled ? 'check' : 'disable', 15, 1.8)));
 
       // Export .txt — per-pair export of the pair's SOURCE calendar. Routing is by source
       // provider, inside openExportTxtModal: a COM source exports the local Outlook via
@@ -1205,22 +1219,22 @@ function pairAccordion(pair) {
       if (Bridge.desktopApp) {
         const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
         const comBlocked = isCom && !comAvailable();
+        const txtTitle = comBlocked ? 'Outlook is not available on this device' : 'Export .txt';
         const txtBtn = el('button', { class: 'btn btn--ghost pair__ctrl-btn',
-          disabled: comBlocked,
-          title: comBlocked ? 'Outlook is not available on this device' : 'Export a month of this calendar to a .txt file',
+          disabled: comBlocked, 'aria-label': 'Export .txt', title: txtTitle,
           onclick: (e) => { e.stopPropagation(); if (!comBlocked) openExportTxtModal(pair); } },
-          iconEl('folder', 12, 1.6), el('span', { class: 'pair__ctrl-btn-label', text: 'Export .txt' }));
+          iconEl('download', 15, 1.7));
         controls.append(txtBtn);
       }
 
       // Edit — open the wizard preloaded with this pair (F2). Reuses renderAddPairLive in edit mode.
-      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn',
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn', 'aria-label': 'Edit', title: 'Edit',
         onclick: (e) => { e.stopPropagation(); startEditPair(pair.id); } },
-        iconEl('settings', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: 'Edit' })));
+        iconEl('pencil', 15, 1.8)));
 
-      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn pair__ctrl-btn--danger',
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn pair__ctrl-btn--danger', 'aria-label': 'Delete', title: 'Delete',
         onclick: (e) => { e.stopPropagation(); deletePair(pair.id); } },
-        iconEl('close', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: 'Delete' })));
+        iconEl('trash', 15, 1.7)));
 
       body.append(controls);
     }
@@ -2947,8 +2961,8 @@ function renderAbout(root) {
     el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
     el('div', { class: 'about-name', text: 'Zync Master' }),
     // Version is hardcoded: the web UI has no channel to read the .NET assembly version of the
-    // host. Keep this in step with the published release (currently 0.2.8, beta). No build number.
-    el('div', { class: 'about-version num', text: 'VERSION 0.2.8 · BETA' }),
+    // host. Keep this in step with the published release (currently 0.2.9, beta). No build number.
+    el('div', { class: 'about-version num', text: 'VERSION 0.2.9 · BETA' }),
     el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
     links,
   ));
@@ -3113,6 +3127,13 @@ function runPairNow(id) {
   announce('Sync started');
   Bridge.call('runPairNow', id)
     .then((res) => {
+      // Benign skip: a scheduled run was already in progress so the manual one was a no-op. This is
+      // NOT a failure — log it as a neutral info event and do not count it as an error.
+      if (res && res.runInProgress === true) {
+        pushPairEvent(id, { ok: true, action: 'info', title: 'Already syncing', sub: 'A scheduled run is in progress', result: res });
+        announce('Already syncing — a scheduled run is in progress.');
+        return loadPairs();
+      }
       pushPairEvent(id, { ok: true, action: 'ok', title: syncResultSummary(res), sub: 'Sync completed', result: res });
       announce('Sync completed.');
       return loadPairs();

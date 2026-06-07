@@ -54,16 +54,40 @@ public static class PairRunner
                 $"Pair '{pair.Id}' ({pair.Name}): COM source, read window [{from:o} .. {to:o}], calendars={(selection == null ? "all" : string.Join(", ", selection))}.");
             var events = await comSource.ReadWindowAsync(from, to, selection, ct);
             log.Log(LogLevel.Info, $"Pair '{pair.Id}': read {events.Count} event(s) from COM; pushing.");
-            var pushed = await client.PushPairAsync(apiKey, pair.Id, events, ct);
-            log.Log(LogLevel.Info, $"Pair '{pair.Id}': push result {Describe(pushed)}.");
-            return pushed;
+            try
+            {
+                var pushed = await client.PushPairAsync(apiKey, pair.Id, events, ct);
+                log.Log(LogLevel.Info, $"Pair '{pair.Id}': push result {Describe(pushed)}.");
+                return pushed;
+            }
+            catch (SyncClientException ex) when (IsRunInProgress(ex))
+            {
+                // The scheduled run and a manual "Sync now" raced; the other won the run-lock and is
+                // mirroring. This run is a benign no-op, NOT a failure.
+                log.Log(LogLevel.Info, $"Pair '{pair.Id}': another run is already in progress; skipping this one.");
+                return new MirrorResult { RunInProgress = true };
+            }
         }
 
         log.Log(LogLevel.Info, $"Pair '{pair.Id}' ({pair.Name}): server-side run (Graph).");
-        var ran = await client.RunPairAsync(apiKey, pair.Id, ct);
-        log.Log(LogLevel.Info, $"Pair '{pair.Id}': run result {Describe(ran)}.");
-        return ran;
+        try
+        {
+            var ran = await client.RunPairAsync(apiKey, pair.Id, ct);
+            log.Log(LogLevel.Info, $"Pair '{pair.Id}': run result {Describe(ran)}.");
+            return ran;
+        }
+        catch (SyncClientException ex) when (IsRunInProgress(ex))
+        {
+            log.Log(LogLevel.Info, $"Pair '{pair.Id}': another run is already in progress; skipping this one.");
+            return new MirrorResult { RunInProgress = true };
+        }
     }
+
+    // The server's run-lock returns 409 with error "run_in_progress" when a run for this pair is
+    // already underway. Detected by status + body marker so a benign concurrent-run collision is not
+    // reported as a sync failure.
+    private static bool IsRunInProgress(SyncClientException ex)
+        => ex.StatusCode == 409 && ex.Message.Contains("run_in_progress", StringComparison.Ordinal);
 
     private static string Describe(MirrorResult r)
         => r == null
