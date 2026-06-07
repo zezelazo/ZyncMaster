@@ -510,7 +510,7 @@ public class ClipboardBridgeTests
         var sink = new Mock<IClipboardSink>();
         sink.Setup(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()))
             .Callback<ClipboardEntry, CancellationToken>((e, _) => pasted = e)
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(true);
 
         var actions = BuildEngine(transport, sink: sink, keys: keys);
         var viewerClosed = 0;
@@ -522,6 +522,58 @@ public class ClipboardBridgeTests
         pasted.Should().NotBeNull();
         pasted!.Text.Should().Be("paste me"); // the sink receives DECRYPTED plaintext
         viewerClosed.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PasteClipboardEntry_text_not_decryptable_yet_fails_and_keeps_viewer_open()
+    {
+        // Text item with ciphertext but no admitted key -> plaintext stays null. Pasting must report
+        // failure (no-op) and leave the viewer open rather than dismissing with a false "ok".
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "i1", Type = ClipboardEntryType.Text, CipherText = new byte[] { 1, 2, 3 }, OriginDeviceId = "dev-1" },
+            });
+
+        var keys = new Mock<IClipboardKeyStore>();
+        keys.Setup(k => k.LoadTextKeyAsync(It.IsAny<CancellationToken>())).ReturnsAsync((byte[]?)null);
+
+        var sink = new Mock<IClipboardSink>();
+        var actions = BuildEngine(transport, sink: sink, keys: keys);
+        var viewerClosed = 0;
+        actions.CloseClipboardViewer = () => viewerClosed++;
+
+        var found = await actions.PasteClipboardEntryAsync("i1", CancellationToken.None);
+
+        found.Should().BeFalse();
+        viewerClosed.Should().Be(0);
+        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PasteClipboardEntry_routes_through_the_clipboard_service_seam()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "i1", Type = ClipboardEntryType.Text, Text = "ready", OriginDeviceId = "dev-1" },
+            });
+
+        var sink = new Mock<IClipboardSink>();
+        var actions = BuildEngine(transport, sink: sink);
+
+        ClipboardEntry? seamEntry = null;
+        actions.PasteThroughClipboardService = (e, _) => { seamEntry = e; return Task.FromResult(true); };
+
+        var found = await actions.PasteClipboardEntryAsync("i1", CancellationToken.None);
+
+        found.Should().BeTrue();
+        seamEntry.Should().NotBeNull();
+        seamEntry!.Text.Should().Be("ready");
+        // The seam was used; the raw sink must NOT be called directly.
+        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

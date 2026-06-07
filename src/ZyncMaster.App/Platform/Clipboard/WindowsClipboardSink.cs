@@ -24,7 +24,7 @@ public sealed class WindowsClipboardSink : IClipboardSink
         return Task.CompletedTask;
     }
 
-    public Task PasteIntoFocusedAsync(ClipboardEntry entry, CancellationToken ct = default)
+    public Task<bool> PasteIntoFocusedAsync(ClipboardEntry entry, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
@@ -33,7 +33,7 @@ public sealed class WindowsClipboardSink : IClipboardSink
         var target = Win32.GetForegroundWindow();
 
         if (!WriteToClipboard(entry))
-            return Task.CompletedTask;
+            return Task.FromResult(false);
 
         if (target != IntPtr.Zero)
         {
@@ -41,7 +41,7 @@ public sealed class WindowsClipboardSink : IClipboardSink
             SendCtrlV();
         }
 
-        return Task.CompletedTask;
+        return Task.FromResult(true);
     }
 
     private static bool WriteToClipboard(ClipboardEntry entry)

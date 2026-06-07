@@ -387,8 +387,11 @@ public partial class App : Application
         {
             byte[]? textKey = await engine.ClipboardKeys.LoadTextKeyAsync(_shutdown.Token);
             var item = engine.Actions.ToHistoryItem(entry, textKey);
+            // Push only to the live viewer bridge: the viewer page is the sole consumer of the
+            // "clipboard:item" event. Pushing the (decrypted) plaintext to the main-window bridge too
+            // serialized it onto a WebView IPC channel with no listener, needlessly widening the
+            // in-process plaintext surface.
             _clipboardViewerBridge?.PushClipboardItem(item);
-            _bridge?.PushClipboardItem(item);
         }
         catch (OperationCanceledException) { /* shutdown */ }
         catch (Exception ex)

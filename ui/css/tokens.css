@@ -88,6 +88,13 @@
   --ctrl-hover:  rgba(255, 255, 255, 0.08);
   --ctrl-active: rgba(255, 255, 255, 0.12);
 
+  /* inverted ink — text that sits on a light/accent fill (selected segments, active filters) */
+  --ink-on-accent: #0e1320;  /* dark ink on a near-white fill */
+  --ink-on-azure:  #ffffff;  /* light ink on an azure fill */
+
+  /* opaque card surface — the solid fallback when backdrop-filter is unavailable */
+  --surface-solid: var(--bg-2);
+
   /* focus */
   --focus: 0 0 0 2px var(--bg-0), 0 0 0 4px var(--azure);
 
@@ -144,6 +151,13 @@
   --ctrl-stroke: rgba(17, 24, 39, 0.10);
   --ctrl-hover:  rgba(17, 24, 39, 0.08);
   --ctrl-active: rgba(17, 24, 39, 0.13);
+
+  /* inverted ink — text on a light/accent fill (selected segments, active filters) */
+  --ink-on-accent: #0e1320;  /* dark ink on a near-white fill */
+  --ink-on-azure:  #ffffff;  /* light ink on an azure fill */
+
+  /* opaque card surface — the solid fallback when backdrop-filter is unavailable */
+  --surface-solid: #ffffff;
 
   --focus: 0 0 0 2px var(--bg-0), 0 0 0 4px var(--azure);
 

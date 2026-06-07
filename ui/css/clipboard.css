@@ -2,7 +2,8 @@
    CLIPBOARD module — viewer overlay + settings screen.
    Built on the shared liquid-glass tokens (tokens.css / glass.css) and the
    existing component vocabulary (.segmented, .toggle, .cfg-row, .status-dot,
-   .section-head). NO hardcoded hex — every colour comes from a CSS variable.
+   .section-head). No hardcoded hex — palette colours come from CSS variables
+   (inverted text-on-accent constants live as --ink-on-accent / --ink-on-azure).
    Palette: azure / cyan / blue (no violet). Mocks of record:
    viewer-glass-v3, rich-vs-mini-final2, mini-narrow, condensed-image-expand,
    hints-toggle, glass-settings, settings-natural-accordion.
@@ -71,8 +72,7 @@
 .cb-viewer--mini { width: 240px; }
 
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .cb-viewer { background: var(--bg-2); }
-  [data-theme="light"] .cb-viewer { background: #ffffff; }
+  .cb-viewer { background: var(--surface-solid); }
 }
 
 /* Header: status dot + "Clipboard · N items". */
@@ -117,9 +117,9 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: color var(--d-fast), background var(--d-fast);
 }
-.cb-filter__item[aria-pressed="true"] { color: #0e1320; }
+.cb-filter__item[aria-pressed="true"] { color: var(--ink-on-accent); }
 [data-theme="dark"] .cb-filter__item[aria-pressed="true"] { background: rgba(255, 255, 255, 0.92); }
-[data-theme="light"] .cb-filter__item[aria-pressed="true"] { background: var(--azure); color: #fff; }
+[data-theme="light"] .cb-filter__item[aria-pressed="true"] { background: var(--azure); color: var(--ink-on-azure); }
 
 /* Scrollable list region. */
 .cb-list {
@@ -219,22 +219,26 @@
   border-color: var(--glass-stroke);
 }
 
-/* Selected-image expand preview (rich only). The selected image row grows to a
-   single column and shows a large thumbnail keeping aspect ratio. */
-.cb-row--img.is-selected {
+/* Selected-image expand preview (RICH only — gated to :not(.cb-viewer--mini) because the JS only
+   appends the preview in rich; in mini a selected image must render as a plain selected row). The
+   selected image row grows to a single column and shows a large thumbnail keeping aspect ratio. */
+.cb-viewer:not(.cb-viewer--mini) .cb-row--img.is-selected {
   grid-template-columns: 1fr;
   gap: 7px;
   padding: 8px 9px;
 }
-.cb-row--img.is-selected .cb-row__head {
+.cb-viewer:not(.cb-viewer--mini) .cb-row--img.is-selected .cb-row__head {
   display: grid;
   grid-template-columns: 21px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
 }
-/* In the un-expanded state the head IS the row content (no wrapper grid needed). */
+/* In the un-expanded state the head IS the row content (no wrapper grid needed). This covers all
+   non-image rows, un-selected image rows, and — because the expand grid above is rich-only — every
+   image row in mini (including the selected one). */
 .cb-row:not(.cb-row--img) .cb-row__head,
-.cb-row--img:not(.is-selected) .cb-row__head { display: contents; }
+.cb-row--img:not(.is-selected) .cb-row__head,
+.cb-viewer--mini .cb-row--img .cb-row__head { display: contents; }
 
 .cb-preview {
   width: 100%;
@@ -335,6 +339,11 @@
 }
 .cb-acc__chev svg { width: 15px; height: 15px; transition: transform var(--d-base) var(--ease-out); }
 .cb-acc[aria-expanded="true"] .cb-acc__chev svg { transform: rotate(180deg); }
+
+/* Accordion body — the device-group container. Small padding so the rows do not sit flush against
+   the header (matches the settings-natural-accordion mock's device-group spacing). */
+.cb-acc__body { padding: 2px 4px 6px; }
+.cb-acc__body[hidden] { display: none; }
 
 /* Per-device row inside the accordion. */
 .cb-dev {

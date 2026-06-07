@@ -228,6 +228,40 @@ test.describe('Clipboard viewer overlay', () => {
     await expect(page.locator('.cb-help')).toHaveCount(0);
   });
 
+  test('applyNewItem: re-anchors selection against the FILTERED list under an active filter', async ({ page }) => {
+    await gotoViewer(page, { density: 'rich' });
+
+    // Import the pure helper straight from the loaded module and exercise it in the page context.
+    // Scenario: an Img filter is active; the visible list is the 5 images and sel points at the 2nd
+    // visible image. A new TEXT item arrives. The selected image must stay highlighted: sel must
+    // re-map to the same image's index within the NEW filtered (image-only) list, not jump to a raw
+    // index that the render would mis-apply to the filtered list.
+    const result = await page.evaluate(async () => {
+      const mod = await import('/clipboard-viewer.js');
+      const items = [
+        { id: 'i1', type: 'Image', sizeBytes: 1 },
+        { id: 't1', type: 'Text', text: 'a' },
+        { id: 'i2', type: 'Image', sizeBytes: 2 },
+        { id: 't2', type: 'Text', text: 'b' },
+        { id: 'i3', type: 'Image', sizeBytes: 3 },
+      ];
+      // Visible (image filter) = [i1, i2, i3]; sel=1 selects i2.
+      const state = { items, filter: 'image', density: 'rich', sel: 1 };
+      const next = mod.applyNewItem(state, { id: 't3', type: 'Text', text: 'c' });
+      const nextVisible = next.items.filter((it) => mod.filterMatch(it, 'image'));
+      return {
+        sel: next.sel,
+        selectedVisibleId: nextVisible[next.sel] ? nextVisible[next.sel].id : null,
+        topId: next.items[0] ? next.items[0].id : null,
+      };
+    });
+
+    // The new text item went to the top of the raw list, but the highlighted IMAGE is unchanged.
+    expect(result.topId).toBe('t3');
+    expect(result.selectedVisibleId).toBe('i2');
+    expect(result.sel).toBe(1);
+  });
+
   test('rich: Enter pastes the selected item id', async ({ page }) => {
     await gotoViewer(page, { density: 'rich' });
 

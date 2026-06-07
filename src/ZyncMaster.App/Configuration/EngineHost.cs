@@ -242,6 +242,10 @@ public sealed class EngineHost : IDisposable
             () => actions.CurrentClipboardSettings,
             ClipboardHardMaxImageBytes);
 
+        // Route paste through the ClipboardService so it marks the dedupe before the OS write and the
+        // resulting clipboard capture is suppressed as an echo (no spurious re-publish on every paste).
+        actions.PasteThroughClipboardService = clipboardService.PasteAsync;
+
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
         // pairs are read locally and pushed; the rest are mirrored server-side. It lists the pairs
         // with the signed-in user's identity bearer (human-only surface) and pushes/runs under the

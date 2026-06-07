@@ -50,6 +50,20 @@ public sealed class ClipboardService
     public void Start() => _capture.Start();
     public void Stop() => _capture.Stop();
 
+    // Pastes a history item (already resolved to plaintext for Text) into the focused window. Marks the
+    // dedupe with the content hash BEFORE the OS write — mirroring ApplyReceivedAsync — so the
+    // WM_CLIPBOARDUPDATE the programmatic write triggers is recognized as our own echo in
+    // PublishCapturedAsync and dropped, rather than being re-encrypted and re-published as a new copy
+    // (the echo loop the dedupe exists to prevent). Returns whatever the sink reports: false when there
+    // was nothing to write (so the caller does not report a no-op as a successful paste).
+    public Task<bool> PasteAsync(ClipboardEntry entry, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        _dedupe.MarkApplied(_dedupe.Hash(entry));
+        return _sink.PasteIntoFocusedAsync(entry, ct);
+    }
+
     private async void OnCaptured(ClipboardEntry entry) =>
         await PublishCapturedAsync(entry, CancellationToken.None).ConfigureAwait(false);
 

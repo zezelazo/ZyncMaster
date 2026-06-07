@@ -49,12 +49,18 @@ public sealed class ClipboardServiceTests
     private sealed class FakeSink : IClipboardSink
     {
         public readonly List<ClipboardEntry> Set = new();
+        public readonly List<ClipboardEntry> Pasted = new();
+        public bool PasteResult = true;
         public Task SetAsync(ClipboardEntry entry, CancellationToken ct = default)
         {
             Set.Add(entry);
             return Task.CompletedTask;
         }
-        public Task PasteIntoFocusedAsync(ClipboardEntry entry, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> PasteIntoFocusedAsync(ClipboardEntry entry, CancellationToken ct = default)
+        {
+            Pasted.Add(entry);
+            return Task.FromResult(PasteResult);
+        }
     }
 
     private sealed class FakeKeyStore : IClipboardKeyStore
@@ -180,6 +186,37 @@ public sealed class ClipboardServiceTests
         await SettleAsync();
 
         h.Transport.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PasteAsync_MarksDedupe_SoEchoCaptureNotPublished()
+    {
+        var key = TextCrypto.NewKey();
+        var h = new Harness(key);
+
+        // User pastes a (decrypted) history item. PasteAsync must mark the dedupe before the OS write
+        // so the WM_CLIPBOARDUPDATE the write triggers is suppressed as our own echo.
+        var wrote = await h.Service.PasteAsync(Text("pasted text"));
+        wrote.Should().BeTrue();
+        h.Sink.Pasted.Should().HaveCount(1);
+        h.Sink.Pasted[0].Text.Should().Be("pasted text");
+
+        // The OS fires a capture for that very content -> must be dropped, not re-published.
+        h.Capture.Raise(Text("pasted text"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PasteAsync_ReturnsSinkResult_WhenNothingWritten()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        h.Sink.PasteResult = false;
+
+        var wrote = await h.Service.PasteAsync(Text("nothing"));
+
+        wrote.Should().BeFalse();
     }
 
     [Fact]

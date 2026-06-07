@@ -78,6 +78,14 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // A no-op when the App did not wire a viewer (headless).
     public Action? CloseClipboardViewer { get; set; }
 
+    // Paste seam: routes a paste through the ClipboardService so the dedupe is marked BEFORE the OS
+    // write, suppressing the echo capture (otherwise our own paste bounces back onto the wire as a new
+    // copy). Set by the host once the ClipboardService is built (construction order means it can't be a
+    // ctor arg). When unset (e.g. headless/tests that only wire a sink), PasteClipboardEntryAsync falls
+    // back to the raw sink — correct, just without echo suppression. Returns whether the OS write
+    // actually happened.
+    public Func<ClipboardEntry, CancellationToken, Task<bool>>? PasteThroughClipboardService { get; set; }
+
     // Device is considered online when its last-seen lease is within this window. The server heartbeat
     // runs comfortably inside this, so a live App keeps its device "online" for the roster.
     private static readonly TimeSpan DeviceOnlineWindow = TimeSpan.FromMinutes(10);
@@ -1039,7 +1047,12 @@ public sealed class EngineActions : IEngineActions, IDisposable
             ClipboardSettings settings;
             try
             {
-                settings = await _clipboardTransport.GetSettingsAsync(row.Id, ct).ConfigureAwait(false);
+                // Self-heal on a rotated/rejected device key: WithDeviceKeyAsync re-registers and retries
+                // once on 401 (the transport reads the refreshed key from the same store), so a settings
+                // fetch recovers the persisted values instead of silently degrading to defaults. The op
+                // ignores the key argument because the transport carries its own api-key provider.
+                settings = await WithDeviceKeyAsync(
+                    (_, c) => _clipboardTransport.GetSettingsAsync(row.Id, c), ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -1161,13 +1174,31 @@ public sealed class EngineActions : IEngineActions, IDisposable
             }
         }
 
+        // Guard against a no-op paste: if a Text item still has no plaintext (key not admitted yet) or
+        // an image has no bytes, nothing would be written to the OS clipboard. Report failure and leave
+        // the viewer open rather than dismissing it with a false "ok" the user reads as a done paste.
+        var hasContent = match.Type == ClipboardEntryType.Text
+            ? !string.IsNullOrEmpty(match.Text)
+            : match.ImageBytes is { Length: > 0 };
+        if (!hasContent)
+        {
+            _logger.Log(LogLevel.Warning, $"Paste clipboard: item '{id}' is not available yet (no content to paste).");
+            return false;
+        }
+
         // Close the viewer FIRST so the previously-focused window is restored as the foreground
         // window before the sink reads it (the sink captures GetForegroundWindow at paste time and
         // synthesizes Ctrl+V into it). The viewer's close handler re-asserts the window it captured
         // on open, so by the time the sink pastes, focus is back where the user expects it.
         CloseClipboardViewer?.Invoke();
-        await _clipboardSink.PasteIntoFocusedAsync(match, ct).ConfigureAwait(false);
-        return true;
+
+        // Route through the ClipboardService (when wired) so the dedupe is marked before the OS write
+        // and the resulting capture is recognized as an echo and dropped. Without the seam, fall back
+        // to the raw sink (no echo suppression).
+        var wrote = PasteThroughClipboardService is { } paste
+            ? await paste(match, ct).ConfigureAwait(false)
+            : await _clipboardSink.PasteIntoFocusedAsync(match, ct).ConfigureAwait(false);
+        return wrote;
     }
 
     // Re-registers the global viewer hotkey and persists it in THIS device's clipboard settings (so a

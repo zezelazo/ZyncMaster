@@ -127,22 +127,38 @@ function el(tag, props = {}, ...children) {
 // ===================== pure helpers (exported for unit tests) =====================
 const GROUP_SIZE = 10;
 
+// visibleOf(state) — the items the given state would render: filtered by the active rich filter, or
+// the raw list in mini (mini ignores the filter). Mirrors visibleItems() but is pure over its arg so
+// applyNewItem can re-anchor selection against the SAME list state.sel indexes.
+function visibleOf(state) {
+  const items = Array.isArray(state.items) ? state.items : [];
+  if (state.density === 'mini') return items;
+  return items.filter((it) => filterMatch(it, state.filter));
+}
+
 // applyNewItem(state, item) — prepend a freshly-arrived history item, keeping selection stable.
 // Pure: returns a NEW state object, never mutates the input (so it is trivially testable). The
 // selection is anchored to the currently-selected ITEM (by id) so a prepend that shifts indices
 // does not move the highlight; if nothing was selected we keep index 0 (the new item becomes
 // selected, which is the natural "newest" behaviour). A duplicate id is de-duplicated (the incoming
 // copy wins and moves to the top).
+//
+// state.sel is an index into the VISIBLE (filtered/density) list everywhere else in the viewer, so we
+// anchor and re-map against the visible list — not the raw items array. With an active rich filter the
+// raw and visible lists diverge, and anchoring against the raw list would read the wrong id and set a
+// sel the render mis-applies to the filtered list (moving/losing the highlight).
 function applyNewItem(state, item) {
   if (!item || item.id == null) return state;
   const prevItems = Array.isArray(state.items) ? state.items : [];
-  const selectedId = prevItems.length ? (prevItems[state.sel] && prevItems[state.sel].id) : null;
+  const prevVisible = visibleOf(state);
+  const selectedId = prevVisible.length ? (prevVisible[state.sel] && prevVisible[state.sel].id) : null;
   const deduped = prevItems.filter((it) => it.id !== item.id);
   const items = [item, ...deduped];
-  // Re-anchor selection to the same item if it still exists; otherwise keep the top (index 0).
+  // Re-anchor selection to the same item within the NEW visible list; otherwise keep the top (0).
   let sel = 0;
   if (selectedId != null) {
-    const idx = items.findIndex((it) => it.id === selectedId);
+    const nextVisible = visibleOf({ ...state, items });
+    const idx = nextVisible.findIndex((it) => it.id === selectedId);
     sel = idx >= 0 ? idx : 0;
   }
   return { ...state, items, sel };
@@ -210,8 +226,7 @@ const FILTERS = [['all', 'All'], ['text', 'Text'], ['image', 'Img'], ['file', 'F
 
 // visibleItems() — the items after the active filter (rich). Mini ignores the filter entirely.
 function visibleItems() {
-  if (state.density === 'mini') return state.items;
-  return state.items.filter((it) => filterMatch(it, state.filter));
+  return visibleOf(state);
 }
 
 // ===================== render =====================
