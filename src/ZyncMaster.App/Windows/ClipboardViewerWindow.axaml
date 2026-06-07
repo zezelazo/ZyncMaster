@@ -1,0 +1,19 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ZyncMaster.App.Windows.ClipboardViewerWindow"
+        Title="Zync Clipboard"
+        Width="316" Height="420"
+        WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="#0c0e16"
+        TransparencyLevelHint="None"
+        CanResize="False"
+        Topmost="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterScreen">
+  <!-- The clipboard quick-viewer: a small, frameless, top-most popup the global hotkey toggles. It
+       hosts ui/clipboard-viewer.html through the SAME WebView2 + virtual-host bridge as the main
+       window (just a different start page). Closes on Esc, after a paste, and on focus loss
+       (deactivation) — all driven from the code-behind. Width is set per density at open time. -->
+  <Panel x:Name="HostPanel" />
+</Window>

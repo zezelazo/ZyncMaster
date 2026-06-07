@@ -33,6 +33,14 @@ public partial class App : Application
     private RegisteredWaitHandle? _showWindowWait;
     private readonly CancellationTokenSource _shutdown = new();
 
+    // Clipboard quick-viewer (Plan 3 Task 6): its own frameless top-most window with its own WebView2
+    // host + bridge over the SHARED EngineActions. Created lazily on first hotkey press so the second
+    // WebView2 is not spun up on machines/sessions that never use the clipboard.
+    private ClipboardViewerWindow? _clipboardViewer;
+    private UiBridge? _clipboardViewerBridge;
+    private IWebHost? _clipboardViewerHost;
+    private Task? _clipboardTask;
+
     // FIX G — the long-running background loops are kept in fields so Exit can cancel AND drain them
     // (Task.WhenAll with a bounded wait) before disposing the EngineHost / HttpClient. Without this,
     // a fire-and-forget loop could still be mid-request against a disposed HttpClient at shutdown.
@@ -113,9 +121,14 @@ public partial class App : Application
                 // task still running past the timeout is abandoned (the process is exiting anyway).
                 DrainBackgroundLoops(TimeSpan.FromSeconds(5));
 
+                // Stop the clipboard pipeline before the host/HttpClient go away: unregister the global
+                // hotkey, stop OS capture, and tear down the viewer window + its WebView2 host.
+                StopClipboard();
+
                 _showWindowWait?.Unregister(null);
                 _tray?.Dispose();
                 _bridge = null;
+                _clipboardViewerBridge = null;
                 _engineHost?.Dispose();
                 (_webHost as IDisposable)?.Dispose();
                 _shutdown.Dispose();
@@ -193,6 +206,14 @@ public partial class App : Application
             }
         });
 
+        // Clipboard module boot: wire the viewer-close callback + the live "clipboard:item" push, then
+        // start the capture/transport/hotkey pipeline once the device is registered. Kept in its own
+        // task so it never blocks the scheduler/heartbeat startup. Tracked so Exit can drain it.
+        bootEngine.Actions.CloseClipboardViewer = () => _clipboardViewer?.Dismiss();
+        bootEngine.ClipboardHotkey.Pressed += OnClipboardHotkeyPressed;
+        bootEngine.ClipboardTransport.ItemReceived += OnClipboardItemReceived;
+        _clipboardTask = Task.Run(() => StartClipboardAsync(bootEngine, _shutdown.Token));
+
         // FIX C — the device-lease heartbeat runs independently of the scheduler's startup delay so
         // the lease is renewed promptly even before the first (delayed) sync tick. Tracked in a
         // field so Exit can drain it.
@@ -233,7 +254,7 @@ public partial class App : Application
     // swallowed: this runs on the Exit path where throwing would be worse than a noisy log.
     private void DrainBackgroundLoops(TimeSpan timeout)
     {
-        var tasks = new[] { _schedulerTask, _statusTask, _heartbeatTask };
+        var tasks = new[] { _schedulerTask, _statusTask, _heartbeatTask, _clipboardTask };
         var pending = Array.FindAll(tasks, t => t is not null)!;
         if (pending.Length == 0)
             return;
@@ -275,6 +296,132 @@ public partial class App : Application
             // Never let status publishing crash the app.
             _engineHost?.Logger.Log(LogLevel.Warning, "Status publish loop failed.", ex);
         }
+    }
+
+    // ---------------- Clipboard module (Plan 2/3 Task 11) ----------------
+
+    // Brings the clipboard pipeline online once the device is registered:
+    //   1) wait for a device key (registration completed) so the transport/devices calls authenticate;
+    //   2) read THIS device's id/name + its clipboard settings and seed the engine's live state;
+    //   3) bootstrap the E2E text key (generate as the first device, else wait for a peer to relay it);
+    //   4) connect the live WebSocket, start OS capture, and register the global viewer hotkey.
+    // Best-effort throughout: any step failing is logged and never crashes the app — the clipboard is
+    // an additive feature and the rest of the App keeps working.
+    private async Task StartClipboardAsync(EngineHost engine, CancellationToken ct)
+    {
+        try
+        {
+            // 2) Resolve this device + its settings. GetDeviceAsync self-heals/awaits registration via
+            //    the engine's WithDeviceKeyAsync, so a key is present by the time it returns.
+            var device = await engine.Actions.GetDeviceAsync(ct);
+            var settings = await engine.ClipboardTransport.GetSettingsAsync(device.DeviceId, ct);
+            engine.Actions.InitializeClipboard(settings, device.DeviceId, device.Name);
+
+            // 3) Text-key bootstrap: empty history => this is the first device, generate + keep the key;
+            //    otherwise wait for a peer to relay it (OnKeyReceivedAsync, wired in ClipboardService).
+            var history = await engine.ClipboardTransport.GetHistoryAsync(ct);
+            await engine.ClipboardKeyExchange.EnsureTextKeyAsync(history.Count == 0, ct);
+
+            // 4) Go live.
+            await engine.ClipboardTransport.ConnectAsync(ct);
+            engine.ClipboardService.Start();
+            engine.ClipboardHotkey.Register(settings.ViewerHotkey);
+
+            engine.Logger.Log(LogLevel.Info,
+                $"Clipboard module started (device={device.DeviceId}, hotkey={settings.ViewerHotkey}).");
+        }
+        catch (OperationCanceledException) { /* shutdown */ }
+        catch (Exception ex)
+        {
+            engine.Logger.Log(LogLevel.Warning, "Clipboard module failed to start; it will be unavailable this session.", ex);
+        }
+    }
+
+    // Tears down the clipboard pipeline at Exit: unsubscribe, stop OS capture, unregister the hotkey,
+    // dispose the transport's socket, and close the viewer window + its host. Best-effort and order-
+    // independent — any individual failure is swallowed so shutdown always proceeds.
+    private void StopClipboard()
+    {
+        var engine = _engineHost;
+        if (engine != null)
+        {
+            try { engine.ClipboardHotkey.Pressed -= OnClipboardHotkeyPressed; } catch { }
+            try { engine.ClipboardTransport.ItemReceived -= OnClipboardItemReceived; } catch { }
+            try { engine.ClipboardService.Stop(); } catch { }
+            try { (engine.ClipboardHotkey as IDisposable)?.Dispose(); } catch { }
+            try { (engine.ClipboardCapture as IDisposable)?.Dispose(); } catch { }
+            try { (engine.ClipboardTransport as IDisposable)?.Dispose(); } catch { }
+        }
+
+        try { (_clipboardViewerHost as IDisposable)?.Dispose(); } catch { }
+        try
+        {
+            var viewer = _clipboardViewer;
+            if (viewer != null)
+                Dispatcher.UIThread.Post(() => { try { viewer.AllowCloseAndClose(); } catch { } });
+        }
+        catch { }
+    }
+
+    // Global hotkey pressed: open (or toggle) the viewer. The viewer captures the foreground window
+    // itself on open so a later paste targets the user's real window. Marshalled onto the UI thread.
+    private void OnClipboardHotkeyPressed()
+    {
+        if (_engineHost == null)
+            return;
+        var density = _engineHost.Actions.CurrentClipboardSettings.Density;
+        Dispatcher.UIThread.Post(() => EnsureClipboardViewer().Toggle(density));
+    }
+
+    // A new item arrived over the WebSocket: decrypt Text (the UI never sees ciphertext), map to the
+    // history-item shape and push it as a "clipboard:item" event so the open viewer updates live. Sent
+    // to both the viewer's bridge (the live viewer) and the main bridge (any other listener). Best-
+    // effort: a push failure must not break the receive loop.
+    private async void OnClipboardItemReceived(ZyncMaster.Engine.ClipboardEntry entry)
+    {
+        var engine = _engineHost;
+        if (engine == null)
+            return;
+
+        try
+        {
+            byte[]? textKey = await engine.ClipboardKeys.LoadTextKeyAsync(_shutdown.Token);
+            var item = engine.Actions.ToHistoryItem(entry, textKey);
+            _clipboardViewerBridge?.PushClipboardItem(item);
+            _bridge?.PushClipboardItem(item);
+        }
+        catch (OperationCanceledException) { /* shutdown */ }
+        catch (Exception ex)
+        {
+            engine.Logger.Log(LogLevel.Warning, "Clipboard live push failed.", ex);
+        }
+    }
+
+    // Creates (once) the clipboard viewer window + its own WebView2 host + bridge over the shared
+    // EngineActions, so the viewer page can call the clipboard bridge actions and receive the live
+    // "clipboard:item" push. Reused across hotkey presses (the window hides instead of closing).
+    private ClipboardViewerWindow EnsureClipboardViewer()
+    {
+        if (_clipboardViewer != null)
+            return _clipboardViewer;
+
+        var viewer = new ClipboardViewerWindow();
+
+#if WIN_WEBVIEW2
+        if (OperatingSystem.IsWindows())
+        {
+            var host = new WebView2WebHost(startPage: "clipboard-viewer.html");
+            _clipboardViewerHost = host;
+            if (_engineHost != null)
+                _clipboardViewerBridge = new UiBridge(
+                    new WebViewBridgeTransport((IBridgeTransport)host),
+                    _engineHost.Actions);
+            viewer.AttachWebHost(host);
+        }
+#endif
+
+        _clipboardViewer = viewer;
+        return viewer;
     }
 
     // The host executable path registered for login auto-start.

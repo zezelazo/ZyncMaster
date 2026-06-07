@@ -26,12 +26,14 @@ namespace ZyncMaster.App.Windows;
 public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransport
 {
     private const string VirtualHost = "zyncmaster.assets";
-    private const string StartUrl = "https://zyncmaster.assets/index.html";
 
     // Where to download the Evergreen WebView2 Runtime. Surfaced to the user (and opened in the
     // system browser) by the native fallback panel when the runtime is missing.
     public const string RuntimeDownloadUrl = "https://developer.microsoft.com/microsoft-edge/webview2/";
 
+    // The page this host navigates to. The main dashboard uses index.html; the clipboard viewer
+    // window reuses the SAME bundled site through this seam by passing "clipboard-viewer.html".
+    private readonly string _startUrl;
     private readonly string _uiRoot;
     private readonly Queue<string> _pending = new();
     private CoreWebView2Controller? _controller;
@@ -50,16 +52,21 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     // to show the fallback panel even if it attaches after the failure was raised.
     public bool HasFailed { get; private set; }
 
-    public WebView2WebHost(string? uiRoot = null)
+    // startPage: the file under the bundled site to navigate to (default "index.html"). The clipboard
+    // viewer passes "clipboard-viewer.html" so its window renders the viewer page through the SAME
+    // virtual-host mapping + bridge channel as the main window.
+    public WebView2WebHost(string? uiRoot = null, string startPage = "index.html")
     {
         _uiRoot = uiRoot ?? DefaultUiRoot();
+        var page = string.IsNullOrWhiteSpace(startPage) ? "index.html" : startPage.TrimStart('/');
+        _startUrl = $"https://{VirtualHost}/{page}";
     }
 
     // Navigation is driven by the controller becoming ready (see InitAsync) once the
     // control is attached to the window. If already ready, (re)load the start page.
     public void Load()
     {
-        if (_ready) _controller!.CoreWebView2.Navigate(StartUrl);
+        if (_ready) _controller!.CoreWebView2.Navigate(_startUrl);
     }
 
     public void Reload()
@@ -163,7 +170,7 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
             try { core.NewWindowRequested += OnNewWindowRequested; }
             catch { /* older WebView2 runtime: external links just won't open, no crash */ }
 
-            core.Navigate(StartUrl);
+            core.Navigate(_startUrl);
 
             _ready = true;
             while (_pending.Count > 0)
