@@ -29,11 +29,26 @@ public sealed class EngineHost : IDisposable
     // skips this user's pairs (no double sync). Driven by the App alongside the scheduler.
     public DeviceHeartbeatLoop HeartbeatLoop { get; }
 
+    // ---------------- Clipboard module (Plan 2/3) ----------------
+    // The clipboard collaborators the App's lifecycle drives directly: the orchestrator (Start/Stop),
+    // the transport (ConnectAsync + ItemReceived + GetHistory for the first-device key bootstrap), the
+    // key exchange (EnsureTextKeyAsync), the capture source, and the global hotkey (Pressed -> open the
+    // viewer). All are wired here so App.axaml.cs only handles the Avalonia-side window/push glue.
+    public ClipboardService ClipboardService { get; }
+    public IClipboardTransport ClipboardTransport { get; }
+    public ClipboardKeyExchange ClipboardKeyExchange { get; }
+    public IClipboardCaptureSource ClipboardCapture { get; }
+    public IClipboardHotkey ClipboardHotkey { get; }
+    public IClipboardKeyStore ClipboardKeys { get; }
+
     private readonly HttpClient _http;
 
     private EngineHost(
         EngineActions actions, PairScheduler scheduler,
-        DeviceHeartbeatLoop heartbeatLoop, EngineSettings settings, HttpClient http, IAppLogger logger)
+        DeviceHeartbeatLoop heartbeatLoop, EngineSettings settings, HttpClient http, IAppLogger logger,
+        ClipboardService clipboardService, IClipboardTransport clipboardTransport,
+        ClipboardKeyExchange clipboardKeyExchange, IClipboardCaptureSource clipboardCapture,
+        IClipboardHotkey clipboardHotkey, IClipboardKeyStore clipboardKeys)
     {
         Actions = actions;
         Scheduler = scheduler;
@@ -41,6 +56,12 @@ public sealed class EngineHost : IDisposable
         Settings = settings;
         _http = http;
         Logger = logger;
+        ClipboardService = clipboardService;
+        ClipboardTransport = clipboardTransport;
+        ClipboardKeyExchange = clipboardKeyExchange;
+        ClipboardCapture = clipboardCapture;
+        ClipboardHotkey = clipboardHotkey;
+        ClipboardKeys = clipboardKeys;
     }
 
     // The user-writable settings path: %LOCALAPPDATA%\ZyncMaster\App\settings.json. This is the
@@ -167,6 +188,22 @@ public sealed class EngineHost : IDisposable
         // WindowsRegistry; gates the COM-only source tile + local .txt export in the UI.
         var comProbe = new WindowsOutlookComProbe();
 
+        // ---------------- Clipboard module (Plan 2/3) ----------------
+        // The device api key (X-Api-Key) for the clipboard transport + devices roster is the SAME key
+        // the rest of the App uses; LoadAsync returns null before registration, so the provider hands
+        // back "" and the transport's call simply 401s until the device is registered (then it works).
+        Func<System.Threading.CancellationToken, Task<string>> clipboardApiKeyProvider =
+            async c => await keyStore.LoadAsync(c).ConfigureAwait(false) ?? "";
+
+        var clipboardKeyStore = Platform.Clipboard.DpapiClipboardKeyStore.CreateDefault();
+        var clipboardTransport = new Infrastructure.Clipboard.HttpWsClipboardTransport(
+            http, engineSettings.ServerBaseUrl, clipboardApiKeyProvider);
+        var clipboardDevices = new Infrastructure.Clipboard.HttpClipboardDevicesSource(
+            http, engineSettings.ServerBaseUrl);
+        var clipboardSink = new Platform.Clipboard.WindowsClipboardSink();
+        var clipboardHotkey = new Platform.Clipboard.WindowsGlobalHotkey();
+        var clipboardKeyExchange = new ClipboardKeyExchange(clipboardKeyStore, clipboardTransport);
+
         var actions = new EngineActions(
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
             pairsClient, identityCache, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
@@ -178,7 +215,32 @@ public sealed class EngineHost : IDisposable
             clock,
             http,
             logger,
-            ownedHttp: null);
+            ownedHttp: null,
+            clipboardTransport: clipboardTransport,
+            clipboardSink: clipboardSink,
+            clipboardKeys: clipboardKeyStore,
+            clipboardHotkey: clipboardHotkey,
+            clipboardDevices: clipboardDevices);
+
+        // The capture source stamps each local copy with THIS device's identity. The id/name come from
+        // the engine's live clipboard state (set by InitializeClipboard after registration); until then
+        // the origin is empty and the ClipboardService still encrypts text before publish (the server
+        // validates origin from the api key).
+        var clipboardCapture = new Platform.Clipboard.WindowsClipboardCaptureSource(
+            () => actions.ClipboardOrigin, () => clock.UtcNow);
+
+        // The orchestrator: capture -> encrypt -> publish, and receive -> decrypt -> apply. It reads
+        // the live per-device settings through the engine (so an updateClipboardSettings takes effect
+        // at once) and enforces the image hard cap. The cap mirrors the server's ceiling.
+        var clipboardService = new ClipboardService(
+            clipboardCapture,
+            clipboardTransport,
+            clipboardSink,
+            clipboardKeyStore,
+            clipboardKeyExchange,
+            new ClipboardDedupe(),
+            () => actions.CurrentClipboardSettings,
+            ClipboardHardMaxImageBytes);
 
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
         // pairs are read locally and pushed; the rest are mirrored server-side. It lists the pairs
@@ -192,8 +254,16 @@ public sealed class EngineHost : IDisposable
         // scheduler; a tick with no device key (unpaired) is a clean no-op.
         var heartbeatLoop = new DeviceHeartbeatLoop(pairsClient, keyStore, logger: logger);
 
-        return new EngineHost(actions, scheduler, heartbeatLoop, engineSettings, http, logger);
+        return new EngineHost(
+            actions, scheduler, heartbeatLoop, engineSettings, http, logger,
+            clipboardService, clipboardTransport, clipboardKeyExchange,
+            clipboardCapture, clipboardHotkey, clipboardKeyStore);
     }
+
+    // Hard ceiling on a single clipboard image (bytes) the device will publish. Mirrors the server's
+    // image cap so an oversize image is dropped before the wire, not 413'd after. 8 MiB is generous
+    // for a screenshot while bounding the per-item payload.
+    private const long ClipboardHardMaxImageBytes = 8L * 1024 * 1024;
 
     public void Dispose()
     {
