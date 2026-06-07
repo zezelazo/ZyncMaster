@@ -105,9 +105,10 @@ const Bridge = (() => {
     let msg;
     try { msg = JSON.parse(text); } catch (_) { return; }
     if (msg && msg.event === 'status') { if (statusCb) statusCb(msg.payload); return; }
-    // Any other named event (e.g. "clipboard:item") fans out to onEvent listeners. The payload may
-    // arrive as a JSON string or an already-parsed object depending on the host serializer.
-    if (msg && msg.event) { dispatchEvent(msg.event, msg.payload != null ? safeParse(String(msg.payload)) : null); return; }
+    // Any other named event (e.g. "clipboard:item") fans out to onEvent listeners. The host
+    // serializes the payload as an OBJECT (same shape as the status push), so pass it through
+    // as-is; only re-parse when it arrived as a JSON string.
+    if (msg && msg.event) { dispatchEvent(msg.event, typeof msg.payload === 'string' ? safeParse(msg.payload) : msg.payload); return; }
     if (msg && msg.correlationId && pending.has(msg.correlationId)) {
       const p = pending.get(msg.correlationId);
       pending.delete(msg.correlationId);

@@ -36,7 +36,9 @@ const Bridge = (() => {
   function handleInbound(text) {
     let msg;
     try { msg = JSON.parse(text); } catch (_) { return; }
-    if (msg && msg.event) { dispatch(msg.event, msg.payload != null ? safeParse(String(msg.payload)) : null); return; }
+    // Named push (e.g. "clipboard:item"). The host serializes payload as an OBJECT (same shape as
+    // the status push), so pass it through; only re-parse when it arrived as a JSON string.
+    if (msg && msg.event) { dispatch(msg.event, typeof msg.payload === 'string' ? safeParse(msg.payload) : msg.payload); return; }
     if (msg && msg.correlationId && pending.has(msg.correlationId)) {
       const p = pending.get(msg.correlationId);
       pending.delete(msg.correlationId);
