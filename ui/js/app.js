@@ -1544,7 +1544,7 @@ function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
 // newCalendarRow(acc, onPick) — an inline "+ New calendar" control for one account. Clicking it
 // swaps in a name input + Create/Cancel; Create calls createCalendarFor, which on success refreshes
 // the account's calendars, selects the new one (onPick), and re-renders the wizard. Failures show
-// inline feedback without disturbing the rest of the picker. Pattern mirrors connectCalendarAccount.
+// inline feedback without disturbing the rest of the picker. Pattern mirrors connectAccount.
 function newCalendarRow(acc, onPick) {
   const row = el('div', { class: 'cal-new' });
 
@@ -2294,6 +2294,11 @@ function cfgRow(label, hint, control) {
 // entrance animation when the data arrives.
 function ensureCalendarAccounts(view) {
   if (!Bridge.available) return;
+  // Also prime live.pairs (desktop App) so the forget confirm can count the syncs that will be
+  // deleted. Without this, opening Calendar Settings without first visiting the pair list leaves
+  // live.pairs === null, and confirmDisconnectAccount would under-warn ("no syncs") about a delete
+  // the server will still perform. loadPairs() is idempotent/cached, so this is cheap on repeat.
+  if (Bridge.desktopApp && live.pairs === null) loadPairs().catch(() => {});
   if (live.accounts !== null) return;
   loadAccounts().finally(() => { if (state.view === view) softRepaint(); });
 }
@@ -2584,9 +2589,16 @@ function accountLabel(acc) {
 function accountCard(acc) {
   const { title, sub } = accountLabel(acc);
   const avatar = el('div', { class: 'acct-avatar', 'aria-hidden': 'true' }, iconEl('calendar', 15, 1.7));
+
+  // Per-account consent badge (spec Pieza 1). Legacy accounts without a scope show no badge.
+  const scopeLabel = acc.scope === 'read' ? 'Read-only (source)'
+    : (acc.scope === 'readwrite' ? 'Read & write' : '');
+  const subEl = el('div', { class: 'acct-text__sub cfg-row__hint', text: sub });
+  if (scopeLabel) subEl.append(el('span', { class: 'cfg-row__hint', text: ` · ${scopeLabel}` }));
+
   const text = el('div', { class: 'acct-text' },
     el('div', { class: 'acct-text__title', text: title }),
-    el('div', { class: 'acct-text__sub cfg-row__hint', text: sub }));
+    subEl);
   const left = el('div', { class: 'acct-id' }, avatar, text);
   const disconnectBtn = el('button', {
     class: 'btn btn--ghost acct-disconnect',
@@ -2597,57 +2609,82 @@ function accountCard(acc) {
   return el('div', { class: 'cfg-row acct-row' }, left, disconnectBtn);
 }
 
-// confirmDisconnectAccount(acc) — a small confirm before unlinking, so the user understands the
-// scope of the action: it disconnects ONLY that calendar account (and disables its sync pairs) and
-// does NOT sign them out of the app. On confirm it runs the existing unlinkAccount(accountRef).
+// confirmDisconnectAccount(acc) — confirm before forgetting a calendar account. It DELETES every sync
+// pair that uses this account (as source or destination), on every device, while events already
+// created in the destination calendars stay untouched. You stay signed in. The shown count is an
+// estimate from the loaded pairs (the server resolves the canonical accountId, so legacy/pool mixes
+// can differ); unlinkAccount announces the real deleted count from affectedPairIds afterwards.
 function confirmDisconnectAccount(acc) {
   const { title } = accountLabel(acc);
+  const ref = acc.accountRef;
+  // Three states: known-some (count > 0), known-none (pairs loaded, count 0), and UNKNOWN
+  // (live.pairs === null — the pair list was never loaded on this screen). We must NOT collapse
+  // unknown into "no syncs": that would tell the user nothing destructive happens when the server
+  // may still delete syncs. So when pairs are unknown we show the destructive copy unconditionally
+  // (dropping the "about N" clause), and only show the benign copy when we KNOW the count is zero.
+  const pairsKnown = live.pairs !== null;
+  const affected = (live.pairs || []).filter((p) => {
+    const s = (p.source && p.source.accountRef) || null;
+    const d = (p.destination && p.destination.accountRef) || null;
+    return s === ref || d === ref;
+  }).length;
+  const destructive = !pairsKnown || affected > 0;
+
+  let detail;
+  if (affected > 0) {
+    detail = `Forgetting this account deletes the syncs that use it as a source or destination ` +
+      `(about ${affected}), on all your devices. Events already created in the destination ` +
+      `calendars are NOT deleted. You stay signed in to the app.`;
+  } else if (!pairsKnown) {
+    detail = `Forgetting this account deletes the syncs that use it as a source or destination, on ` +
+      `all your devices. Events already created in the destination calendars are NOT deleted. You ` +
+      `stay signed in to the app.`;
+  } else {
+    detail = `This calendar account has no syncs. Forgetting it only removes the connection, on all ` +
+      `your devices. You stay signed in to the app.`;
+  }
+
   const cancelBtn = el('button', { class: 'btn btn--ghost', type: 'button', text: 'Keep connected' });
   const confirmBtn = el('button', { class: 'btn btn--primary acct-disconnect--confirm', type: 'button' },
-    el('span', { text: 'Disconnect' }));
+    el('span', { text: destructive ? 'Forget and delete syncs' : 'Forget' }));
 
   const body = el('div', { class: 'disconnect-modal' },
-    el('div', { class: 'disconnect-modal__lead', text: `Disconnect ${title}?` }),
-    el('div', { class: 'cfg-row__hint disconnect-modal__detail' },
-      'Its sync pairs will be disabled and this calendar will stop syncing. ' +
-      'You stay signed in to the app - only this calendar connection is removed.'),
+    el('div', { class: 'disconnect-modal__lead', text: `Forget ${title}?` }),
+    el('div', { class: 'cfg-row__hint disconnect-modal__detail', text: detail }),
     el('div', { class: 'modal__foot' }, cancelBtn, confirmBtn));
 
-  const modal = openModal({ title: 'Disconnect calendar', body });
-
+  const modal = openModal({ title: 'Forget calendar account', body });
   cancelBtn.addEventListener('click', () => modal.close());
   confirmBtn.addEventListener('click', () => {
-    confirmBtn.disabled = true;
-    cancelBtn.disabled = true;
-    const span = confirmBtn.querySelector('span');
-    if (span) span.textContent = 'Disconnecting…';
+    confirmBtn.disabled = true; cancelBtn.disabled = true;
+    const span = confirmBtn.querySelector('span'); if (span) span.textContent = 'Forgetting…';
     modal.close();
     unlinkAccount(acc.accountRef);
   });
 }
 
-// connectAccountCard() — the "connect a calendar" card. Clear, jargon-free heading + copy. When the
-// signed-in identity is a Microsoft account we offer a one-click "Use <email>" primary (reuse that
-// identity's calendar) and keep "Connect a different account" as the path to any other mailbox.
+// connectAccountCard() — the "add a calendar account" card on the Calendar screen (which is ONLY the
+// account list; identity lives in Settings). Adding an account never changes your sign-in; the copy
+// says so. Two scopes: a source-only mailbox connects read-only (least privilege, friendlier to
+// enterprise tenants); a destination connects read/write.
 function connectAccountCard() {
-  const reuseEmail = (identityAuth.me && identityAuth.me.email) || null;
   const wrap = el('div', { class: 'connect-cal__wrap' });
+  const repaint = () => { if (state.view === 'calendar-settings') softRepaint(); };
 
-  const primaryLabel = reuseEmail ? `Use ${reuseEmail}` : 'Connect a calendar account';
-  const connectBtn = el('button', { class: 'btn btn--primary connect-cal', onclick: () => connectCalendarAccount(connectBtn, wrap) },
-    iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: primaryLabel }));
-  wrap.append(connectBtn);
+  const sourceBtn = el('button', { class: 'btn btn--primary connect-cal',
+    onclick: () => connectAccount({ scope: 'read', btn: sourceBtn, wrap, onConnected: repaint }) },
+    iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: 'Add a source account (read-only)' }));
 
-  // When we reused the identity email above, also offer connecting a different mailbox. It runs the
-  // same flow (the system browser lets the user pick another account), so it shares the handler.
-  if (reuseEmail) {
-    const otherBtn = el('button', { class: 'btn btn--ghost connect-cal connect-cal--other', onclick: () => connectCalendarAccount(otherBtn, wrap) },
-      el('span', { class: 'connect-cal__label', text: 'Connect a different account' }));
-    wrap.append(otherBtn);
-  }
+  const destBtn = el('button', { class: 'btn btn--ghost connect-cal connect-cal--other',
+    onclick: () => connectAccount({ scope: 'readwrite', btn: destBtn, wrap, onConnected: repaint }) },
+    el('span', { class: 'connect-cal__label', text: 'Add a destination account (read & write)' }));
 
-  return cfgSection('Connect a calendar',
-    el('div', { class: 'cfg-row__hint', style: 'padding:0 2px 6px', text: 'Connect the calendar of an account you want to sync. We only read the source and write the destination - your sign-in stays separate.' }),
+  wrap.append(sourceBtn, destBtn);
+
+  return cfgSection('Add a calendar account',
+    el('div', { class: 'cfg-row__hint', style: 'padding:0 2px 6px',
+      text: 'Connect the calendar of an account you want to sync. Pick read-only for a source you only ' +
+            'mirror FROM, or read & write for a destination you sync INTO. This does not change your sign-in.' }),
     wrap);
 }
 
@@ -3404,11 +3441,14 @@ function unlinkAccount(accountRef) {
       ? accounts.find((x) => x.accountRef === accountRef) || { accountRef }
       : accounts.find((x) => x.isDefault) || accounts[0];
     if (!target) { announce('No connected account to unlink.'); return; }
+    let removed = 0;
     Bridge.call('unlinkAccount', target.accountRef)
-      .then(() => { live.accounts = null; return loadPairs(); })
+      .then((r) => { removed = (r && r.affectedPairIds || []).length; live.accounts = null; return loadPairs(); })
       .then(() => loadAccounts())
       .then(() => {
-        announce('Account unlinked.');
+        announce(removed > 0
+          ? `Forgot the account; removed ${removed} sync${removed === 1 ? '' : 's'}.`
+          : 'Forgot the account.');
         if (state.view === 'config' || state.view === 'calendar-settings') softRepaint();
       })
       .catch(() => { announce('Unlink failed.'); });
@@ -3416,27 +3456,21 @@ function unlinkAccount(accountRef) {
   if (live.accounts === null && !accountRef) loadAccounts().then(run); else run();
 }
 
-// connectCalendarAccount(btn?, wrap?) — connect a calendar OAuth grant into the per-user account
-// pool. Calls the host's connectCalendar with a read/write scope (a long-running interactive flow,
-// so a generous timeout). On {Connected:true} it drops the cached accounts and reloads them (the new
-// account now shows up via listAccounts), then repaints. {Cancelled} and {Error} surface inline
-// feedback on the button without disturbing the rest of the screen.
-//
-// While the connect is in flight the system browser is open and we are blocked on the loopback
-// callback. Mirroring the sign-in gate's Cancel button, we mount a small Cancel affordance next to
-// the connecting button that asks the host to abort the in-flight connect (cancelConnect) and free
-// the loopback port. The host then resolves the pending connectCalendar with a quiet Cancelled
-// outcome ({cancelled:true}), which the .then below renders as "Cancelled" — no red error.
-function connectCalendarAccount(btn, wrap) {
+// connectAccount({ scope, btn, wrap, onConnected }) — core OAuth connect of a calendar account into
+// the per-user pool. `scope` is 'read' (source-only; least privilege, friendlier to enterprise
+// tenants) or 'readwrite' (destination). Long-running interactive flow (system browser) with a Cancel
+// affordance. On success it refreshes the account list and calls onConnected(newRef): newRef is the
+// accountRef that appeared since the pre-connect snapshot, or null when the connect refreshed an
+// already-listed account (server connect is idempotent by email — Phase B). All feedback is inline.
+function connectAccount({ scope, btn, wrap, onConnected }) {
   if (!Bridge.desktopApp) return;
   const span = btn && btn.querySelector('span.connect-cal__label');
   const orig = span ? span.textContent : '';
   if (span) span.textContent = 'Connecting…';
   if (btn) btn.disabled = true;
 
-  // Cancel affordance: fire-and-forget cancelConnect. The in-flight connectCalendar promise then
-  // settles with {cancelled:true}, so we do NOT restore the UI here — the shared .then/.finally
-  // path owns that, exactly like cancelAppLogin leaves the recovery to the login promise.
+  const before = new Set((live.accounts || []).map((a) => a.accountRef));
+
   let cancelBtn = null;
   if (wrap) {
     cancelBtn = el('button', { class: 'btn btn--ghost connect-cal__cancel', text: 'Cancel',
@@ -3445,31 +3479,25 @@ function connectCalendarAccount(btn, wrap) {
   }
   const removeCancel = () => { if (cancelBtn && cancelBtn.parentNode) cancelBtn.parentNode.removeChild(cancelBtn); cancelBtn = null; };
 
-  Bridge.call('connectCalendar', JSON.stringify({ scope: 'readwrite' }), 210000)
+  Bridge.call('connectCalendar', JSON.stringify({ scope: scope === 'read' ? 'read' : 'readwrite' }), 210000)
     .then((r) => {
       if (r && r.connected) {
         announce('Calendar account connected.');
         live.accounts = null;
         return loadAccounts().then(() => {
           (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef); });
-          if (state.view === 'calendar-settings') softRepaint();
+          const newRef = (live.accounts || []).map((a) => a.accountRef).find((ref) => !before.has(ref)) || null;
+          if (typeof onConnected === 'function') onConnected(newRef);
         });
       }
-      if (r && r.cancelled) {
-        if (span) span.textContent = 'Cancelled';
-      } else {
-        if (span) span.textContent = 'Failed';
-        announce((r && r.error) ? `Connect failed: ${r.error}` : 'Connect failed.');
-      }
+      if (r && r.cancelled) { if (span) span.textContent = 'Cancelled'; }
+      else { if (span) span.textContent = 'Failed'; announce((r && r.error) ? `Connect failed: ${r.error}` : 'Connect failed.'); }
     })
     .catch(() => { if (span) span.textContent = 'Failed'; announce('Connect failed.'); })
     .finally(() => {
       removeCancel();
-      // Only restore the button if we didn't navigate away after a successful connect.
-      if (state.view === 'calendar-settings') {
-        if (btn) btn.disabled = false;
-        if (span && span.textContent !== orig) setTimeout(() => { if (span) span.textContent = orig || 'Connect a calendar account'; }, 1800);
-      }
+      if (btn) btn.disabled = false;
+      if (span && span.textContent !== orig) setTimeout(() => { if (span) span.textContent = orig; }, 1800);
     });
 }
 
