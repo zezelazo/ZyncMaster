@@ -1502,6 +1502,7 @@ function completeAddPair() {
 // `allowCreate` is true (the DESTINATION step) each account also gets a "+ New calendar" affordance
 // that creates a fresh calendar on that account via the createCalendar bridge action and selects it.
 function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
+  const a = addPairLive;
   const wrap = el('div', { class: 'glass glass--card', style: 'padding:4px' });
   const list = el('div', { class: 'cal-list' });
 
@@ -1536,6 +1537,10 @@ function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
     // calendar on this account and auto-selects it (mirrors the Connect-account inline states).
     if (allowCreate) list.append(newCalendarRow(acc, onPick));
   });
+
+  // Inline "+ Add account" for the destination step — a destination must be writable, so connect
+  // read/write. Only shown on the destination picker (allowCreate marks the destination step).
+  if (allowCreate) list.append(addAccountRow('readwrite', (newRef) => { a.dstAccountRef = newRef; }));
 
   wrap.append(list);
   return wrap;
@@ -1581,6 +1586,25 @@ function newCalendarRow(acc, onPick) {
   };
 
   showButton();
+  return row;
+}
+
+// addAccountRow(scope, onAdded) — inline "+ Add account" control for the wizard, mirroring
+// newCalendarRow. Clicking it runs connectAccount (OAuth in the system browser) with a Cancel; on
+// success onAdded(newRef) fires so the step can select the new account (newRef may be null if the
+// account was already connected — Phase B idempotency — in which case we just re-render and the user
+// taps it in the list). `scope` is 'read' for the source step, 'readwrite' for the destination step.
+function addAccountRow(scope, onAdded) {
+  const row = el('div', { class: 'cal-new' });
+  const trigger = el('button', { class: 'cal-new__trigger connect-cal', type: 'button' },
+    iconEl('plus', 13, 2.2), el('span', { class: 'connect-cal__label', text: 'Add account' }));
+  trigger.addEventListener('click', () => {
+    connectAccount({ scope, btn: trigger, wrap: row, onConnected: (newRef) => {
+      if (newRef && typeof onAdded === 'function') onAdded(newRef);
+      if (state.view === 'add-pair') rerender();
+    } });
+  });
+  row.append(trigger);
   return row;
 }
 
@@ -1684,7 +1708,8 @@ function onlineSourceMultiSelect() {
 
   const accounts = live.accounts || [];
   if (accounts.length === 0) {
-    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts. Connect one on the server first.' }));
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
+    wrap.append(addAccountRow('read', (newRef) => { a.srcAccountRef = newRef; a.srcSwitchPrompt = null; }));
     return wrap;
   }
 
@@ -1794,6 +1819,8 @@ function onlineSourceMultiSelect() {
     });
   });
   wrap.append(list);
+  // Inline "+ Add account" for the source step — a source only needs to be read, so connect read-only.
+  wrap.append(addAccountRow('read', (newRef) => { a.srcAccountRef = newRef; a.srcSwitchPrompt = null; }));
   return wrap;
 }
 
@@ -1879,6 +1906,24 @@ function renderAddPairLive(root) {
     root.append(el('div', { class: 'wizard-title', text: 'Pick the destination' }));
     root.append(el('div', { class: 'wizard-sub', text: 'Events are written here. Past events on the destination are never touched.' }));
     root.append(onlineCalendarPicker(a.dstCalendarId, (acc, c) => {
+      // A destination must be writable. If this account is read-only, grant read/write first
+      // (interactive consent) before committing it as the destination; on cancel/fail, do nothing.
+      if (acc.scope === 'read') {
+        announce('Granting write access to this account…');
+        Bridge.call('upgradeAccountScope', JSON.stringify(acc.accountRef), 210000)
+          .then((r) => {
+            if (r && r.connected) {
+              live.accounts = null;
+              return loadAccounts().then(() => {
+                a.dstAccountRef = acc.accountRef; a.dstCalendarId = c.id; a.dstCalendarName = c.displayName || c.id;
+                rerender();
+              });
+            }
+            announce((r && r.cancelled) ? 'Upgrade cancelled.' : 'Could not grant write access.');
+          })
+          .catch(() => announce('Could not grant write access.'));
+        return;
+      }
       a.dstAccountRef = acc.accountRef; a.dstCalendarId = c.id; a.dstCalendarName = c.displayName || c.id; rerender();
     }, true));
     root.append(el('div', { class: 'wizard-foot' },
