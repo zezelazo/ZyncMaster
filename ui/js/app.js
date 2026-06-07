@@ -278,8 +278,8 @@ if (mql && mql.addEventListener) {
 // ---------------- App state ----------------
 // Product version shown in About + the Settings "About" row. Hardcoded because the web UI has
 // no channel to read the host's .NET assembly version; keep it in step with the published
-// release (currently 0.2.7, beta).
-const VERSION = '0.2.7';
+// release (currently 0.2.8, beta).
+const VERSION = '0.2.8';
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -406,7 +406,34 @@ const live = {
   // COM is unavailable (the safer default: COM affordances stay disabled until confirmed).
   capabilities: { outlookCom: false },
   capabilitiesLoaded: false,
+  // ---- Per-pair sync runtime (client-only, this session) ----
+  // syncing      — Set of pair ids with a sync in flight. Single-flight: a click while the id is
+  //                present is ignored, so the user cannot stack dozens of concurrent runs.
+  // attempts     — pair id -> number of sync attempts triggered this session (incremental badge).
+  // eventLog     — pair id -> array of { ts, ok, action, title, sub, msg } (newest first, capped).
+  //                Drives the per-pair "Recent events" list so EVERY attempt (ok or fail) is
+  //                visible inline instead of a popup.
+  syncing: new Set(),
+  attempts: {},
+  eventLog: {},
 };
+
+// Cap on per-pair retained client events (newest kept). Keeps memory bounded over a long session.
+const PAIR_EVENT_LOG_MAX = 20;
+
+// Push a client-side event onto a pair's session log (newest first, capped). entry carries
+// { ok, action, title, sub, msg }; the timestamp is stamped here.
+function pushPairEvent(id, entry) {
+  if (!id) return;
+  const now = new Date();
+  const log = live.eventLog[id] || (live.eventLog[id] = []);
+  log.unshift({
+    ts: now.getTime(),
+    time: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    ...entry,
+  });
+  if (log.length > PAIR_EVENT_LOG_MAX) log.length = PAIR_EVENT_LOG_MAX;
+}
 
 // True only once getCapabilities has confirmed Outlook Classic COM is present on this device.
 // Before that (and on the web panel) it is false, so COM-only affordances stay disabled.
@@ -587,6 +614,11 @@ async function loadPairs() {
     // <device>" for COM-pinned pairs. Lazy-load it once alongside the pairs (the Settings hub also
     // loads it, but the calendar view renders first), best-effort; a failure just hides the badge.
     ensureLocalDevice();
+    // Best-effort: resolve descriptive calendar names for pair endpoints by warming the account +
+    // calendar lists the wizard already caches in live.accounts / live.calendars. Without these the
+    // destination would have only a raw calendarId; with them resolveCalendarLabel finds the real
+    // display name. Fire-and-forget; a failure just leaves the legible fallback in place.
+    ensurePairCalendarNames();
     return live.pairs;
   } catch (_) {
     live.pairs = live.pairs || [];
@@ -594,6 +626,31 @@ async function loadPairs() {
   } finally {
     live.loadingPairs = false;
   }
+}
+
+// Warm the account + calendar caches for every online endpoint referenced by the loaded pairs, so
+// the dashboard can show a calendar's display name instead of its raw id. Runs at most once per set
+// of referenced accounts (guarded by live.calendars[ref] already being present). Best-effort and
+// fire-and-forget; on success it repaints the calendar view so resolved names replace the fallback.
+let pairCalendarNamesPending = false;
+function ensurePairCalendarNames() {
+  if (!Bridge.available || pairCalendarNamesPending) return;
+  const refs = new Set();
+  (live.pairs || []).forEach((p) => {
+    [p.source, p.destination].forEach((e) => {
+      if (e && (e.provider || '').toLowerCase() !== 'outlookcom' && e.accountRef) refs.add(e.accountRef);
+    });
+  });
+  // Only the accounts whose calendar list we have not already cached need a fetch.
+  const missing = [...refs].filter((ref) => !Array.isArray(live.calendars[ref]));
+  if (missing.length === 0) return;
+  pairCalendarNamesPending = true;
+  const work = (live.accounts ? Promise.resolve(live.accounts) : loadAccounts())
+    .then(() => Promise.all(missing.map((ref) => loadCalendars(ref).catch(() => null))));
+  work
+    .then(() => { if (state.view === 'calendar') rerenderInPlace(); })
+    .catch(() => {})
+    .finally(() => { pairCalendarNamesPending = false; });
 }
 
 async function loadAccounts() {
@@ -641,6 +698,41 @@ async function loadLocalCalendars() {
   }
 }
 
+// True when a string looks like a raw calendar id (a long opaque token), not a human display
+// name. Graph calendar ids are long base64url/hex blobs with no spaces; a real display name almost
+// always has a space or is short. Used to avoid ever showing the bare GUID as the primary label.
+function looksLikeRawId(s) {
+  if (!s) return false;
+  const t = String(s);
+  if (t.includes(' ')) return false;            // display names have spaces ("Calendar", "Work")
+  return t.length >= 24 && /^[A-Za-z0-9_=+/-]+$/.test(t);
+}
+
+// Resolve a friendly calendar display name for an endpoint, NEVER returning the raw calendarId as
+// the primary label. Order: the endpoint's own calendarName (when it is a real name) → a match in
+// the already-loaded calendar list for that account (the wizard caches these in live.calendars) →
+// the account's display name as a legible fallback → a generic "Calendar". The raw id is only ever
+// used to look up a name, never shown verbatim.
+function resolveCalendarLabel(e) {
+  const name = e.calendarName;
+  if (name && !looksLikeRawId(name)) return name;
+  const ref = e.accountRef;
+  const id = e.calendarId;
+  if (ref && id) {
+    const cals = live.calendars[ref];
+    if (Array.isArray(cals)) {
+      const hit = cals.find((c) => c && c.id === id);
+      if (hit && (hit.displayName || hit.name)) return hit.displayName || hit.name;
+    }
+  }
+  if (ref) {
+    const acc = (live.accounts || []).find((a) => a && a.accountRef === ref);
+    if (acc && (acc.displayName || acc.email)) return acc.displayName || acc.email;
+  }
+  // Last resort: never the GUID — a generic, legible label.
+  return 'Calendar';
+}
+
 // Map a SyncPair (server shape) into the accordion view-model the renderer expects.
 function pairViewModel(p) {
   const endpointLabel = (e, isSource) => {
@@ -648,7 +740,8 @@ function pairViewModel(p) {
     const com = (e.provider || '').toLowerCase() === 'outlookcom';
     // Feature 2 — a source mirroring multiple calendars shows a count/"All calendars" label rather
     // than a single calendar name. The destination is always one calendar, so it keeps its name.
-    let acct = e.calendarName || (com ? 'Outlook (this PC)' : 'Calendar');
+    // Destination / single-calendar source: resolve a DESCRIPTIVE name, never the raw calendarId.
+    let acct = com ? 'Outlook (this PC)' : resolveCalendarLabel(e);
     if (isSource) {
       const ids = Array.isArray(e.calendarIds) ? e.calendarIds : [];
       const names = Array.isArray(e.calendarNames) ? e.calendarNames : [];
@@ -664,7 +757,9 @@ function pairViewModel(p) {
     };
   };
   const lr = p.lastResult;
-  const events = lr
+  // Last-run summary rows from the server's MirrorResult (counts only). Shown when the user has not
+  // triggered any sync this session yet, so the card is not empty on first open.
+  const lastRunRows = lr
     ? [
         lr.created ? { time: '', title: `${lr.created} created`, sub: 'Last run', action: 'created' } : null,
         lr.updated ? { time: '', title: `${lr.updated} updated`, sub: 'Last run', action: 'updated' } : null,
@@ -673,6 +768,13 @@ function pairViewModel(p) {
       ].filter(Boolean)
     : [];
   const total = lr ? (lr.created + lr.updated + lr.deleted + lr.skipped) : 0;
+  // Session event log for this pair (every attempt, ok + fail, newest first). This is what RECENT
+  // EVENTS renders so the user can read each result inline. Falls back to the last-run summary when
+  // there is no session activity yet.
+  const sessionLog = (live.eventLog[p.id] || []).slice();
+  const events = sessionLog.length ? sessionLog : lastRunRows;
+  const inFlight = live.syncing.has(p.id);
+  const attempts = live.attempts[p.id] || 0;
 
   // Track B — COM device-pinning. A pair whose SOURCE is OutlookCom is read on exactly one device
   // (the pinned origin). myDeviceId is this device's id (live.device, lazy-loaded). We classify the
@@ -710,6 +812,9 @@ function pairViewModel(p) {
     total,
     eventCount: total,
     events,
+    // Per-pair sync runtime (client session).
+    inFlight,
+    attempts,
     // COM device-pinning (Track B).
     srcCom,
     comLocal,
@@ -752,7 +857,12 @@ function navRow({ label, sublabel, value, onClick }) {
   return el('button', { class: 'nav-row', type: 'button', onclick: onClick }, left, right);
 }
 function actionChip(kind) {
-  const map = { created: ['chip--created', 'Created'], updated: ['chip--updated', 'Updated'], deleted: ['chip--deleted', 'Deleted'], skipped: ['chip--skipped', 'Skipped'] };
+  const map = {
+    created: ['chip--created', 'Created'], updated: ['chip--updated', 'Updated'],
+    deleted: ['chip--deleted', 'Deleted'], skipped: ['chip--skipped', 'Skipped'],
+    // Session-log outcomes: a whole sync attempt's result.
+    ok: ['chip--ok', 'OK'], failed: ['chip--deleted', 'Failed'], requested: ['chip--created', 'Requested'],
+  };
   const [cls, txt] = map[kind] || map.skipped;
   return el('span', { class: `chip ${cls}`, text: txt });
 }
@@ -917,7 +1027,11 @@ function pairAccordion(pair) {
   const isSyncing = liveState === 'syncing';
   const isError = liveState === 'error';
   const isOffline = liveState === 'offline';
-  const dotState = isSyncing ? 'sync' : isError ? 'error' : isOffline ? 'offline' : 'ok';
+  // Real, client-tracked single-flight state for a live pair: a sync (local or remote request) is in
+  // flight right now. Distinct from the demo p3 progress path (isSyncing). When busy, the Sync now
+  // button shows a spinner, is disabled, and additional clicks are ignored.
+  const busy = !!pair.inFlight;
+  const dotState = (isSyncing || busy) ? 'sync' : isError ? 'error' : isOffline ? 'offline' : 'ok';
   const open = openPairs.has(pair.id);
   const progress = (pair.id === 'p3' && state.sync === 'syncing') ? state.progress : { done: 0, total: 1 };
   const nextStr = isOffline || isSyncing ? '—' : fmtMMSS(pair.nextSync);
@@ -963,29 +1077,44 @@ function pairAccordion(pair) {
         : '';
   const syncBtnAttrs = {
     class: 'pair__sync-btn',
-    disabled: isOffline || comBlocked,
-    title: disabledReason,
+    // Single-flight: disabled while a run is in flight (busy) so stacked clicks cannot launch more.
+    disabled: isOffline || comBlocked || busy,
+    title: busy ? 'Sync in progress…' : disabledReason,
     onclick: (e) => {
       e.stopPropagation();
+      if (busy) return;                          // single-flight guard at the click site too
       if (!Bridge.available || !pair.id) { runSync(); return; }
       if (pair.comRemote) syncPairRemote(pair); else runPairNow(pair.id);
     },
   };
-  if (disabledReason) {
+  if (busy) {
+    // a11y — announce the busy state on the control itself; aria-busy reflects the in-flight work.
+    syncBtnAttrs['aria-busy'] = 'true';
+    syncBtnAttrs['aria-label'] = 'Sync in progress';
+  } else if (disabledReason) {
     syncBtnAttrs['aria-label'] = disabledReason;
     if (pinNoteId) syncBtnAttrs['aria-describedby'] = pinNoteId;
   }
+  // Spinner whenever busy (real in-flight) OR the demo p3 progress path is active.
+  const spinning = busy || isSyncing;
+  const syncBtnLabel = busy ? 'Syncing…' : isSyncing ? `${progress.done}/${progress.total}` : 'Sync now';
   const syncBtn = el('button', syncBtnAttrs,
-    isSyncing ? el('span', { class: 'spinner', style: 'width:12px;height:12px;border-width:1.6px' }) : el('span', { style: 'display:inline-flex', html: icon('sync', { size: 12, stroke: 1.8 }) }),
-    el('span', { class: 'num', text: isSyncing ? `${progress.done}/${progress.total}` : 'Sync now' }),
+    spinning ? el('span', { class: 'spinner', style: 'width:12px;height:12px;border-width:1.6px' }) : el('span', { style: 'display:inline-flex', html: icon('sync', { size: 12, stroke: 1.8 }) }),
+    el('span', { class: 'num', text: syncBtnLabel }),
   );
-  card.append(el('div', { class: 'pair__substats' },
+  // Attempt counter (this session). Subtle pill next to the button; only shown after the first try.
+  const substatChildren = [
     substat('Events', pair.eventCount),
     el('span', null, el('span', { class: 'route__stat-label', text: 'Next' }), el('span', { class: 'route__stat-val num', text: nextStr })),
     el('span', null, el('span', { class: 'route__stat-label', text: 'Status' }),
-      el('span', { class: 'route__stat-val', text: isSyncing ? 'Syncing…' : isError ? 'Failed' : isOffline ? 'Offline' : 'Connected' })),
-    syncBtn,
-  ));
+      el('span', { class: 'route__stat-val', text: (isSyncing || busy) ? 'Syncing…' : isError ? 'Failed' : isOffline ? 'Offline' : 'Connected' })),
+  ];
+  if (pair.attempts > 0) {
+    substatChildren.push(el('span', { class: 'pair__attempts', title: `${pair.attempts} sync ${pair.attempts === 1 ? 'attempt' : 'attempts'} this session` },
+      el('span', { class: 'num', text: `Attempt ${pair.attempts}` })));
+  }
+  substatChildren.push(syncBtn);
+  card.append(el('div', { class: 'pair__substats' }, ...substatChildren));
 
   // Track B — COM device-pinning note. Tells the user WHERE this pair's Outlook source is read:
   //   local     → "Source is on this PC" (this device runs it);
@@ -1039,9 +1168,11 @@ function pairAccordion(pair) {
       ));
     }
 
+    // RECENT EVENTS — driven by the per-pair session log (every attempt, ok + fail) when present,
+    // otherwise the last-run summary from the server. The counter reflects how many rows are shown.
     body.append(el('div', { class: 'pair__activity-head' },
-      el('span', { text: pair.events.length ? 'Last result' : 'Recent events' }),
-      el('span', { class: 'num', text: `${pair.events.length} of ${pair.eventCount}` })));
+      el('span', { text: 'Recent events' }),
+      el('span', { class: 'num', text: String(pair.events.length) })));
     const act = el('div', { class: 'pair__activity' });
     if (pair.events.length) pair.events.forEach((row) => act.append(activityRow(row)));
     else act.append(el('div', { class: 'activity__sub', style: 'padding:8px 2px', text: 'No changes yet.' }));
@@ -1051,15 +1182,18 @@ function pairAccordion(pair) {
     if (Bridge.available && pair.id) {
       const paused = pair.serverState === 'paused';
       const disabled = pair.serverState === 'disabled';
-      const controls = el('div', { class: 'pair__controls', style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:10px' });
+      // Footer controls live on a SINGLE line (point 5): the .pair__controls flex row is no-wrap and
+      // its .pair__ctrl-btn children shrink their horizontal padding so all five fit even in a narrow
+      // window, instead of wrapping onto a second row. Layout/sizing lives in layout.css.
+      const controls = el('div', { class: 'pair__controls' });
 
-      controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn',
         onclick: (e) => { e.stopPropagation(); setPairState(pair.id, paused ? 'active' : 'paused'); } },
-        iconEl(paused ? 'sync' : 'pause', 12, 1.8), el('span', { style: 'font-size:12px', text: paused ? 'Resume' : 'Pause' })));
+        iconEl(paused ? 'sync' : 'pause', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: paused ? 'Resume' : 'Pause' })));
 
-      controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn',
         onclick: (e) => { e.stopPropagation(); setPairState(pair.id, disabled ? 'active' : 'disabled'); } },
-        iconEl(disabled ? 'check' : 'close', 12, 1.8), el('span', { style: 'font-size:12px', text: disabled ? 'Enable' : 'Disable' })));
+        iconEl(disabled ? 'check' : 'close', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: disabled ? 'Enable' : 'Disable' })));
 
       // Export .txt — per-pair export of the pair's SOURCE calendar. Routing is by source
       // provider, inside openExportTxtModal: a COM source exports the local Outlook via
@@ -1071,22 +1205,22 @@ function pairAccordion(pair) {
       if (Bridge.desktopApp) {
         const isCom = (pair.src && pair.src.provider || '').toLowerCase() === 'outlookcom';
         const comBlocked = isCom && !comAvailable();
-        const txtBtn = el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
+        const txtBtn = el('button', { class: 'btn btn--ghost pair__ctrl-btn',
           disabled: comBlocked,
           title: comBlocked ? 'Outlook is not available on this device' : 'Export a month of this calendar to a .txt file',
           onclick: (e) => { e.stopPropagation(); if (!comBlocked) openExportTxtModal(pair); } },
-          iconEl('folder', 12, 1.6), el('span', { style: 'font-size:12px', text: 'Export .txt' }));
+          iconEl('folder', 12, 1.6), el('span', { class: 'pair__ctrl-btn-label', text: 'Export .txt' }));
         controls.append(txtBtn);
       }
 
       // Edit — open the wizard preloaded with this pair (F2). Reuses renderAddPairLive in edit mode.
-      controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px',
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn',
         onclick: (e) => { e.stopPropagation(); startEditPair(pair.id); } },
-        iconEl('settings', 12, 1.8), el('span', { style: 'font-size:12px', text: 'Edit' })));
+        iconEl('settings', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: 'Edit' })));
 
-      controls.append(el('button', { class: 'btn btn--ghost', style: 'height:30px;padding:0 10px;color:var(--err);margin-left:auto',
+      controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn pair__ctrl-btn--danger',
         onclick: (e) => { e.stopPropagation(); deletePair(pair.id); } },
-        iconEl('close', 12, 1.8), el('span', { style: 'font-size:12px', text: 'Delete' })));
+        iconEl('close', 12, 1.8), el('span', { class: 'pair__ctrl-btn-label', text: 'Delete' })));
 
       body.append(controls);
     }
@@ -2813,8 +2947,8 @@ function renderAbout(root) {
     el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
     el('div', { class: 'about-name', text: 'Zync Master' }),
     // Version is hardcoded: the web UI has no channel to read the .NET assembly version of the
-    // host. Keep this in step with the published release (currently 0.2.7, beta). No build number.
-    el('div', { class: 'about-version num', text: 'VERSION 0.2.7 · BETA' }),
+    // host. Keep this in step with the published release (currently 0.2.8, beta). No build number.
+    el('div', { class: 'about-version num', text: 'VERSION 0.2.8 · BETA' }),
     el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
     links,
   ));
@@ -2931,13 +3065,64 @@ function runSync() {
 }
 
 // ---------------- Live per-pair actions (native shell) ----------------
+// Build the success summary line from a MirrorResult ({created,updated,deleted,skipped}). When the
+// bridge returns no counts we fall back to a neutral "Completed" so a successful run still logs an
+// entry rather than reading as a no-op.
+function syncResultSummary(res) {
+  const r = res || {};
+  const created = r.created || 0, updated = r.updated || 0, deleted = r.deleted || 0, skipped = r.skipped || 0;
+  const parts = [];
+  if (created) parts.push(`${created} created`);
+  if (updated) parts.push(`${updated} updated`);
+  if (deleted) parts.push(`${deleted} deleted`);
+  if (skipped) parts.push(`${skipped} skipped`);
+  return parts.length ? parts.join(' · ') : 'No changes';
+}
+
+// Pull a human-readable message out of whatever the bridge rejected with (Error, string, or a
+// shaped object). Never surfaces a raw [object Object].
+function errorMessage(err) {
+  if (!err) return 'Sync failed';
+  if (typeof err === 'string') return err;
+  if (err.message) return String(err.message);
+  if (err.error) return String(err.error);
+  try { return JSON.stringify(err); } catch (_) { return 'Sync failed'; }
+}
+
+// Mark a pair's sync as in flight (single-flight) and repaint so the button shows its busy state.
+// Returns false when a run is already in flight for this id (the caller must abort).
+function beginPairSync(id) {
+  if (!id) return false;
+  if (live.syncing.has(id)) return false;       // single-flight: ignore stacked clicks
+  live.syncing.add(id);
+  live.attempts[id] = (live.attempts[id] || 0) + 1;
+  if (state.view === 'calendar') rerenderInPlace();
+  return true;
+}
+
+// Clear the in-flight flag for a pair and repaint (button returns to its idle state).
+function endPairSync(id) {
+  if (!id) return;
+  live.syncing.delete(id);
+  if (state.view === 'calendar') rerenderInPlace();
+}
+
 function runPairNow(id) {
   if (!Bridge.available || !id) return;
+  if (!beginPairSync(id)) return;               // a run is already in flight for this pair
   announce('Sync started');
   Bridge.call('runPairNow', id)
-    .then(() => loadPairs())
-    .then(() => { if (state.view === 'calendar') rerenderInPlace(); })
-    .catch(() => { announce('Sync failed.'); });
+    .then((res) => {
+      pushPairEvent(id, { ok: true, action: 'ok', title: syncResultSummary(res), sub: 'Sync completed', result: res });
+      announce('Sync completed.');
+      return loadPairs();
+    })
+    .catch((err) => {
+      const msg = errorMessage(err);
+      pushPairEvent(id, { ok: false, action: 'failed', title: 'Sync failed', sub: msg, msg });
+      announce('Sync failed.');
+    })
+    .finally(() => endPairSync(id));
 }
 
 // Track B — "Sync now" for a COM pair whose Outlook source lives on ANOTHER device. This device
@@ -2950,31 +3135,43 @@ function runPairNow(id) {
 //   not_com_pinned     → not a COM pair after all — run it directly.
 function syncPairRemote(pair) {
   if (!Bridge.available || !pair || !pair.id) return;
+  const id = pair.id;
+  if (!beginPairSync(id)) return;               // a request is already in flight for this pair
   const who = pair.pinnedDeviceName || 'another device';
   announce(`Asking ${who} to sync…`);
-  Bridge.call('requestPairSync', pair.id)
+  Bridge.call('requestPairSync', id)
     .then((res) => {
       const status = (res && res.status) || '';
       const device = (res && res.deviceName) || who;
       if (status === 'requested') {
+        pushPairEvent(id, { ok: true, action: 'requested', title: 'Sync requested', sub: `Will run on ${device}` });
         announce(`Requested — will run on ${device}.`);
       } else if (status === 'origin_unavailable') {
+        const msg = `Origin device ${device} is offline`;
+        pushPairEvent(id, { ok: false, action: 'failed', title: 'Could not request sync', sub: msg, msg });
         announce(`Origin device ${device} is not available (it is offline).`);
-      } else if (status === 'local') {
-        // The server says THIS device is the origin after all — run it locally so the click works.
-        runPairNow(pair.id);
-        return;
-      } else if (status === 'not_com_pinned') {
-        runPairNow(pair.id);
-        return;
+      } else if (status === 'local' || status === 'not_com_pinned') {
+        // The server says THIS device is the origin after all — release the remote in-flight flag
+        // and run it locally so the click works (runPairNow owns its own single-flight + logging).
+        endPairSync(id);
+        runPairNow(id);
+        return null;                            // skip the shared finally's endPairSync (already done)
       } else {
         // Unknown / unexpected status — do NOT claim success (it might be a no-op). Report a neutral,
         // honest outcome so the user is not misled into thinking the origin definitely got the signal.
+        const msg = 'Could not confirm the request to the origin device';
+        pushPairEvent(id, { ok: false, action: 'failed', title: 'Sync not confirmed', sub: msg, msg });
         announce('Could not confirm the request to the origin device.');
       }
-      return loadPairs().then(() => { if (state.view === 'calendar') rerenderInPlace(); });
+      endPairSync(id);
+      return loadPairs();
     })
-    .catch(() => { announce('Could not request a sync from the origin device.'); });
+    .catch((err) => {
+      const msg = errorMessage(err);
+      pushPairEvent(id, { ok: false, action: 'failed', title: 'Could not request sync', sub: msg, msg });
+      announce('Could not request a sync from the origin device.');
+      endPairSync(id);
+    });
 }
 function setPairState(id, newState) {
   if (!Bridge.available || !id) return;

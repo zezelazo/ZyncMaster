@@ -58,6 +58,14 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // not (signal the pinned device via request-sync). Null until first resolved.
     private string? _deviceId;
 
+    // Serialises device registration so two concurrent callers (App boot + the UI's onServerReady +
+    // refreshIdentity all fire EnsureDeviceRegisteredAsync near-simultaneously) never each register a
+    // fresh device. Without this, every concurrent register re-keys the SAME server device to a
+    // different key while saving its own locally — the server keeps the LAST write, the local store
+    // keeps an UNRELATED one, and every later api-key call 401s. The gate + a double-checked key load
+    // means exactly one register runs; the others reuse the stored key.
+    private readonly SemaphoreSlim _registerGate = new(1, 1);
+
     private SyncStatus _status = SyncStatus.Idle;
     private bool _paused;
     private string? _lastMessage;
@@ -335,9 +343,11 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
         _logger.Log(LogLevel.Info, $"Sync now: requested for pair '{id}'.");
 
-        // Run is dual-scheme on the server (RequireCookieOrApiKey); the device drives it under its
-        // key, so this human "Sync now" path uses the device api key for the actual push/run.
-        var key = await RequireKeyAsync(ct);
+        // Fail fast if this device is not (and cannot be) registered: "Sync now" needs a device key
+        // for the push, so an unpaired/unregistered device should report that up front rather than
+        // after listing pairs. (The actual push below re-acquires the key through WithDeviceKeyAsync,
+        // which additionally self-heals a stale key on a 401.)
+        await RequireKeyAsync(ct);
 
         // We need the pair's Source.Provider to decide the data path: the server has no local COM
         // reader, so a COM-sourced pair must be read here (Outlook COM) and PUSHED, exactly like
@@ -360,30 +370,38 @@ public sealed class EngineActions : IEngineActions, IDisposable
             throw new InvalidOperationException($"Sync pair '{id}' was not found.");
         }
 
-        // Track B — COM device-pinning routing. A COM-sourced pair can only be READ locally on the
-        // device that owns its Outlook. If THIS device is NOT the pinned one, reading COM here would
-        // fail (or compete with the real origin), so the App must NOT run it locally; the UI routes
-        // that case to RequestPairSyncAsync instead. We hard-guard here too so a stray runPairNow on
-        // the wrong device fails clearly rather than silently reading the wrong (or no) Outlook.
-        if (PairRunner.IsOutlookCom(pair) && !string.IsNullOrEmpty(pair.PinnedDeviceId))
-        {
-            var myDeviceId = await ResolveDeviceIdAsync(key, ct);
-            if (!string.Equals(pair.PinnedDeviceId, myDeviceId, StringComparison.Ordinal))
-            {
-                _logger.Log(LogLevel.Warning,
-                    $"Sync now: pair '{id}' is COM-pinned to another device; use request-sync instead of a local run.");
-                throw new InvalidOperationException(
-                    "This calendar's source lives on another device. Use Sync now to ask that device to run it.");
-            }
-        }
-
-        // PairRunner is the single source of truth for the COM-vs-Graph decision and the
-        // [now, now + SyncWindowDays] read window, shared with PairScheduler. For a COM pair this
-        // reads Outlook locally and PUSHES; the push claims the pin on first run (server-side).
+        // Run is dual-scheme on the server (RequireCookieOrApiKey); the device drives it under its
+        // api key, so this human "Sync now" path uses the device key for the actual push/run. The key
+        // op is wrapped so a stale key (401) self-heals: clear + re-register + retry once.
         try
         {
-            var result = await PairRunner.RunOnceAsync(
-                _pairs, _comSource, pair, key, _clock.UtcNow, _engineSettings, ct, _logger);
+            var result = await WithDeviceKeyAsync(async (key, c) =>
+            {
+                // Track B — COM device-pinning routing. A COM-sourced pair can only be READ locally on
+                // the device that owns its Outlook. If THIS device is NOT the pinned one, reading COM
+                // here would fail (or compete with the real origin), so the App must NOT run it
+                // locally; the UI routes that case to RequestPairSyncAsync. We hard-guard here too so a
+                // stray runPairNow on the wrong device fails clearly rather than reading the wrong
+                // Outlook.
+                if (PairRunner.IsOutlookCom(pair) && !string.IsNullOrEmpty(pair.PinnedDeviceId))
+                {
+                    var myDeviceId = await ResolveDeviceIdAsync(key, c);
+                    if (!string.Equals(pair.PinnedDeviceId, myDeviceId, StringComparison.Ordinal))
+                    {
+                        _logger.Log(LogLevel.Warning,
+                            $"Sync now: pair '{id}' is COM-pinned to another device; use request-sync instead of a local run.");
+                        throw new InvalidOperationException(
+                            "This calendar's source lives on another device. Use Sync now to ask that device to run it.");
+                    }
+                }
+
+                // PairRunner is the single source of truth for the COM-vs-Graph decision and the
+                // [now, now + SyncWindowDays] read window, shared with PairScheduler. For a COM pair
+                // this reads Outlook locally and PUSHES; the push claims the pin on first run.
+                return await PairRunner.RunOnceAsync(
+                    _pairs, _comSource, pair, key, _clock.UtcNow, _engineSettings, c, _logger);
+            }, ct);
+
             _logger.Log(LogLevel.Info,
                 $"Sync now: pair '{id}' done (created {result.Created}, updated {result.Updated}, deleted {result.Deleted}, skipped {result.Skipped}).");
             return result;
@@ -405,12 +423,11 @@ public sealed class EngineActions : IEngineActions, IDisposable
     {
         if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
 
-        var key = await RequireKeyAsync(ct);
         _logger.Log(LogLevel.Info, $"Request sync: signalling the pinned device for pair '{id}'.");
 
         try
         {
-            var result = await _pairs.RequestPairSyncAsync(key, id, ct);
+            var result = await WithDeviceKeyAsync((key, c) => _pairs.RequestPairSyncAsync(key, id, c), ct);
             _logger.Log(LogLevel.Info, $"Request sync: pair '{id}' -> status '{result.Status}' (device '{result.DeviceName}').");
             return result;
         }
@@ -442,6 +459,13 @@ public sealed class EngineActions : IEngineActions, IDisposable
             if (!string.IsNullOrEmpty(me.DeviceId))
                 _deviceId = me.DeviceId;
         }
+        catch (SyncClientException ex) when (ex.StatusCode == 401)
+        {
+            // A stale key here must NOT be swallowed: returning null would mis-classify this device
+            // as "not the pinned one" and block the run. Let it propagate so the caller's
+            // WithDeviceKeyAsync self-heals (clear + re-register + retry).
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.Log(LogLevel.Warning, "Sync now: could not resolve this device's id.", ex);
@@ -459,8 +483,9 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
     public async Task<DeviceInfo> GetDeviceAsync(CancellationToken ct = default)
     {
-        var key = await RequireKeyAsync(ct);
-        return await _pairs.GetDeviceMeAsync(key, ct);
+        // Wrapped so opening the dashboard (which loads the device card) self-heals a stale key:
+        // a 401 clears it, re-registers, and retries — recovering a device stuck on a bad key.
+        return await WithDeviceKeyAsync((key, c) => _pairs.GetDeviceMeAsync(key, c), ct);
     }
 
     public async Task<DeviceInfo> RenameDeviceAsync(string name, CancellationToken ct = default)
@@ -470,8 +495,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         if (trimmed.Length == 0)
             throw new InvalidOperationException("Device name is required.");
 
-        var key = await RequireKeyAsync(ct);
-        var info = await _pairs.RenameDeviceAsync(key, trimmed, ct);
+        var info = await WithDeviceKeyAsync((key, c) => _pairs.RenameDeviceAsync(key, trimmed, c), ct);
 
         // Keep AppSettings.DeviceName in sync so a later re-register uses the renamed value as its
         // fallback. The hot rename above is the source of truth for the live device; this just
@@ -497,8 +521,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         if (trimmed.Length == 0)
             return false;
 
-        var key = await RequireKeyAsync(ct);
-        return await _pairs.CheckDeviceNameAvailableAsync(key, trimmed, ct);
+        return await WithDeviceKeyAsync((key, c) => _pairs.CheckDeviceNameAvailableAsync(key, trimmed, c), ct);
     }
 
     public async Task<string?> GenerateTxtAsync(string requestJson, CancellationToken ct = default)
@@ -693,7 +716,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // Returns the freshly persisted key, or null when nothing was registered.
     public async Task<string?> EnsureDeviceRegisteredAsync(CancellationToken ct = default)
     {
-        // Idempotent: a device that already has a key is already registered.
+        // Idempotent fast path: a device that already has a key is already registered.
         var existing = await _keys.LoadAsync(ct);
         if (!string.IsNullOrEmpty(existing))
             return existing;
@@ -704,18 +727,48 @@ public sealed class EngineActions : IEngineActions, IDisposable
         if (tokens is null || string.IsNullOrEmpty(tokens.AccessToken))
             return null;
 
+        await _registerGate.WaitAsync(ct);
+        try
+        {
+            // Double-checked: a concurrent caller may have registered AND saved a key while we waited
+            // for the gate. Reuse it instead of registering again (a second register would re-key the
+            // server device and orphan the key the other caller just stored — the 401-after-register
+            // bug).
+            existing = await _keys.LoadAsync(ct);
+            if (!string.IsNullOrEmpty(existing))
+                return existing;
+
+            return await RegisterCoreAsync(ct);
+        }
+        finally
+        {
+            _registerGate.Release();
+        }
+    }
+
+    // The actual register-and-persist. MUST be called while holding _registerGate. Returns the freshly
+    // persisted key, or null when there is no identity / the server returned no key. Never throws on a
+    // transient failure (logged + null) so boot / post-login is never broken.
+    private async Task<string?> RegisterCoreAsync(CancellationToken ct)
+    {
+        var tokens = await _identityCache.LoadAsync(ct);
+        if (tokens is null || string.IsNullOrEmpty(tokens.AccessToken))
+            return null;
+
         try
         {
             var deviceName = ResolveDeviceName();
             var registration = await _pairs.RegisterDeviceAsync(tokens.AccessToken, deviceName, ct);
 
-            if (string.IsNullOrEmpty(registration.ApiKey))
+            if (registration is null || string.IsNullOrEmpty(registration.ApiKey))
             {
                 _logger.Log(LogLevel.Warning, "Device registration returned no api key; device is not registered.");
                 return null;
             }
 
             await _keys.SaveAsync(registration.ApiKey, ct);
+            if (!string.IsNullOrEmpty(registration.DeviceId))
+                _deviceId = registration.DeviceId;
             _logger.Log(LogLevel.Info, $"Device registered (deviceId={registration.DeviceId}).");
             return registration.ApiKey;
         }
@@ -729,6 +782,52 @@ public sealed class EngineActions : IEngineActions, IDisposable
             // Never break boot / post-login on a transient failure; the next call retries.
             _logger.Log(LogLevel.Warning, "Device registration failed; the device will retry later.", ex);
             return null;
+        }
+    }
+
+    // Runs a device-api-key operation and SELF-HEALS a stale key: if the call returns 401 the stored
+    // key is no longer valid (e.g. a prior concurrent registration left a mismatched key, or the
+    // server re-keyed the device), so clear it, re-register to mint a fresh one, and retry ONCE. This
+    // recovers a device that is stuck on a bad key without the user having to sign out / reinstall.
+    private async Task<T> WithDeviceKeyAsync<T>(Func<string, CancellationToken, Task<T>> op, CancellationToken ct)
+    {
+        var key = await RequireKeyAsync(ct);
+        try
+        {
+            return await op(key, ct);
+        }
+        catch (SyncClientException ex) when (ex.StatusCode == 401)
+        {
+            _logger.Log(LogLevel.Warning, "Device key was rejected (401); re-registering this device and retrying once.");
+            var fresh = await ReregisterDeviceAsync(key, ct);
+            return await op(fresh, ct);
+        }
+    }
+
+    // Clears the rejected key and registers the device anew, returning the fresh key. Serialised on
+    // the same gate as EnsureDeviceRegisteredAsync, and a no-op clear when another concurrent recovery
+    // already replaced the rejected key (so two 401s racing do not wipe a just-minted good key).
+    private async Task<string> ReregisterDeviceAsync(string rejectedKey, CancellationToken ct)
+    {
+        await _registerGate.WaitAsync(ct);
+        try
+        {
+            var current = await _keys.LoadAsync(ct);
+            // Another recovery already swapped in a new key while we waited — use it, do not re-register.
+            if (!string.IsNullOrEmpty(current) && !string.Equals(current, rejectedKey, StringComparison.Ordinal))
+                return current;
+
+            await _keys.ClearAsync(ct);
+            _deviceId = null;
+            var fresh = await RegisterCoreAsync(ct);
+            if (string.IsNullOrEmpty(fresh))
+                throw new InvalidOperationException(
+                    "This device could not be re-registered. Check your connection and try again.");
+            return fresh;
+        }
+        finally
+        {
+            _registerGate.Release();
         }
     }
 
@@ -813,6 +912,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
     public void Dispose()
     {
+        _registerGate.Dispose();
         _ownedHttp?.Dispose();
     }
 

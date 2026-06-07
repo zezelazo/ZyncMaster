@@ -437,6 +437,30 @@
 .pair__sync-btn:hover:not([disabled]) { background: rgba(217,119,87,0.22); border-color: var(--terra); }
 .pair__sync-btn:hover:not([disabled])::before { opacity: 0.95; animation: edge-travel 4.5s linear infinite; }
 .pair__sync-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+/* Busy (single-flight in progress): readable, calm — not greyed like a hard-disabled control. The
+   spinner already conveys progress; keep the surface in the azure accent and a wait cursor. */
+.pair__sync-btn[aria-busy="true"] {
+  opacity: 0.85; cursor: progress;
+  color: var(--azure);
+  background: var(--azure-soft);
+  border-color: var(--azure-edge);
+}
+.pair__sync-btn[aria-busy="true"] .spinner { border-color: var(--azure-edge); border-top-color: var(--azure); }
+/* Attempt counter pill — subtle, grabs the free space so it sits just left of the Sync button
+   (which keeps its own margin-left:auto). When present it owns the auto margin instead. */
+.pair__attempts {
+  display: inline-flex; align-items: center;
+  height: 20px; padding: 0 8px;
+  margin-left: auto;
+  font-size: 10.5px; font-weight: 600;
+  color: var(--ink-2);
+  background: var(--ctrl-fill);
+  border: 1px solid var(--ctrl-stroke);
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+}
+/* When the attempt pill is present it takes the auto margin; the button then just follows it. */
+.pair__attempts + .pair__sync-btn { margin-left: 0; }
 [data-theme="light"] .pair__sync-btn:hover:not([disabled]) { background: rgba(184,82,48,0.18); }
 @media (prefers-reduced-motion: reduce) {
   .pair__sync-btn:hover:not([disabled])::before { animation: none; }
@@ -453,7 +477,8 @@
 }
 .pair__activity-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 10px 4px;
+  /* More separation from the SOURCE/DESTINATION route-detail card above (point 4). */
+  padding: var(--s-5) 10px var(--s-1);
   font-size: 10.5px; font-weight: 600;
   color: var(--ink-3);
   text-transform: uppercase; letter-spacing: 0.08em;
@@ -462,6 +487,35 @@
 .pair__activity .activity__row { padding: 7px 8px; }
 .pair__activity .activity__row + .activity__row { border-top: 1px solid var(--glass-stroke-2); }
 .pair__body .route__progress { margin: 4px 8px 10px; }
+
+/* Footer controls — Pause / Disable / Export .txt / Edit / Delete on a SINGLE line (point 5).
+   No wrap; buttons shrink their padding (and may shed the icon label gap) before overflowing.
+   Delete is pushed to the far right and uses the error accent. */
+.pair__controls {
+  display: flex; align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin-top: var(--s-3);
+  padding: 0 4px;
+}
+.pair__ctrl-btn {
+  height: 30px;
+  padding: 0 9px;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+.pair__ctrl-btn-label {
+  font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.pair__ctrl-btn--danger { color: var(--err); margin-left: auto; }
+/* Narrow windows: tighten padding and the icon→label gap so all five still fit one line. */
+@media (max-width: 380px) {
+  .pair__controls { gap: 4px; }
+  .pair__ctrl-btn { padding: 0 7px; gap: 4px; }
+  .pair__ctrl-btn-label { font-size: 11.5px; }
+}
 
 .pair:not(.is-open) .pair__substats { padding-bottom: 14px; }
 .pair.is-open .pair__substats { border-bottom: 1px solid var(--glass-stroke-2); }
@@ -472,7 +526,9 @@
    offline→ that origin device's lease has expired (warn accent). */
 .pair__pin-note {
   display: flex; align-items: center; gap: 6px;
-  padding: 0 14px 12px;
+  /* Extra breathing room above the note so "Source is on this PC" is not cramped against the
+     substats row / Sync button (point 4). */
+  padding: var(--s-2) 14px 12px;
   font-size: 11px; line-height: 1.3;
   color: var(--ink-2);
 }

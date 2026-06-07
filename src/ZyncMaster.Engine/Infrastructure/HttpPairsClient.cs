@@ -441,7 +441,8 @@ public sealed class HttpPairsClient : IPairsClient
 
         if (!response.IsSuccessStatusCode)
             throw new SyncClientException(
-                $"Pairs request {method} {url} failed with status {(int)response.StatusCode}: {text}");
+                $"Pairs request {method} {url} failed with status {(int)response.StatusCode}: {text}",
+                (int)response.StatusCode);
 
         return text;
     }
@@ -460,7 +461,8 @@ public sealed class HttpPairsClient : IPairsClient
 
         if (!response.IsSuccessStatusCode)
             throw new SyncClientException(
-                $"Pairs request {method} {url} failed with status {(int)response.StatusCode}: {text}");
+                $"Pairs request {method} {url} failed with status {(int)response.StatusCode}: {text}",
+                (int)response.StatusCode);
 
         if (string.IsNullOrWhiteSpace(text))
             return null;
