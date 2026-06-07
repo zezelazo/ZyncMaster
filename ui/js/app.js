@@ -85,15 +85,29 @@ const Bridge = (() => {
   const pending = new Map(); // correlationId -> { resolve, reject }  (native + loopback only)
   let statusCb = null;
   let unauthorizedCb = null;
+  // Generic App -> UI push channel. Beyond the dedicated {event:"status"} stream, the host can
+  // push named events ({event:"<name>", payload:<obj>}); listeners register per name via onEvent.
+  // The clipboard viewer subscribes to "clipboard:item" so a new entry arriving over the server
+  // WebSocket repaints the list live with no refresh. Multiple listeners per name are supported.
+  const eventCbs = new Map(); // name -> Set<cb>
   let seq = 0;
 
   function newId() { return `c${Date.now()}_${seq++}`; }
   function safeParse(s) { try { return JSON.parse(s); } catch (_) { return s; } }
 
+  function dispatchEvent(name, payload) {
+    const set = eventCbs.get(name);
+    if (!set) return;
+    set.forEach((cb) => { try { cb(payload); } catch (_) { /* a faulty listener must not break the channel */ } });
+  }
+
   function handleInbound(text) {
     let msg;
     try { msg = JSON.parse(text); } catch (_) { return; }
     if (msg && msg.event === 'status') { if (statusCb) statusCb(msg.payload); return; }
+    // Any other named event (e.g. "clipboard:item") fans out to onEvent listeners. The payload may
+    // arrive as a JSON string or an already-parsed object depending on the host serializer.
+    if (msg && msg.event) { dispatchEvent(msg.event, msg.payload != null ? safeParse(String(msg.payload)) : null); return; }
     if (msg && msg.correlationId && pending.has(msg.correlationId)) {
       const p = pending.get(msg.correlationId);
       pending.delete(msg.correlationId);
@@ -251,6 +265,13 @@ const Bridge = (() => {
     resolveTransport, start, call, windowAction,
     onStatus(cb) { statusCb = cb; },
     onUnauthorized(cb) { unauthorizedCb = cb; },
+    // onEvent(name, cb) — subscribe to a named App -> UI push. Returns an unsubscribe function.
+    onEvent(name, cb) {
+      let set = eventCbs.get(name);
+      if (!set) { set = new Set(); eventCbs.set(name, set); }
+      set.add(cb);
+      return () => { const s = eventCbs.get(name); if (s) s.delete(cb); };
+    },
   };
 })();
 
@@ -416,6 +437,10 @@ const live = {
   syncing: new Set(),
   attempts: {},
   eventLog: {},
+  // Clipboard module: { thisDeviceId, devices: [...] } from getClipboardDevices. Lazy-loaded the
+  // first time the Clipboard settings screen (or the hub summary) needs it.
+  clipboardDevices: null,
+  clipboardDevicesLoading: false,
 };
 
 // Cap on per-pair retained client events (newest kept). Keeps memory bounded over a long session.
@@ -2357,6 +2382,9 @@ function resetSessionState() {
   live.accounts = null;
   live.calendars = {};
   live.me = null;
+  live.clipboardDevices = null;
+  live.clipboardDevicesLoading = false;
+  clipboardDevicesOpen = false;
 }
 
 // ---------------- Screen: Settings hub ----------------
@@ -2398,6 +2426,17 @@ function renderConfig(root) {
     else calValue = `${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}`;
     root.append(el('div', { class: 'glass glass--card config-section' },
       navRow({ label: 'Calendar', sublabel: 'Calendar accounts', value: calValue, onClick: () => navigate('calendar-settings') })));
+
+    // Clipboard — navigable module (desktop App only). Shows a live device-count summary once the
+    // device list has loaded; blank until then (never a fabricated number).
+    const devs = live.clipboardDevices;
+    let clipValue = '';
+    if (devs && Array.isArray(devs.devices)) {
+      const n = devs.devices.length;
+      clipValue = `${n} ${n === 1 ? 'device' : 'devices'}`;
+    }
+    root.append(el('div', { class: 'glass glass--card config-section' },
+      navRow({ label: 'Clipboard', sublabel: 'Sync across your devices', value: clipValue, onClick: () => navigate('clipboard-settings') })));
   }
 
   // Appearance.
@@ -2505,6 +2544,234 @@ function appearanceSection() {
 function aboutSection() {
   return el('div', { class: 'glass glass--card config-section' },
     navRow({ label: 'About Zync Master', sublabel: 'Version, credits, links', value: VERSION, onClick: () => navigate('about') }));
+}
+
+// ---------------- Screen: Clipboard module ----------------
+// Desktop App only. Two parts (matching the glass-settings / settings-natural-accordion mocks):
+//   1. "This device" — the per-machine preferences (auto-sync, send, receive, viewer hotkey,
+//      viewer density, show-hints). Edits persist through updateClipboardSettings for THIS device.
+//   2. "Your devices" — a collapsed-by-default accordion (a section-head with a clear rotating
+//      chevron, NOT a button-box). Each device shows a status dot, its name, a "this device" badge,
+//      a last-seen line and compact per-device send/receive toggles. Editing works even offline.
+// All values come from getClipboardDevices; the screen never fabricates a device.
+
+// Devices accordion open/closed state (collapsed by default). Module-scoped so a softRepaint keeps
+// the user's expand state instead of snapping it shut on every data refresh.
+let clipboardDevicesOpen = false;
+
+// loadClipboardDevices — fetch the device list once and cache it on live.clipboardDevices, then
+// softRepaint the screen(s) that read it. Guarded so it runs at most once until reset.
+function loadClipboardDevices(repaintView) {
+  if (!Bridge.available || live.clipboardDevices !== null || live.clipboardDevicesLoading) return;
+  live.clipboardDevicesLoading = true;
+  Bridge.call('getClipboardDevices')
+    .then((d) => { live.clipboardDevices = d || { thisDeviceId: null, devices: [] }; })
+    .catch(() => { live.clipboardDevices = { thisDeviceId: null, devices: [] }; })
+    .finally(() => {
+      live.clipboardDevicesLoading = false;
+      if (repaintView && state.view === repaintView) softRepaint();
+    });
+}
+
+// thisClipboardDevice — the device record flagged isThis (or matched by thisDeviceId), or null.
+function thisClipboardDevice() {
+  const d = live.clipboardDevices;
+  if (!d || !Array.isArray(d.devices)) return null;
+  return d.devices.find((x) => x.isThis) || d.devices.find((x) => x.id === d.thisDeviceId) || null;
+}
+
+// persistClipboardSettings(dev) — push one device's full settings block to the host. Sends every
+// field the contract expects so a partial update never resets the others to defaults server-side.
+function persistClipboardSettings(dev) {
+  if (!Bridge.available || !dev) return Promise.resolve();
+  const s = dev.settings || {};
+  const payload = {
+    deviceId: dev.id,
+    autoSync: !!s.autoSync,
+    send: !!s.send,
+    receive: !!s.receive,
+    viewerHotkey: s.viewerHotkey || '',
+    density: s.density === 'mini' ? 'mini' : 'rich',
+    showHints: !!s.showHints,
+  };
+  return Bridge.call('updateClipboardSettings', JSON.stringify(payload)).catch(() => {});
+}
+
+// clipToggle(dev, key, opts) — a .toggle bound to dev.settings[key] that persists on flip. opts.sm
+// renders the compact per-device variant. opts.after runs after persisting (e.g. re-register the
+// hotkey). Optimistic: the local model flips immediately so the UI feels instant.
+function clipToggle(dev, key, opts = {}) {
+  const get = () => !!(dev.settings && dev.settings[key]);
+  const t = el('div', {
+    class: opts.sm ? 'toggle toggle--sm' : 'toggle',
+    role: 'switch', 'aria-checked': String(get()), tabindex: '0',
+    'aria-label': opts.label || key,
+  });
+  const flip = () => {
+    if (!dev.settings) dev.settings = {};
+    const v = !get();
+    dev.settings[key] = v;
+    t.setAttribute('aria-checked', String(v));
+    persistClipboardSettings(dev).then(() => { if (opts.after) opts.after(v); });
+  };
+  t.addEventListener('click', flip);
+  t.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flip(); } });
+  return t;
+}
+
+// hotkeyChip(dev) — the editable viewer-hotkey chip. Click (or focus + Enter/Space) to capture the
+// next chord; the first key combo that includes at least one modifier is recorded, persisted, and
+// re-registered as the global hotkey (setClipboardHotkey). Esc cancels capture.
+function hotkeyChip(dev) {
+  const chip = el('span', { class: 'cb-hotkey', role: 'button', tabindex: '0' });
+  const labelOf = () => (dev.settings && dev.settings.viewerHotkey) || 'Not set';
+  chip.textContent = labelOf();
+  let capturing = false;
+
+  const stop = () => {
+    capturing = false;
+    chip.classList.remove('is-capturing');
+    chip.textContent = labelOf();
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const begin = () => {
+    if (capturing) return;
+    capturing = true;
+    chip.classList.add('is-capturing');
+    chip.textContent = 'Press keys…';
+    document.addEventListener('keydown', onKey, true);
+  };
+  function onKey(e) {
+    if (!capturing) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === 'Escape') { stop(); return; }
+    // Ignore lone modifier presses; wait for a real key plus at least one modifier.
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.metaKey) parts.push('Win');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (!parts.length) return; // require a modifier so we don't bind a bare letter
+    const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    parts.push(key);
+    const combo = parts.join('+');
+    if (!dev.settings) dev.settings = {};
+    dev.settings.viewerHotkey = combo;
+    stop();
+    // Persist the settings block AND re-register the global hotkey.
+    persistClipboardSettings(dev);
+    if (Bridge.available) Bridge.call('setClipboardHotkey', combo).catch(() => {});
+  }
+  chip.addEventListener('click', begin);
+  chip.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); begin(); } });
+  chip.addEventListener('blur', () => { if (capturing) stop(); });
+  return chip;
+}
+
+// densitySegmented(dev) — the Rich / Mini segmented for the viewer density. Persists on change.
+function densitySegmented(dev) {
+  const seg = el('div', { class: 'segmented' });
+  const buttons = [];
+  const current = () => ((dev.settings && dev.settings.density) === 'mini' ? 'mini' : 'rich');
+  [['rich', 'Rich'], ['mini', 'Mini']].forEach(([val, label]) => {
+    const b = el('button', { class: 'segmented__item', 'aria-pressed': String(current() === val), text: label,
+      onclick: () => {
+        if (!dev.settings) dev.settings = {};
+        dev.settings.density = val;
+        buttons.forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.val === val)));
+        persistClipboardSettings(dev);
+      } });
+    b.dataset.val = val;
+    buttons.push(b);
+    seg.append(b);
+  });
+  return seg;
+}
+
+// deviceRow(dev, thisId) — one row in the "Your devices" accordion. status dot + name (+ "this
+// device" badge) + last-seen line + compact send/receive toggles. Works for offline devices too.
+function deviceRow(dev, thisId) {
+  const isThis = dev.isThis || dev.id === thisId;
+  const dot = el('span', { class: 'status-dot', 'data-state': dev.online ? 'ok' : 'offline', 'aria-hidden': 'true' });
+  const name = el('div', { class: 'cb-dev__name' },
+    el('span', { class: 'cb-dev__name-text', text: dev.name || 'Device' }),
+    isThis ? el('span', { class: 'cb-dev__badge', text: 'this device' }) : null);
+  const sub = el('div', { class: 'cb-dev__sub', text: dev.online ? 'online' : 'offline' });
+  const info = el('div', { class: 'cb-dev__info' }, name, sub);
+  const toggles = el('div', { class: 'cb-dev__toggles' },
+    el('div', { class: 'cb-dev__tg' }, el('small', { text: 'send' }), clipToggle(dev, 'send', { sm: true, label: `Send from ${dev.name}` })),
+    el('div', { class: 'cb-dev__tg' }, el('small', { text: 'receive' }), clipToggle(dev, 'receive', { sm: true, label: `Receive on ${dev.name}` })));
+  return el('div', { class: 'cb-dev' }, dot, info, toggles);
+}
+
+function renderClipboardSettings(root) {
+  root.append(viewHeader('Clipboard', { onBack: () => navigate('config') }));
+
+  if (!Bridge.desktopApp) {
+    // Defensive: clipboard sync is a desktop concern. Other transports bounce back to the hub.
+    navigate('config');
+    return;
+  }
+
+  loadClipboardDevices('clipboard-settings');
+  const data = live.clipboardDevices;
+
+  if (data === null) {
+    root.append(cfgSection('This device',
+      cfgRow('Loading…', el('div', { class: 'cfg-row__hint', text: 'Reading your devices' }), el('span', { class: 'spinner' }))));
+    return;
+  }
+
+  const me = thisClipboardDevice();
+  const thisName = (me && me.name) ? ` (${me.name})` : '';
+
+  // ---- This device card ----
+  if (me) {
+    if (!me.settings) me.settings = {};
+    root.append(cfgSection(`Clipboard · this device${thisName}`,
+      cfgRow('Auto-sync',
+        el('div', { class: 'cfg-row__hint', text: 'Copy on another device → Ctrl+V here' }),
+        clipToggle(me, 'autoSync', { label: 'Auto-sync' })),
+      cfgRow('Send my clipboard', null, clipToggle(me, 'send', { label: 'Send my clipboard' })),
+      cfgRow('Receive clipboards', null, clipToggle(me, 'receive', { label: 'Receive clipboards' })),
+      cfgRow('Viewer hotkey', null, hotkeyChip(me)),
+      cfgRow('Viewer density', null, densitySegmented(me)),
+      cfgRow('Show shortcut hints',
+        el('div', { class: 'cfg-row__hint', text: 'Key bar at the foot of the viewer (Rich only)' }),
+        clipToggle(me, 'showHints', { label: 'Show shortcut hints' }))));
+  } else {
+    root.append(cfgSection('Clipboard · this device',
+      cfgRow('This device is not registered yet', el('div', { class: 'cfg-row__hint', text: 'Sign in on this device to manage its clipboard.' }), null)));
+  }
+
+  // ---- Your devices accordion (collapsed by default) ----
+  const devices = data.devices || [];
+  const online = devices.filter((d) => d.online).length;
+  const section = el('div', { class: 'glass glass--card config-section' });
+
+  const chev = el('span', { class: 'cb-acc__chev', html: icon('chevrondown', { size: 15, stroke: 2.4 }) });
+  const titleEl = el('span', { class: 'cb-acc__title' });
+  titleEl.append(document.createTextNode('Your devices '), el('b', { text: `(${devices.length})` }),
+    document.createTextNode(` · ${online} online`));
+  const header = el('button', { class: 'cb-acc', type: 'button', 'aria-expanded': String(clipboardDevicesOpen) },
+    titleEl, chev);
+  const body = el('div', { class: 'cb-acc__body' });
+  if (clipboardDevicesOpen) {
+    if (devices.length === 0) {
+      body.append(cfgRow('No other devices', el('div', { class: 'cfg-row__hint', text: 'Sign in on another device to mirror your clipboard.' }), null));
+    } else {
+      devices.forEach((d) => body.append(deviceRow(d, data.thisDeviceId)));
+    }
+  } else {
+    body.hidden = true;
+  }
+  header.addEventListener('click', () => {
+    clipboardDevicesOpen = !clipboardDevicesOpen;
+    softRepaint();
+  });
+  section.append(header, body);
+  root.append(section);
 }
 
 // ---------------- Screen: Calendar module ----------------
@@ -3507,7 +3774,7 @@ const NAV = [
   { id: 'pairing', label: 'Pair',     icon: 'link' },
 ];
 // Map sub-routes back to a parent tab so the indicator follows the user.
-const TAB_MAP = { home: 'home', calendar: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', 'calendar-settings': 'config', about: 'config', pairing: 'pairing' };
+const TAB_MAP = { home: 'home', calendar: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', 'calendar-settings': 'config', 'clipboard-settings': 'config', about: 'config', pairing: 'pairing' };
 
 // The visible tabs. "Pair" is the legacy manual pairing-by-key walkthrough; a device now
 // registers as part of the identity sign-in, so the tab is meaningless in every REAL transport
@@ -3587,6 +3854,7 @@ function rerender() {
     case 'add-calendar': renderAddCalendar(root); break;
     case 'config': renderConfig(root); break;
     case 'calendar-settings': renderCalendarSettings(root); break;
+    case 'clipboard-settings': renderClipboardSettings(root); break;
     case 'about': renderAbout(root); break;
     case 'pairing': renderPairing(root); break;
     default: renderHome(root);
@@ -3601,7 +3869,7 @@ function rerender() {
 // flicker the whole screen. Covers the dashboard views (home/calendar) used during the syncing
 // tick AND the settings views (config/calendar-settings) so toggling interval/theme/select on
 // those screens is a smooth repaint instead of a full re-entrance via rerender().
-const SOFT_REPAINT_VIEWS = { home: renderHome, calendar: renderCalendar, config: renderConfig, 'calendar-settings': renderCalendarSettings };
+const SOFT_REPAINT_VIEWS = { home: renderHome, calendar: renderCalendar, config: renderConfig, 'calendar-settings': renderCalendarSettings, 'clipboard-settings': renderClipboardSettings };
 function rerenderInPlace() {
   const render = SOFT_REPAINT_VIEWS[state.view];
   if (!render) return;
