@@ -264,7 +264,12 @@ public static class CalendarConnectEndpoints
                 {
                     foreach (var a in await accounts.ListAsync(ct))
                     {
-                        if (a.Kind == AccountKind.Graph &&
+                        // Defense-in-depth: ICalendarAccountStore.ListAsync is already user-scoped
+                        // (and the ambient user is pinned to stateModel.UserId above), so this only
+                        // ever sees the caller's own accounts. Still match on UserId explicitly so the
+                        // ownership invariant is locally evident and never silently relies on the pin.
+                        if (a.UserId == stateModel.UserId &&
+                            a.Kind == AccountKind.Graph &&
                             string.Equals(NormalizeEmail(a.AccountEmail), normalized, StringComparison.Ordinal))
                         {
                             existing = a;
