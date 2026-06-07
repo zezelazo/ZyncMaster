@@ -1357,6 +1357,9 @@ const addPairLive = {
   // a calendar of a DIFFERENT account while a subset selection already exists, we stash the intent
   // here and show an inline confirm instead of silently wiping their prior selection.
   srcSwitchPrompt: null, // null | { accountRef, calendarId }
+  // Account-accordion expand state for the wizard pickers (Sets of accountRefs). null = not yet
+  // initialized; each picker lazily opens the selected/only account on first render.
+  expandedSrc: null, expandedDst: null,
 };
 function resetAddPairLive() {
   Object.assign(addPairLive, {
@@ -1371,6 +1374,7 @@ function resetAddPairLive() {
     cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
     submitError: null, submitting: false,
     srcSwitchPrompt: null,
+    expandedSrc: null, expandedDst: null,
   });
 }
 
@@ -1417,6 +1421,7 @@ function startEditPair(id) {
     origDstCalendarName: dst.calendarName || null,
     cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
     submitError: null, submitting: false, srcSwitchPrompt: null,
+    expandedSrc: null, expandedDst: null,
   });
   navigate('add-pair');
 }
@@ -1497,34 +1502,87 @@ function completeAddPair() {
 }
 
 // ---------------- Add Pair wizard (bridged / live data) ----------------
-// A list of online accounts (from listAccounts), each expandable into its calendars
-// (from listCalendars). Selecting a calendar invokes onPick with the chosen endpoint. When
-// `allowCreate` is true (the DESTINATION step) each account also gets a "+ New calendar" affordance
-// that creates a fresh calendar on that account via the createCalendar bridge action and selects it.
+// accountAccordionHead(acc, expandedSet, summary, active) — a clickable collapsible header for an
+// account in the wizard pickers. Toggling flips membership in expandedSet (a Set of accountRefs kept
+// on addPairLive, so it survives rerenders) and re-renders. `summary` is the right-side hint shown
+// (e.g. calendar count / selection); `active` highlights the header when this account is the chosen
+// source/destination. Returns { head, open } so the caller renders the calendars only when open.
+function accountAccordionHead(acc, expandedSet, summary, active) {
+  const open = expandedSet.has(acc.accountRef);
+  const accName = acc.displayName || acc.accountRef;
+  const head = el('button', {
+    class: `cal-acct-head${open ? ' is-open' : ''}${active ? ' is-active' : ''}`,
+    type: 'button', 'aria-expanded': String(open),
+    onclick: () => {
+      if (open) expandedSet.delete(acc.accountRef); else expandedSet.add(acc.accountRef);
+      if (state.view === 'add-pair') rerender();
+    },
+  },
+    el('span', { class: 'cal-acct-head__chev', 'aria-hidden': 'true' }, iconEl('chevrondown', 14, 2.4)),
+    el('span', { class: 'cal-acct-head__name', text: accName }),
+    summary ? el('span', { class: 'cal-acct-head__sum', text: summary }) : null);
+  return { head, open };
+}
+
+// A list of online accounts (from listAccounts) as collapsible accordions: an "+ Add account" button
+// sits on TOP, and each account's calendars (from listCalendars) show only when that account is
+// expanded. Selecting a calendar invokes onPick with the chosen endpoint. When `allowCreate` is true
+// (the DESTINATION step) each writable account also gets a "+ New calendar" affordance.
 function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
   const a = addPairLive;
   const wrap = el('div', { class: 'glass glass--card', style: 'padding:4px' });
-  const list = el('div', { class: 'cal-list' });
 
   const accounts = live.accounts || [];
+
+  // "+ Add account" on TOP (above the accounts), not buried after the calendars. A destination must
+  // be writable, so connect read/write; clear any chosen calendar so Continue can't point at the old
+  // account's calendar, and auto-expand the freshly added account.
+  if (allowCreate) wrap.append(addAccountRow('readwrite', (newRef) => {
+    a.dstAccountRef = newRef; a.dstCalendarId = null; a.dstCalendarName = null;
+    if (newRef) { (a.expandedDst = a.expandedDst || new Set()).add(newRef); }
+  }));
+
   if (accounts.length === 0) {
-    list.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
+    return wrap;
   }
 
+  // Accordion expand state (survives rerenders). Initialize once: open the selected account, or the
+  // only account when there is just one; otherwise everything starts collapsed.
+  if (!a.expandedDst) {
+    a.expandedDst = new Set();
+    if (a.dstAccountRef) a.expandedDst.add(a.dstAccountRef);
+    else if (accounts.length === 1) a.expandedDst.add(accounts[0].accountRef);
+  }
+
+  const list = el('div', { class: 'cal-list', role: 'list' });
+
   accounts.forEach((acc) => {
+    const accName = acc.displayName || acc.accountRef;
     const cals = live.calendars[acc.accountRef];
-    list.append(el('div', { class: 'route__label', style: 'padding:8px 10px 2px', text: acc.displayName || acc.accountRef }));
+    const active = a.dstAccountRef === acc.accountRef;
+    const summary = cals ? `${cals.length} calendar${cals.length === 1 ? '' : 's'}` : '';
+
+    const { head, open } = accountAccordionHead(acc, a.expandedDst, summary, active);
+    const group = el('div', { class: `cal-acct-group${open ? ' is-open' : ''}`, role: 'group', 'aria-label': accName });
+    group.append(head);
+    list.append(group);
+    if (!open) return;
+
+    const body = el('div', { class: 'cal-acct-body' });
+    group.append(body);
+
     if (!cals) {
-      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
       loadCalendars(acc.accountRef).then(() => { if (state.view === 'add-pair') rerender(); });
       return;
     }
     if (cals.length === 0) {
-      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
     }
     cals.forEach((c) => {
       const selected = selectedCalendarId === c.id;
-      list.append(el('button', { class: `cal-item${selected ? ' is-selected' : ''}`,
+      body.append(el('button', { class: `cal-item${selected ? ' is-selected' : ''}`,
         onclick: () => onPick(acc, c) },
         pairBadge('Outlook'),
         el('div', null,
@@ -1535,17 +1593,9 @@ function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
 
     // "+ New calendar" — destination only, and only on a WRITABLE account. Creating a calendar is a
     // Graph write, so a read-only destination account must be upgraded first (handled in the select
-    // path); offering create here would write before the upgrade and fail. Reveals an inline name
-    // field; confirming creates the calendar on this account and auto-selects it.
-    if (allowCreate && acc.scope !== 'read') list.append(newCalendarRow(acc, onPick));
+    // path); offering create here would write before the upgrade and fail.
+    if (allowCreate && acc.scope !== 'read') body.append(newCalendarRow(acc, onPick));
   });
-
-  // Inline "+ Add account" for the destination step — a destination must be writable, so connect
-  // read/write. Only shown on the destination picker (allowCreate marks the destination step). Clear
-  // any previously chosen calendar so Continue can't point at the old account's calendar.
-  if (allowCreate) list.append(addAccountRow('readwrite', (newRef) => {
-    a.dstAccountRef = newRef; a.dstCalendarId = null; a.dstCalendarName = null;
-  }));
 
   wrap.append(list);
   return wrap;
@@ -1706,28 +1756,39 @@ function comSourceMultiSelect() {
   return wrap;
 }
 
-// Online source multi-select: "All calendars" + a checkbox per calendar across the connected
-// accounts. Selecting calendars records their Graph ids in srcCalendarIds and pins srcAccountRef to
+// Online source multi-select: an "+ Add account" button on TOP, then "All calendars", then each
+// connected account as a COLLAPSIBLE accordion — its calendars show only when the account is
+// expanded. Selecting calendars records their Graph ids in srcCalendarIds and pins srcAccountRef to
 // the account of the first selected calendar (a source pair targets ONE account's calendars).
 function onlineSourceMultiSelect() {
   const a = addPairLive;
   const wrap = el('div', { class: 'glass glass--card cal-multi', style: 'padding:4px' });
 
   const accounts = live.accounts || [];
+
+  // "+ Add account" on TOP (above the accounts/options), not buried after the calendars. A source
+  // only needs to be read, so connect read-only; auto-expand the freshly added account.
+  wrap.append(addAccountRow('read', (newRef) => {
+    a.srcAccountRef = newRef; a.srcSwitchPrompt = null;
+    if (newRef) { (a.expandedSrc = a.expandedSrc || new Set()).add(newRef); }
+  }));
+
   if (accounts.length === 0) {
-    // No "All calendars" toggle in the empty state — it would set srcAllCalendars with no account
-    // pinned, leaving nothing actionable. Just the notice + the inline Add-account affordance.
     wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
-    wrap.append(addAccountRow('read', (newRef) => { a.srcAccountRef = newRef; a.srcSwitchPrompt = null; }));
     return wrap;
+  }
+
+  // Accordion expand state (survives rerenders). Initialize once: open the selected account, or the
+  // only account when there is just one; otherwise everything starts collapsed.
+  if (!a.expandedSrc) {
+    a.expandedSrc = new Set();
+    if (a.srcAccountRef) a.expandedSrc.add(a.srcAccountRef);
+    else if (accounts.length === 1) a.expandedSrc.add(accounts[0].accountRef);
   }
 
   // Flipping All on/off makes a pending subset account-switch confirm meaningless — clear it.
   wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; a.srcSwitchPrompt = null; }));
 
-  // The whole set of accounts is a single list of grouped calendars. role=list + per-account
-  // role=group (labelled by the account name) gives assistive tech the account→calendars
-  // relationship the old flat stack of <div>s lacked.
   const list = el('div', { class: 'cal-list', role: 'list' });
 
   // applySwitch — commit a confirmed account switch in subset mode: drop the old account's
@@ -1742,21 +1803,32 @@ function onlineSourceMultiSelect() {
 
   accounts.forEach((acc) => {
     const accName = acc.displayName || acc.accountRef;
-    // Group each account's header + calendars so the relationship is explicit to screen readers.
-    const group = el('div', { class: 'cal-acct-group', role: 'group', 'aria-label': accName });
-    const heading = el('div', { class: 'route__label', id: `srcacct-${acc.accountRef}`, style: 'padding:8px 10px 2px', text: accName });
-    group.append(heading);
-    group.setAttribute('aria-labelledby', heading.id);
-    list.append(group);
-
     const cals = live.calendars[acc.accountRef];
+    const accountChosen = a.srcAccountRef === acc.accountRef;
+
+    // Collapsed summary: the selection state when chosen, else the calendar count.
+    let summary;
+    if (accountChosen && a.srcAllCalendars) summary = 'Source · all';
+    else if (accountChosen && a.srcCalendarIds.length) summary = `${a.srcCalendarIds.length} selected`;
+    else if (cals) summary = `${cals.length} calendar${cals.length === 1 ? '' : 's'}`;
+    else summary = '';
+
+    const { head, open } = accountAccordionHead(acc, a.expandedSrc, summary, accountChosen);
+    const group = el('div', { class: `cal-acct-group${open ? ' is-open' : ''}`, role: 'group', 'aria-label': accName });
+    group.append(head);
+    list.append(group);
+    if (!open) return;
+
+    const body = el('div', { class: 'cal-acct-body' });
+    group.append(body);
+
     if (!cals) {
-      group.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
       loadCalendars(acc.accountRef).then(() => { if (state.view === 'add-pair') rerender(); });
       return;
     }
     if (cals.length === 0) {
-      group.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
       return;
     }
 
@@ -1765,8 +1837,7 @@ function onlineSourceMultiSelect() {
     // re-pins the same account with no real change), pick the ACCOUNT explicitly and render its
     // calendars as a read-only, informative list so it is clear what "All" will include.
     if (a.srcAllCalendars) {
-      const accountChosen = a.srcAccountRef === acc.accountRef;
-      group.append(calCheckRow(
+      body.append(calCheckRow(
         accName,
         accountChosen ? 'Source account — All calendars below will be mirrored' : 'Use this account as the source',
         accountChosen,
@@ -1786,13 +1857,12 @@ function onlineSourceMultiSelect() {
             el('div', { class: 'cal-item__name', text: c.displayName || c.id }),
             el('div', { class: 'cal-item__sub', text: accountChosen ? 'Included by “All calendars”' : 'Pick this account to include' }))));
       });
-      group.append(roList);
+      body.append(roList);
       return;
     }
 
     // Subset mode: each calendar is an independently selectable checkbox.
     cals.forEach((c) => {
-      const accountChosen = a.srcAccountRef === acc.accountRef;
       const checked = accountChosen && a.srcCalendarIds.includes(c.id);
       const itemRow = el('div', { role: 'listitem' });
       itemRow.append(calCheckRow(c.displayName || c.id, accName, checked, () => {
@@ -1814,7 +1884,7 @@ function onlineSourceMultiSelect() {
         a.srcCalendarId = first || null;
         a.srcCalendarName = fc ? (fc.displayName || fc.id) : null;
       }));
-      group.append(itemRow);
+      body.append(itemRow);
 
       // Inline confirm for the pending account switch, anchored under the tapped calendar.
       if (a.srcSwitchPrompt && a.srcSwitchPrompt.accountRef === acc.accountRef && a.srcSwitchPrompt.calendarId === c.id) {
@@ -1826,13 +1896,11 @@ function onlineSourceMultiSelect() {
           el('div', { class: 'cal-switch-confirm__actions' },
             el('button', { class: 'btn btn--ghost', type: 'button', text: 'Keep current', onclick: () => { a.srcSwitchPrompt = null; rerender(); } }),
             el('button', { class: 'btn btn--primary', type: 'button', text: 'Switch account', onclick: () => { applySwitch(acc, c, cals); rerender(); } })));
-        group.append(confirm);
+        body.append(confirm);
       }
     });
   });
   wrap.append(list);
-  // Inline "+ Add account" for the source step — a source only needs to be read, so connect read-only.
-  wrap.append(addAccountRow('read', (newRef) => { a.srcAccountRef = newRef; a.srcSwitchPrompt = null; }));
   return wrap;
 }
 
