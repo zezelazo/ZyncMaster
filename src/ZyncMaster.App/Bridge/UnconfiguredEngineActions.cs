@@ -178,6 +178,28 @@ public sealed class UnconfiguredEngineActions : IEngineActions
         return Task.CompletedTask;
     }
 
+    // ---------------- Clipboard module (Plan 2/3) ----------------
+    // No engine yet → no transport / sink / hotkey. History + devices degrade to empty so the viewer
+    // shows its "nothing yet" state instead of throwing; the mutating actions degrade to a quiet
+    // no-op (the user has not configured the server, so there is nothing to persist or paste).
+    public Task<IReadOnlyList<ClipboardHistoryItem>> GetClipboardHistoryAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ClipboardHistoryItem>>(new List<ClipboardHistoryItem>());
+
+    public Task<ClipboardDevicesView> GetClipboardDevicesAsync(CancellationToken ct = default)
+        => Task.FromResult(new ClipboardDevicesView());
+
+    public Task UpdateClipboardSettingsAsync(string payloadJson, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    public Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default)
+        => Task.FromResult(false);
+
+    public Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    public Task CloseClipboardViewerAsync(CancellationToken ct = default)
+        => Task.CompletedTask;
+
     private static InvalidOperationException NotConfigured()
         => new("Set the server URL in Settings first.");
 }

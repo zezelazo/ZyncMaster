@@ -134,4 +134,34 @@ public interface IEngineActions
     //     browser tab / hit Cancel) and free the loopback port so a new connectCalendar() can start
     //     right away. Mirrors CancelLoginAsync.
     Task CancelConnectAsync(CancellationToken ct = default);
+
+    // ---------------- Clipboard module (Plan 2/3) ----------------
+    // The clipboard viewer + Settings panel drive these. Every Text item is DECRYPTED in the App
+    // before it leaves here (the UI never sees ciphertext); Image items carry a best-effort PNG data
+    // URI preview (null when one is not cheaply available).
+
+    // Newest-first clipboard history for the viewer. Text items carry decrypted plaintext; Image
+    // items carry an optional preview data URI + sizeBytes.
+    Task<IReadOnlyList<ClipboardHistoryItem>> GetClipboardHistoryAsync(CancellationToken ct = default);
+
+    // The user's devices for the clipboard Devices view: this device's id, plus every device with its
+    // online flag, isThis flag and per-device clipboard settings (editing works even when offline).
+    Task<ClipboardDevicesView> GetClipboardDevicesAsync(CancellationToken ct = default);
+
+    // Persists one device's clipboard settings (PATCH /api/clipboard/settings/{deviceId}). The JSON
+    // payload is { deviceId, autoSync, send, receive, viewerHotkey, density, showHints }; density is
+    // validated ("rich" | "mini"). If the edited device IS this device, the change is also applied to
+    // the live in-process settings so capture/apply honour it immediately.
+    Task UpdateClipboardSettingsAsync(string payloadJson, CancellationToken ct = default);
+
+    // Sets the OS clipboard from the history item with the given id and pastes it into the
+    // previously-focused window (IClipboardSink.PasteIntoFocusedAsync), then signals the viewer to
+    // close. Returns true when the id was found and applied, false (a clean no-op) when it was not.
+    Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default);
+
+    // Re-registers the global viewer hotkey and persists it in this device's clipboard settings.
+    Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default);
+
+    // Closes the clipboard viewer window (Esc / after a paste). A no-op when no viewer is open.
+    Task CloseClipboardViewerAsync(CancellationToken ct = default);
 }

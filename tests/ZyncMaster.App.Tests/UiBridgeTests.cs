@@ -374,6 +374,67 @@ public class UiBridgeTests
             if (Throw != null) await Throw();
             OpenLicensesCalls++;
         }
+
+        // Clipboard capture fields.
+        public int GetClipboardHistoryCalls;
+        public int GetClipboardDevicesCalls;
+        public string? UpdateClipboardSettingsArg;
+        public string? PasteClipboardEntryArg;
+        public bool PasteClipboardEntryToReturn = true;
+        public string? SetClipboardHotkeyArg;
+        public int CloseClipboardViewerCalls;
+
+        public IReadOnlyList<ClipboardHistoryItem> ClipboardHistoryToReturn = new List<ClipboardHistoryItem>
+        {
+            new() { Id = "i1", Type = "Text", Text = "hello", CreatedUtc = DateTimeOffset.UnixEpoch, OriginDeviceId = "dev-1" },
+        };
+        public ClipboardDevicesView ClipboardDevicesToReturn = new()
+        {
+            ThisDeviceId = "dev-1",
+            Devices = new List<ClipboardDeviceView>
+            {
+                new() { Id = "dev-1", Name = "Studio PC", Online = true, IsThis = true, Settings = new ClipboardSettingsView { Density = "rich" } },
+            },
+        };
+
+        public async Task<IReadOnlyList<ClipboardHistoryItem>> GetClipboardHistoryAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GetClipboardHistoryCalls++;
+            return ClipboardHistoryToReturn;
+        }
+
+        public async Task<ClipboardDevicesView> GetClipboardDevicesAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GetClipboardDevicesCalls++;
+            return ClipboardDevicesToReturn;
+        }
+
+        public async Task UpdateClipboardSettingsAsync(string payloadJson, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            UpdateClipboardSettingsArg = payloadJson;
+        }
+
+        public async Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            PasteClipboardEntryArg = id;
+            return PasteClipboardEntryToReturn;
+        }
+
+        public async Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            SetClipboardHotkeyArg = hotkey;
+        }
+
+        public async Task CloseClipboardViewerAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            CloseClipboardViewerCalls++;
+        }
     }
 
     private sealed class FakeWindowControl : IWindowControl

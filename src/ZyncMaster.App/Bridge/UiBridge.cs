@@ -49,6 +49,21 @@ public sealed class UiBridge
         _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
     }
 
+    // Sends an unsolicited "clipboard:item" event carrying one history-item, so the clipboard viewer
+    // updates live when a new item arrives over the WebSocket (no refresh). Same envelope shape as
+    // PushStatus: { event, payload }. The item's Text is already DECRYPTED by the caller.
+    public void PushClipboardItem(ClipboardHistoryItem item)
+    {
+        if (item == null) throw new ArgumentNullException(nameof(item));
+
+        var envelope = new
+        {
+            @event = "clipboard:item",
+            payload = item,
+        };
+        _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
     private void OnReceived(string json)
     {
         // Fire-and-forget: inbound dispatch is async but the transport callback is sync.
@@ -297,6 +312,42 @@ public sealed class UiBridge
             case "cancelConnect":
             {
                 await _engine.CancelConnectAsync(ct);
+                return null;
+            }
+            // ---------------- Clipboard module (Plan 2/3) ----------------
+            case "getClipboardHistory":
+            {
+                var history = await _engine.GetClipboardHistoryAsync(ct);
+                return JsonSerializer.Serialize(history, JsonOptions);
+            }
+            case "getClipboardDevices":
+            {
+                var devices = await _engine.GetClipboardDevicesAsync(ct);
+                return JsonSerializer.Serialize(devices, JsonOptions);
+            }
+            case "updateClipboardSettings":
+            {
+                // The whole object payload ({deviceId, autoSync, ...}) is forwarded to the engine,
+                // which parses + validates it (density) and persists via the server PATCH.
+                await _engine.UpdateClipboardSettingsAsync(message.Payload ?? "", ct);
+                return JsonSerializer.Serialize(new { ok = true }, JsonOptions);
+            }
+            case "pasteClipboardEntry":
+            {
+                // Payload is the item id (a bare/quoted string). Returns {ok|notfound} so the UI can
+                // distinguish a successful paste from a stale id.
+                var found = await _engine.PasteClipboardEntryAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(new { status = found ? "ok" : "notfound" }, JsonOptions);
+            }
+            case "setClipboardHotkey":
+            {
+                // Payload is the hotkey string (a bare/quoted string).
+                await _engine.SetClipboardHotkeyAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(new { ok = true }, JsonOptions);
+            }
+            case "closeClipboardViewer":
+            {
+                await _engine.CloseClipboardViewerAsync(ct);
                 return null;
             }
             // Frameless window controls driven by the custom web title bar (fire-and-forget).

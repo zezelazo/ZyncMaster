@@ -49,6 +49,39 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly IAppLogger _logger;
     private readonly string _healthUrl;
 
+    // ---------------- Clipboard module (Plan 2/3) ----------------
+    // All clipboard collaborators are OPTIONAL so the engine still builds (and every non-clipboard
+    // action keeps working) on a host that does not wire the clipboard (e.g. a future non-Windows
+    // build, or tests that don't exercise it). A clipboard action with no collaborators wired reports
+    // a clear "not available" rather than NREing.
+    private readonly IClipboardTransport? _clipboardTransport;
+    private readonly IClipboardSink? _clipboardSink;
+    private readonly IClipboardKeyStore? _clipboardKeys;
+    private readonly IClipboardHotkey? _clipboardHotkey;
+    private readonly IClipboardDevicesSource? _clipboardDevices;
+
+    // The live, in-process clipboard settings for THIS device. The capture/apply pipeline reads this
+    // through the Func<ClipboardSettings> the ClipboardService was given (App passes () =>
+    // CurrentClipboardSettings), so an updateClipboardSettings for this device takes effect at once.
+    public ClipboardSettings CurrentClipboardSettings { get; private set; } = new();
+
+    // The id/name of THIS device once known (set by the App after registration). Used to mark the
+    // "isThis" device in the devices view and as the origin when capturing. Empty until set.
+    private string _clipboardDeviceId = "";
+    private string? _clipboardDeviceName;
+
+    // The origin identity the capture source stamps on each local copy. Read live so a registration
+    // that lands after capture started still gets the right id/name on the next copy.
+    public (string id, string? name) ClipboardOrigin => (_clipboardDeviceId, _clipboardDeviceName);
+
+    // Set by the App so the engine can close the viewer window after a paste / on closeClipboardViewer.
+    // A no-op when the App did not wire a viewer (headless).
+    public Action? CloseClipboardViewer { get; set; }
+
+    // Device is considered online when its last-seen lease is within this window. The server heartbeat
+    // runs comfortably inside this, so a live App keeps its device "online" for the roster.
+    private static readonly TimeSpan DeviceOnlineWindow = TimeSpan.FromMinutes(10);
+
     // One warm-up probe must fail fast, not hang on the App's default HttpClient timeout: the UI
     // re-polls, so a short per-attempt budget keeps the "waking up" feedback responsive.
     private static readonly TimeSpan HealthProbeTimeout = TimeSpan.FromSeconds(8);
@@ -95,7 +128,12 @@ public sealed class EngineActions : IEngineActions, IDisposable
         IClock clock,
         HttpClient http,
         IAppLogger logger,
-        HttpClient? ownedHttp = null)
+        HttpClient? ownedHttp = null,
+        IClipboardTransport? clipboardTransport = null,
+        IClipboardSink? clipboardSink = null,
+        IClipboardKeyStore? clipboardKeys = null,
+        IClipboardHotkey? clipboardHotkey = null,
+        IClipboardDevicesSource? clipboardDevices = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
         _pairing = pairing ?? throw new ArgumentNullException(nameof(pairing));
@@ -120,6 +158,23 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _healthUrl = $"{(_engineSettings.ServerBaseUrl ?? "").TrimEnd('/')}/health";
         _ownedHttp = ownedHttp;
+
+        // Clipboard collaborators are optional (see field comments); no null-guard here.
+        _clipboardTransport = clipboardTransport;
+        _clipboardSink = clipboardSink;
+        _clipboardKeys = clipboardKeys;
+        _clipboardHotkey = clipboardHotkey;
+        _clipboardDevices = clipboardDevices;
+    }
+
+    // Seeds the live clipboard settings + this device's identity once the App has loaded them (after
+    // sign-in + device registration). Called by EngineHost/App composition before the capture loop
+    // starts so getClipboardDevices marks the right device and capture stamps the right origin.
+    public void InitializeClipboard(ClipboardSettings settings, string deviceId, string? deviceName = null)
+    {
+        CurrentClipboardSettings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _clipboardDeviceId = deviceId ?? "";
+        _clipboardDeviceName = deviceName;
     }
 
     public bool IsPaused => _paused;
@@ -888,6 +943,268 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return tokens.AccessToken;
     }
 
+    // ---------------- Clipboard module (Plan 2/3) ----------------
+
+    // Newest-first clipboard history. Text items are DECRYPTED here with the local text key before
+    // they leave the engine (the UI never sees ciphertext); a Text item we cannot decrypt yet (key
+    // not admitted) is returned with Text=null so the viewer can still show a placeholder rather than
+    // dropping the row. Image items get a best-effort PNG data URI preview (the thumbnail bytes when
+    // present, else null — DIB->PNG conversion is intentionally NOT attempted here).
+    public async Task<IReadOnlyList<ClipboardHistoryItem>> GetClipboardHistoryAsync(CancellationToken ct = default)
+    {
+        if (_clipboardTransport is null)
+            return new List<ClipboardHistoryItem>();
+
+        var raw = await _clipboardTransport.GetHistoryAsync(ct).ConfigureAwait(false);
+
+        byte[]? textKey = null;
+        if (_clipboardKeys is not null)
+            textKey = await _clipboardKeys.LoadTextKeyAsync(ct).ConfigureAwait(false);
+
+        var items = new List<ClipboardHistoryItem>(raw.Count);
+        foreach (var entry in raw)
+            items.Add(ToHistoryItem(entry, textKey));
+        return items;
+    }
+
+    // Maps an Engine ClipboardEntry to the wire item, decrypting Text and building the image preview.
+    // Shared by GetClipboardHistoryAsync and the live "clipboard:item" push (BuildPushItem).
+    internal ClipboardHistoryItem ToHistoryItem(ClipboardEntry entry, byte[]? textKey)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        string? text = null;
+        string? preview = null;
+
+        if (entry.Type == ClipboardEntryType.Text)
+        {
+            // Prefer an already-decrypted Text (the push path decrypts via the ClipboardService);
+            // otherwise decrypt the ciphertext here. A wrong/absent key leaves Text null — no leak,
+            // no throw.
+            if (entry.Text is not null)
+            {
+                text = entry.Text;
+            }
+            else if (textKey is not null && entry.CipherText is { Length: > 0 })
+            {
+                try { text = TextCrypto.Decrypt(textKey, entry.CipherText); }
+                catch (System.Security.Cryptography.CryptographicException) { text = null; }
+            }
+        }
+        else
+        {
+            preview = BuildImagePreview(entry);
+        }
+
+        return new ClipboardHistoryItem
+        {
+            Id = entry.Id,
+            Type = entry.Type.ToString(),
+            Text = text,
+            ImagePreviewDataUri = preview,
+            SizeBytes = entry.SizeBytes,
+            CreatedUtc = entry.CreatedUtc,
+            OriginDeviceId = entry.OriginDeviceId,
+            OriginDeviceName = entry.OriginDeviceName,
+        };
+    }
+
+    // Best-effort small PNG data URI for an image item. Only the stored Thumbnail (already a PNG when
+    // the server/origin produced one) is surfaced; the raw CF_DIB ImageBytes are NOT converted here
+    // (DIB->PNG is a known follow-up). Returns null when there is no cheap preview.
+    private static string? BuildImagePreview(ClipboardEntry entry)
+    {
+        if (entry.Thumbnail is { Length: > 0 } thumb)
+            return "data:image/png;base64," + Convert.ToBase64String(thumb);
+        return null;
+    }
+
+    // The user's devices for the clipboard Devices view. The roster (id + name + last-seen) comes
+    // from the server under the device api key; per-device clipboard settings come from the transport
+    // (GET /api/clipboard/settings/{deviceId}). Editing works for offline devices too, so a device's
+    // settings are fetched regardless of online state. A per-device settings fetch failure degrades
+    // to that device's defaults rather than failing the whole view.
+    public async Task<ClipboardDevicesView> GetClipboardDevicesAsync(CancellationToken ct = default)
+    {
+        if (_clipboardDevices is null || _clipboardTransport is null)
+            return new ClipboardDevicesView { ThisDeviceId = _clipboardDeviceId };
+
+        var rows = await WithDeviceKeyAsync((key, c) => _clipboardDevices.ListDevicesAsync(key, c), ct)
+            .ConfigureAwait(false);
+
+        var now = _clock.UtcNow;
+        var views = new List<ClipboardDeviceView>(rows.Count);
+        foreach (var row in rows)
+        {
+            ClipboardSettings settings;
+            try
+            {
+                settings = await _clipboardTransport.GetSettingsAsync(row.Id, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Log(LogLevel.Warning, $"Clipboard devices: could not load settings for device '{row.Id}'.", ex);
+                settings = new ClipboardSettings();
+            }
+
+            views.Add(new ClipboardDeviceView
+            {
+                Id = row.Id,
+                Name = row.Name,
+                Online = row.LastSeenUtc is { } seen && now - seen <= DeviceOnlineWindow,
+                IsThis = !string.IsNullOrEmpty(_clipboardDeviceId)
+                         && string.Equals(row.Id, _clipboardDeviceId, StringComparison.Ordinal),
+                Settings = ToSettingsView(settings),
+            });
+        }
+
+        return new ClipboardDevicesView { ThisDeviceId = _clipboardDeviceId, Devices = views };
+    }
+
+    private static ClipboardSettingsView ToSettingsView(ClipboardSettings s) => new()
+    {
+        AutoSync = s.AutoSync,
+        Send = s.Send,
+        Receive = s.Receive,
+        ViewerHotkey = s.ViewerHotkey,
+        Density = s.Density,
+        ShowHints = s.ShowHints,
+    };
+
+    // Persists one device's clipboard settings via the server PATCH. Validates density ("rich" |
+    // "mini") before sending; an invalid value throws so the bridge surfaces a clean error. If the
+    // edited device is THIS device, the live in-process settings are updated too so the running
+    // capture/apply pipeline honours the change immediately (no restart).
+    public async Task UpdateClipboardSettingsAsync(string payloadJson, CancellationToken ct = default)
+    {
+        if (payloadJson == null) throw new ArgumentNullException(nameof(payloadJson));
+        if (_clipboardTransport is null)
+            throw new InvalidOperationException("Clipboard is not available on this device.");
+
+        UpdateClipboardSettingsDto dto;
+        try
+        {
+            dto = Newtonsoft.Json.JsonConvert.DeserializeObject<UpdateClipboardSettingsDto>(payloadJson)
+                  ?? throw new InvalidOperationException("Invalid clipboard-settings request.");
+        }
+        catch (Newtonsoft.Json.JsonException)
+        {
+            throw new InvalidOperationException("Invalid clipboard-settings request.");
+        }
+
+        var deviceId = (dto.DeviceId ?? "").Trim();
+        if (deviceId.Length == 0)
+            throw new InvalidOperationException("clipboard-settings request is missing 'deviceId'.");
+
+        var density = (dto.Density ?? "rich").Trim();
+        if (!string.Equals(density, "rich", StringComparison.Ordinal)
+            && !string.Equals(density, "mini", StringComparison.Ordinal))
+            throw new InvalidOperationException("Density must be 'rich' or 'mini'.");
+
+        var settings = new ClipboardSettings
+        {
+            AutoSync = dto.AutoSync ?? true,
+            Send = dto.Send ?? true,
+            Receive = dto.Receive ?? true,
+            ViewerHotkey = string.IsNullOrWhiteSpace(dto.ViewerHotkey) ? "Ctrl+Win+Q" : dto.ViewerHotkey!.Trim(),
+            Density = density,
+            ShowHints = dto.ShowHints ?? true,
+        };
+
+        await _clipboardTransport.UpdateSettingsAsync(deviceId, settings, ct).ConfigureAwait(false);
+
+        // Mirror onto the live settings when the edited device is this one.
+        if (!string.IsNullOrEmpty(_clipboardDeviceId)
+            && string.Equals(deviceId, _clipboardDeviceId, StringComparison.Ordinal))
+        {
+            CurrentClipboardSettings = settings;
+        }
+    }
+
+    // Resolves the history item by id, sets the OS clipboard from it and pastes it into the
+    // previously-focused window, then closes the viewer. Returns false (clean no-op) for an unknown
+    // id. Text is decrypted before it is written to the OS clipboard (the sink writes Text/ImageBytes).
+    public async Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+        if (_clipboardTransport is null || _clipboardSink is null)
+            return false;
+
+        var history = await _clipboardTransport.GetHistoryAsync(ct).ConfigureAwait(false);
+        ClipboardEntry? match = null;
+        foreach (var entry in history)
+            if (string.Equals(entry.Id, id, StringComparison.Ordinal))
+            {
+                match = entry;
+                break;
+            }
+
+        if (match is null)
+        {
+            _logger.Log(LogLevel.Warning, $"Paste clipboard: item '{id}' was not found in history.");
+            return false;
+        }
+
+        // Decrypt Text before handing it to the sink (the OS clipboard must get plaintext). An
+        // image rides its bytes; nothing to decrypt.
+        if (match.Type == ClipboardEntryType.Text && match.Text is null && _clipboardKeys is not null)
+        {
+            var key = await _clipboardKeys.LoadTextKeyAsync(ct).ConfigureAwait(false);
+            if (key is not null && match.CipherText is { Length: > 0 })
+            {
+                try { match = match with { Text = TextCrypto.Decrypt(key, match.CipherText) }; }
+                catch (System.Security.Cryptography.CryptographicException)
+                {
+                    _logger.Log(LogLevel.Warning, $"Paste clipboard: item '{id}' could not be decrypted.");
+                    return false;
+                }
+            }
+        }
+
+        // Close the viewer FIRST so the previously-focused window is restored as the foreground
+        // window before the sink reads it (the sink captures GetForegroundWindow at paste time and
+        // synthesizes Ctrl+V into it). The viewer's close handler re-asserts the window it captured
+        // on open, so by the time the sink pastes, focus is back where the user expects it.
+        CloseClipboardViewer?.Invoke();
+        await _clipboardSink.PasteIntoFocusedAsync(match, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    // Re-registers the global viewer hotkey and persists it in THIS device's clipboard settings (so a
+    // later boot restores it). A blank hotkey throws so the bridge surfaces a clear error. Persisting
+    // is best-effort: a failed save must not lose the just-registered binding.
+    public async Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)
+    {
+        if (hotkey == null) throw new ArgumentNullException(nameof(hotkey));
+        var trimmed = hotkey.Trim();
+        if (trimmed.Length == 0)
+            throw new InvalidOperationException("A hotkey is required.");
+
+        _clipboardHotkey?.Register(trimmed);
+
+        CurrentClipboardSettings = CurrentClipboardSettings with { ViewerHotkey = trimmed };
+
+        if (_clipboardTransport is not null && !string.IsNullOrEmpty(_clipboardDeviceId))
+        {
+            try
+            {
+                await _clipboardTransport.UpdateSettingsAsync(_clipboardDeviceId, CurrentClipboardSettings, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Log(LogLevel.Warning, "Set clipboard hotkey: could not persist the new hotkey.", ex);
+            }
+        }
+    }
+
+    // Closes the viewer window (Esc / after a paste). A no-op when no viewer is wired/open.
+    public Task CloseClipboardViewerAsync(CancellationToken ct = default)
+    {
+        CloseClipboardViewer?.Invoke();
+        return Task.CompletedTask;
+    }
+
     // Captures the outcome of a cycle so GetStatus / PushStatus reflect it. Called by the
     // SyncLoop wrapper as well as SyncNowAsync.
     public void RecordResult(SyncResult result)
@@ -950,6 +1267,17 @@ public sealed class EngineActions : IEngineActions, IDisposable
         [Newtonsoft.Json.JsonProperty("year")] public int? Year { get; set; }
         [Newtonsoft.Json.JsonProperty("month")] public int? Month { get; set; }
         [Newtonsoft.Json.JsonProperty("includeCancelled")] public bool? IncludeCancelled { get; set; }
+    }
+
+    private sealed class UpdateClipboardSettingsDto
+    {
+        [Newtonsoft.Json.JsonProperty("deviceId")] public string? DeviceId { get; set; }
+        [Newtonsoft.Json.JsonProperty("autoSync")] public bool? AutoSync { get; set; }
+        [Newtonsoft.Json.JsonProperty("send")] public bool? Send { get; set; }
+        [Newtonsoft.Json.JsonProperty("receive")] public bool? Receive { get; set; }
+        [Newtonsoft.Json.JsonProperty("viewerHotkey")] public string? ViewerHotkey { get; set; }
+        [Newtonsoft.Json.JsonProperty("density")] public string? Density { get; set; }
+        [Newtonsoft.Json.JsonProperty("showHints")] public bool? ShowHints { get; set; }
     }
 
     private sealed class GenerateTxtDto
