@@ -453,6 +453,27 @@ public class CalendarConnectEndpointsTests
         db.CalendarAccounts.Single(a => a.UserId == userId).Scope.Should().Be(AccountScope.Read.ToString());
     }
 
+    [Fact]
+    public async Task Connecting_same_mailbox_twice_keeps_one_account_and_promotes_scope()
+    {
+        // Idempotency by mailbox (Phase B): connecting the SAME email a second time must NOT add a
+        // second pool row. The first connect is read-only; the second is read/write, so the single
+        // surviving account must be promoted to ReadWrite (a broader grant is never downgraded).
+        var fake = new FakeTokenService { Email = "dup@test", DisplayName = "Dup Owner" };
+        using var factory = CreateFactory(fake);
+        var (token, userId) = IssueBearer(factory, "dup-user", "dup-user@test");
+        var client = NoRedirectClient(factory);
+
+        await ConnectOne(client, token, "read", 51950, "n1");
+        await ConnectOne(client, token, "readwrite", 51951, "n2");
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
+        var rows = db.CalendarAccounts.Where(a => a.UserId == userId && a.AccountEmail == "dup@test").ToList();
+        rows.Should().HaveCount(1);
+        rows[0].Scope.Should().Be(AccountScope.ReadWrite.ToString());
+    }
+
     // ---- callback: email capture via Graph /me ---------------------------------------------
 
     [Fact]

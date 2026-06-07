@@ -254,21 +254,52 @@ public static class CalendarConnectEndpoints
             }
             else
             {
-                // Fresh connect: add a new account to the pool.
-                var account = new CalendarAccount
+                // Idempotent by email: connecting an account that is already in the pool must NOT
+                // create a duplicate row. Find an existing active account for this user with the same
+                // mailbox and refresh it in place (token + profile, and promote the scope when the new
+                // grant is broader). Only a genuinely new mailbox inserts a row.
+                var normalized = NormalizeEmail(email);
+                CalendarAccount? existing = null;
+                if (normalized.Length > 0)
                 {
-                    Id = Guid.NewGuid().ToString("N"),
-                    UserId = stateModel.UserId,
-                    Kind = AccountKind.Graph,
-                    Provider = "microsoft",
-                    AccountEmail = email,
-                    Authority = opts.Value.Authority,
-                    Scope = scope,
-                    DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName,
-                    Status = "active",
-                    ConnectedAt = DateTimeOffset.UtcNow,
-                };
-                await accounts.AddAsync(account, result.RefreshToken, ct);
+                    foreach (var a in await accounts.ListAsync(ct))
+                    {
+                        if (a.Kind == AccountKind.Graph &&
+                            string.Equals(NormalizeEmail(a.AccountEmail), normalized, StringComparison.Ordinal))
+                        {
+                            existing = a;
+                            break;
+                        }
+                    }
+                }
+
+                if (existing is not null)
+                {
+                    if (!string.IsNullOrEmpty(result.RefreshToken))
+                        await accounts.UpdateRefreshTokenAsync(existing.Id, result.RefreshToken, ct);
+                    if (!string.IsNullOrWhiteSpace(email) || !string.IsNullOrWhiteSpace(displayName))
+                        await accounts.UpdateProfileAsync(existing.Id, email, displayName, ct);
+                    // Promote read -> readwrite if the new consent is broader; never downgrade.
+                    if (scope == AccountScope.ReadWrite && existing.Scope == AccountScope.Read)
+                        await accounts.UpgradeScopeAsync(existing.Id, AccountScope.ReadWrite, ct);
+                }
+                else
+                {
+                    var account = new CalendarAccount
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        UserId = stateModel.UserId,
+                        Kind = AccountKind.Graph,
+                        Provider = "microsoft",
+                        AccountEmail = email,
+                        Authority = opts.Value.Authority,
+                        Scope = scope,
+                        DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName,
+                        Status = "active",
+                        ConnectedAt = DateTimeOffset.UtcNow,
+                    };
+                    await accounts.AddAsync(account, result.RefreshToken, ct);
+                }
             }
 
             // Loopback back to the App. No tokens here — only status + nonce. The App refreshes
@@ -457,6 +488,11 @@ public static class CalendarConnectEndpoints
         // Must remain best-effort: swallow transport failures so a disconnect always completes.
         return Task.CompletedTask;
     }
+
+    // Case/whitespace-insensitive mailbox key for dedup. Mirrors the listing's collapse-by-email so
+    // a re-connect of the same casilla is treated as the same account.
+    private static string NormalizeEmail(string? email) =>
+        (email ?? "").Trim().ToLowerInvariant();
 
     private static AccountScope? ParseScope(string? scopeText) => scopeText?.ToLowerInvariant() switch
     {
