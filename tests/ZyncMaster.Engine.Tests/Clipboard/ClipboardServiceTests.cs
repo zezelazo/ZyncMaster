@@ -203,6 +203,27 @@ public sealed class ClipboardServiceTests
     }
 
     [Fact]
+    public async Task Received_Text_AutoSyncOff_DecryptsButNotSet()
+    {
+        var key = TextCrypto.NewKey();
+        var h = new Harness(key);
+        // Receive stays on (default) so the entry IS decrypted; AutoSync off means it must NOT be
+        // written to the OS clipboard — the viewer holds it for an explicit user paste instead.
+        h.Settings = new ClipboardSettings { AutoSync = false, Receive = true };
+
+        h.Transport.RaiseItem(new ClipboardEntry
+        {
+            Id = "r1",
+            Type = ClipboardEntryType.Text,
+            CipherText = TextCrypto.Encrypt(key, "manual only"),
+            OriginDeviceId = "dev-b",
+        });
+        await SettleAsync();
+
+        h.Sink.Set.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Received_IgnoredWhenReceiveFalse()
     {
         var key = TextCrypto.NewKey();
