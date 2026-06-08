@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using ZyncMaster.Core;
 using ZyncMaster.Engine;
 
 namespace ZyncMaster.App.Platform.Clipboard;
@@ -35,10 +37,16 @@ public sealed class WindowsGlobalHotkey : IClipboardHotkey, IDisposable
         ["pgdn"] = 0x22,
     };
 
+    private readonly IAppLogger? _logger;
     private MessageOnlyWindow? _window;
     private bool _registered;
 
     public event Action? Pressed;
+
+    public WindowsGlobalHotkey(IAppLogger? logger = null)
+    {
+        _logger = logger;
+    }
 
     public void Register(string hotkey)
     {
@@ -49,20 +57,40 @@ public sealed class WindowsGlobalHotkey : IClipboardHotkey, IDisposable
         Unregister();
 
         if (!TryParse(hotkey, out var modifiers, out var vk))
+        {
+            _logger?.Log(LogLevel.Warning, $"Clipboard hotkey '{hotkey}' could not be parsed; not registered.");
             return;
+        }
 
         _window ??= CreateWindow();
         if (_window.Handle == IntPtr.Zero)
             return;
 
+        // RegisterHotKey MUST run on the thread that OWNS the HWND — the message-only pump thread.
+        // Calling it from the App's Task.Run/threadpool thread fails cross-thread (ERROR_WINDOW_OF_-
+        // OTHER_THREAD 1408) and silently never registers, so the hotkey appears dead. Marshal it onto
+        // the pump thread via MessageOnlyWindow.Invoke, and capture the Win32 error there too.
         // MOD_NOREPEAT so holding the combo fires once, not a stream.
-        _registered = Win32.RegisterHotKey(_window.Handle, HotkeyId, modifiers | Win32.MOD_NOREPEAT, vk);
+        var lastError = 0;
+        _registered = _window.Invoke(() =>
+        {
+            var ok = Win32.RegisterHotKey(_window.Handle, HotkeyId, modifiers | Win32.MOD_NOREPEAT, vk);
+            if (!ok) lastError = Marshal.GetLastWin32Error();
+            return (IntPtr)(ok ? 1 : 0);
+        }) != IntPtr.Zero;
+
+        if (_registered)
+            _logger?.Log(LogLevel.Info, $"Clipboard hotkey registered: '{hotkey}' (pumpThread={_window.PumpThreadId}).");
+        else
+            _logger?.Log(LogLevel.Warning,
+                $"RegisterHotKey FAILED for '{hotkey}' (vk={vk}, hwnd=0x{_window.Handle:X}, win32Error={lastError}).");
     }
 
     public void Unregister()
     {
         if (_registered && _window is { Handle: var h } && h != IntPtr.Zero)
-            Win32.UnregisterHotKey(h, HotkeyId);
+            // UnregisterHotKey must also run on the owning pump thread (same affinity rule as Register).
+            _window.Invoke(() => (IntPtr)(Win32.UnregisterHotKey(h, HotkeyId) ? 1 : 0));
         _registered = false;
     }
 

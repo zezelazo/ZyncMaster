@@ -201,7 +201,7 @@ public sealed class EngineHost : IDisposable
         var clipboardDevices = new Infrastructure.Clipboard.HttpClipboardDevicesSource(
             http, engineSettings.ServerBaseUrl);
         var clipboardSink = new Platform.Clipboard.WindowsClipboardSink();
-        var clipboardHotkey = new Platform.Clipboard.WindowsGlobalHotkey();
+        var clipboardHotkey = new Platform.Clipboard.WindowsGlobalHotkey(logger);
         var clipboardKeyExchange = new ClipboardKeyExchange(clipboardKeyStore, clipboardTransport);
 
         var actions = new EngineActions(

@@ -93,8 +93,14 @@ public partial class ClipboardViewerWindow : Window
         ClampHeightToWorkArea();
         CenterOnWorkArea();
 
+        // Suppress the spurious Deactivated that fires during the initial Show()/Activate() focus
+        // transfer (notably as the embedded WebView2 grabs focus). Without this, OnDeactivated ->
+        // Dismiss() hides the popup the instant it appears, so the user sees nothing open. Cleared on
+        // a later dispatcher frame so a genuine later focus loss still dismisses the viewer.
+        _suppressDeactivate = true;
         Show();
         Activate();
+        Dispatcher.UIThread.Post(() => _suppressDeactivate = false, DispatcherPriority.Background);
     }
 
     // Hides the viewer and restores the previously-focused window so the user lands back where they

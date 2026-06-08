@@ -15,15 +15,40 @@ namespace ZyncMaster.App.Platform.Clipboard;
 [SupportedOSPlatform("windows")]
 internal sealed class MessageOnlyWindow : IDisposable
 {
+    // App-private message that runs a queued delegate ON this window's pump thread (see Invoke).
+    private const uint WM_RUN_DELEGATE = Win32.WM_APP + 1;
+
     private readonly Win32.WndProc _wndProc;     // kept alive for the lifetime of the window
     private readonly Action<uint, IntPtr, IntPtr> _onMessage;
     private readonly string _className;
     private readonly ManualResetEventSlim _ready = new(false);
+    private readonly object _invokeLock = new();
+    private Func<IntPtr>? _pending;
     private Thread? _thread;
     private IntPtr _hwnd = IntPtr.Zero;
     private volatile bool _disposed;
 
     public IntPtr Handle => _hwnd;
+
+    // Managed id of the dedicated pump thread (or -1 before Start). Used to assert thread affinity.
+    public int PumpThreadId => _thread?.ManagedThreadId ?? -1;
+
+    // Runs `action` SYNCHRONOUSLY on the pump thread that owns the HWND and returns its result. Win32
+    // calls that require the owning thread (e.g. RegisterHotKey) must go through here, or they fail
+    // cross-thread. Serialized so two callers never clobber the single pending slot.
+    public IntPtr Invoke(Func<IntPtr> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var hwnd = _hwnd;
+        if (hwnd == IntPtr.Zero)
+            return IntPtr.Zero;
+        lock (_invokeLock)
+        {
+            _pending = action;
+            // SendMessage blocks until the pump thread's WndProc handles WM_RUN_DELEGATE below.
+            return Win32.SendMessage(hwnd, WM_RUN_DELEGATE, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
 
     // onMessage receives (msg, wParam, lParam) on the pump thread for every dispatched message.
     public MessageOnlyWindow(Action<uint, IntPtr, IntPtr> onMessage)
@@ -87,6 +112,16 @@ internal sealed class MessageOnlyWindow : IDisposable
         {
             Win32.PostQuitMessage(0);
             return IntPtr.Zero;
+        }
+
+        if (msg == WM_RUN_DELEGATE)
+        {
+            // Runs ON the pump thread (this is the whole point of Invoke). Return the delegate's
+            // result as the message result so the SendMessage caller receives it.
+            var fn = _pending;
+            _pending = null;
+            try { return fn?.Invoke() ?? IntPtr.Zero; }
+            catch { return IntPtr.Zero; }
         }
 
         try

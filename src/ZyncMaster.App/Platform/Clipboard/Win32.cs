@@ -14,6 +14,7 @@ internal static class Win32
     public const int WM_CLIPBOARDUPDATE = 0x031D;
     public const int WM_HOTKEY = 0x0312;
     public const int WM_DESTROY = 0x0002;
+    public const uint WM_APP = 0x8000; // base for app-private messages; used to marshal work onto the pump thread
     public const int HWND_MESSAGE = -3;
 
     // ----- Clipboard formats -----
@@ -120,6 +121,11 @@ internal static class Win32
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    // Synchronous: blocks until the target window's thread processes it. Used to run a delegate ON the
+    // pump thread that owns the HWND (RegisterHotKey must run on that thread or it fails cross-thread).
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool AddClipboardFormatListener(IntPtr hwnd);
