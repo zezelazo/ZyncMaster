@@ -378,7 +378,9 @@
 .cb-dev__tg { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .cb-dev__tg small { font-size: 9px; color: var(--ink-3); }
 
-/* Compact toggle variant for the per-device rows (smaller than the .toggle default). */
+/* Compact toggle variant for the per-device rows (smaller than the .toggle default). The thumb
+   inherits top:2px from the base .toggle::after, which is centered for the 22px default but sits 1px
+   low in this 18px variant (content 16px - thumb 14px => 1px each side). Re-center with top:1px. */
 .toggle.toggle--sm { width: 32px; height: 18px; }
-.toggle.toggle--sm::after { width: 14px; height: 14px; }
+.toggle.toggle--sm::after { width: 14px; height: 14px; top: 1px; }
 .toggle.toggle--sm[aria-checked="true"]::after { left: 16px; }

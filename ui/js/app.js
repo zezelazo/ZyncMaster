@@ -485,7 +485,25 @@ const identityAuth = {
   error: null,        // last login error message
   magicLinkSent: false, // a magic-link was requested; awaiting the email round-trip
   magicLinkEmail: '',   // the address the magic-link was sent to (shown in the sent state)
+  slowHint: false,      // login has been in flight long enough to hint at a network/proxy reset
 };
+
+// How long a Microsoft login may sit "waiting for the browser" before we surface the
+// ERR_CONNECTION_RESET hint (common on corporate networks that reset the first OAuth connection).
+const LOGIN_SLOW_HINT_MS = 50000;
+let loginSlowTimer = null;
+function startLoginSlowTimer() {
+  clearTimeout(loginSlowTimer);
+  identityAuth.slowHint = false;
+  loginSlowTimer = setTimeout(() => {
+    if (identityAuth.loading && !identityAuth.signedIn) { identityAuth.slowHint = true; rerender(); }
+  }, LOGIN_SLOW_HINT_MS);
+}
+function clearLoginSlowTimer() {
+  clearTimeout(loginSlowTimer);
+  loginSlowTimer = null;
+  identityAuth.slowHint = false;
+}
 
 // Desktop App server warm-up gate state (Bridge.desktopApp only; web/mock skip it). The Azure F1
 // free tier cold-starts, so the first request after idle can take ~30-60s. At boot we ping
@@ -941,17 +959,24 @@ function liveModules(activePairCount) {
   const count = activePairCount || 0;
   const calendar = count > 0
     ? {
-        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: true, opens: true,
+        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: true, opens: true, route: 'calendar',
         stat: `${count} ${count === 1 ? 'pair' : 'pairs'}`,
         sub: live.loadedPairs ? 'Active sync pairs' : 'Loading…',
       }
     : {
-        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: false, opens: true,
+        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: false, opens: true, route: 'calendar',
         stat: '', sub: live.loadedPairs ? 'No pairs yet' : 'Loading…',
       };
-  // Reuse the catalog for the not-yet-shipped modules so titles/icons/sub stay in one place.
-  const comingSoon = MODULES.filter((m) => m.id !== 'calendar').map((m) => ({ ...m, opens: false }));
-  return [calendar, ...comingSoon];
+  // Reuse the catalog for the remaining modules so titles/icons/sub stay in one place. Clipboard Sync
+  // is shipped but DESKTOP-ONLY (it needs native clipboard access), so it opens its screen only in the
+  // App; in the web panel it stays "coming soon" like the not-yet-shipped modules.
+  const rest = MODULES.filter((m) => m.id !== 'calendar').map((m) => {
+    if (m.id === 'clipboard' && Bridge.desktopApp) {
+      return { ...m, opens: true, route: 'clipboard-settings', stat: '' };
+    }
+    return { ...m, opens: false };
+  });
+  return [calendar, ...rest];
 }
 
 // ---------------- Screen: Home ----------------
@@ -1030,7 +1055,7 @@ function renderHome(root) {
       class: 'module-tile glass',
       dataset: { active: String(m.active) },
       disabled: !navigable,
-      onclick: () => { if (navigable) navigate('calendar'); },
+      onclick: () => { if (navigable) navigate(m.route || 'calendar'); },
     },
       el('div', { class: 'module-tile__icon', html: icon(m.icon, { size: 20, stroke: 1.6 }) }),
       el('div', { class: 'module-tile__title', text: m.title }),
@@ -3134,7 +3159,7 @@ async function refreshIdentity() {
     identityAuth.me = signedIn
       ? { userId: s.userId, email: s.email, displayName: s.displayName, expiresAt: s.expiresAt, plan: s.plan }
       : null;
-    if (signedIn) { identityAuth.loading = false; identityAuth.error = null; identityAuth.magicLinkSent = false; }
+    if (signedIn) { clearLoginSlowTimer(); identityAuth.loading = false; identityAuth.error = null; identityAuth.magicLinkSent = false; }
     // A fresh sign-in (the flag flipped on) is exactly when the device must be registered so the
     // scheduler/heartbeat/Sync-now have a key. Idempotent in the host, so it is safe to call here.
     if (signedIn && !was) ensureDeviceRegistered();
@@ -3155,17 +3180,29 @@ function startMicrosoftLogin() {
   identityAuth.loading = true;
   identityAuth.error = null;
   identityAuth.magicLinkSent = false;
+  startLoginSlowTimer();
   rerender();
   Bridge.call('login', JSON.stringify({ provider: 'microsoft' }), 210000)
     .then((outcome) => {
       // Cancelled (user hit Cancel, or a newer login superseded this one): cancelAppLogin already
       // reset the form, so do nothing — never show an error banner for a cancel.
       if (outcome && outcome.cancelled) return;
-      if (outcome && outcome.error) { identityAuth.error = String(outcome.error); identityAuth.loading = false; rerender(); return; }
+      if (outcome && outcome.error) { clearLoginSlowTimer(); identityAuth.error = String(outcome.error); identityAuth.loading = false; rerender(); return; }
       // Re-read the identity; success swaps to the dashboard, otherwise we stay on the gate.
-      return refreshIdentity().then(() => { if (!identityAuth.signedIn) identityAuth.loading = false; rerender(); });
+      return refreshIdentity().then(() => { if (!identityAuth.signedIn) { clearLoginSlowTimer(); identityAuth.loading = false; } rerender(); });
     })
-    .catch((e) => { identityAuth.error = (e && e.message) || 'Sign-in failed.'; identityAuth.loading = false; rerender(); });
+    .catch((e) => { clearLoginSlowTimer(); identityAuth.error = (e && e.message) || 'Sign-in failed.'; identityAuth.loading = false; rerender(); });
+}
+
+// retryMicrosoftLogin — one-click recovery from the loading state: cancel the stuck attempt (frees
+// the loopback port) and immediately start a fresh one, so the user does not have to Cancel then
+// re-click Sign in. Used by the slow-login warning's "Cancel and try again" button.
+function retryMicrosoftLogin() {
+  if (!Bridge.desktopApp) return;
+  clearLoginSlowTimer();
+  identityAuth.loading = false;
+  Bridge.call('cancelLogin').catch(() => {});
+  startMicrosoftLogin();
 }
 
 // startMagicLinkLogin — request a magic-link email. After the host accepts the request we show
@@ -3206,6 +3243,7 @@ function startMagicLinkLogin(email) {
 function cancelAppLogin() {
   if (!Bridge.desktopApp) return;
   clearInterval(magicLinkPoll);
+  clearLoginSlowTimer();
   identityAuth.loading = false;
   identityAuth.error = null;
   identityAuth.magicLinkSent = false;
@@ -3305,9 +3343,22 @@ function renderIdentitySignIn(root) {
       el('div', { class: 'pair-sub', text: 'We opened your browser to finish signing in. Come back here once you are done — this screen updates on its own.' }),
       el('div', { class: 'identity-waiting' },
         el('span', { class: 'spinner', style: 'width:14px;height:14px;border-color:var(--azure-edge);border-top-color:var(--azure)' }),
-        el('span', { class: 'identity-waiting__txt', text: 'Waiting for the browser…' })),
-      el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => cancelAppLogin() }),
-    );
+        el('span', { class: 'identity-waiting__txt', text: 'Waiting for the browser…' })));
+
+    // After a while with no callback, hint at the common corporate-network cause: a firewall/proxy
+    // that resets the FIRST OAuth connection (ERR_CONNECTION_RESET). Retrying usually works because
+    // the proxy session is then established. The retry button frees the port and starts a fresh attempt
+    // in one click, so the user does not have to Cancel and re-open the form.
+    if (identityAuth.slowHint) {
+      card.append(el('div', { class: 'identity-error identity-error--warn', role: 'alert', style: 'margin-top:2px' },
+        iconEl('alert', 13, 1.8),
+        el('span', { text: 'Taking longer than usual. If your browser shows “ERR_CONNECTION_RESET” (common on work/corporate networks), just try again — the second attempt usually goes through.' })));
+      card.append(el('button', { class: 'btn btn--primary', style: 'align-self:stretch',
+        onclick: () => retryMicrosoftLogin() },
+        iconEl('sync', 14, 1.8), el('span', { text: 'Cancel and try again' })));
+    }
+
+    card.append(el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => cancelAppLogin() }));
     root.append(card);
     return;
   }

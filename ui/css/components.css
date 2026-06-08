@@ -171,6 +171,8 @@
   text-align: left;
 }
 .identity-error svg { width: 14px; height: 14px; flex: none; }
+/* Amber variant — a non-fatal hint (e.g. a slow login likely reset by a corporate proxy), not an error. */
+.identity-error--warn { color: var(--warn); background: var(--warn-soft); border-color: rgba(244,181,59,0.4); align-items: flex-start; }
 
 /* "or" divider between the providers */
 .identity-divider {
