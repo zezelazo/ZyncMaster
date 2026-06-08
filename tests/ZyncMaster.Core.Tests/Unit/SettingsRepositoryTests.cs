@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Text;
 using FluentAssertions;
 using Moq;
@@ -123,6 +124,33 @@ public sealed class SettingsRepositoryTests
         var parsed = JsonConvert.DeserializeObject<DummySettings>(written!);
         parsed!.Mode.Should().Be("complete");
         parsed.Flag.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Save_CreatesParentDirectory_WhenMissing()
+    {
+        // On a fresh machine the settings path (e.g. %LOCALAPPDATA%\ZyncMaster\App\settings.json)
+        // lives under a directory nothing has created yet. Save must create it before writing, or
+        // File.WriteAllText throws DirectoryNotFoundException and the default file is never created.
+        var path = Path.Combine("nested", "dir", "settings.json");
+        var dir = Path.Combine("nested", "dir");
+        _fs.Setup(f => f.DirectoryExists(dir)).Returns(false);
+
+        BuildSut().Save(new DummySettings(), path);
+
+        _fs.Verify(f => f.CreateDirectory(dir), Times.Once);
+        _fs.Verify(f => f.WriteAllText(path, It.IsAny<string>(), It.IsAny<Encoding>()), Times.Once);
+    }
+
+    [Fact]
+    public void Save_DoesNotCreateDirectory_WhenItAlreadyExists()
+    {
+        var path = Path.Combine("existing", "settings.json");
+        _fs.Setup(f => f.DirectoryExists("existing")).Returns(true);
+
+        BuildSut().Save(new DummySettings(), path);
+
+        _fs.Verify(f => f.CreateDirectory(It.IsAny<string>()), Times.Never);
     }
 
     [Fact]

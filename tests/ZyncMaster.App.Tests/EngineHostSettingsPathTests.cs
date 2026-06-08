@@ -62,23 +62,28 @@ public class EngineHostSettingsPathTests
     }
 
     [Fact]
-    public void LoadOrCreateDefault_into_an_unwritable_location_throws_an_IOException()
+    public void LoadOrCreateDefault_creates_missing_parent_directories()
     {
-        // This is the exact failure the FIX defends against: when settings.json cannot be created
-        // (here, because its parent directory does not exist and cannot be implicitly created by
-        // File.WriteAllText), the repository throws an IOException-derived exception. The old
-        // EngineHost let this propagate out of EngineHost.Create and App.TryWireEngine only caught
-        // SettingsValidation/Load — so the app CRASHED on first launch. App now ALSO catches
-        // IOException / UnauthorizedAccessException and degrades to the unconfigured actions.
-        var unwritable = Path.Combine(
-            Path.GetTempPath(),
-            "zm_missing_" + Guid.NewGuid().ToString("N"),
-            "no", "such", "dir", "settings.json");
-
+        // Regression (real bug): on a fresh machine the settings dir (%LOCALAPPDATA%\ZyncMaster\App)
+        // may not exist yet when EngineHost.Create runs — WebView2 creates it only later, when it
+        // mounts. Previously SettingsRepository.Save did a bare File.WriteAllText, which threw
+        // DirectoryNotFoundException; EngineHost.Create propagated it and the App silently degraded to
+        // the "unconfigured" gate ("Set the server URL"), with NO settings.json on disk. Save now
+        // creates the parent directory chain first, so generating the default succeeds and the app is
+        // configured against the production server on first launch.
+        var root = Path.Combine(Path.GetTempPath(), "zm_missing_" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, "no", "such", "dir", "settings.json");
         var repo = new SettingsRepository<AppSettings>(new PhysicalFileSystem());
+        try
+        {
+            var created = repo.LoadOrCreateDefault(path);
 
-        var act = () => repo.LoadOrCreateDefault(unwritable);
-
-        act.Should().Throw<IOException>();
+            File.Exists(path).Should().BeTrue("Save must create the missing parent directories then write");
+            created.ServerBaseUrl.Should().Be(AppSettings.ProductionServerBaseUrl);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort cleanup */ }
+        }
     }
 }
