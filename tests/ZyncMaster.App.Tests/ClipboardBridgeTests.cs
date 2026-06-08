@@ -108,6 +108,7 @@ public class ClipboardBridgeTests
         public Task CancelLoginAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task SignOutAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ConnectCalendarOutcome> UpgradeAccountScopeAsync(string accountId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task OpenLicensesAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task CancelConnectAsync(CancellationToken ct = default) => throw new NotImplementedException();
