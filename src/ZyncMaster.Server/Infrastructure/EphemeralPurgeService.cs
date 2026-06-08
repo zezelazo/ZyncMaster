@@ -77,27 +77,29 @@ public sealed class EphemeralPurgeService : BackgroundService
     // comparison is NOT translatable by every provider through LINQ (SQLite throws on a
     // DateTimeOffset relational compare — the same reason CronSyncRunner / the magic-link cleanup
     // evaluate their DateTimeOffset filters in memory). Raw parameterised SQL is translated by both
-    // SQL Server (production) and SQLite (tests), keeps the delete set-based (no row materialising),
-    // and is injection-safe via the interpolation parameters. Table/column names mirror the
-    // ZyncMasterDbContext ToTable/property mapping.
+    // PostgreSQL (prod) and SQLite (tests); identifiers double-quoted and booleans as TRUE/FALSE so
+    // both providers parse them identically (unquoted identifiers fold to lowercase on PostgreSQL,
+    // never matching the quoted PascalCase tables). It keeps the delete set-based (no row
+    // materialising) and is injection-safe via the interpolation parameters. Table/column names
+    // mirror the ZyncMasterDbContext ToTable/property mapping.
     public async Task<int> PurgeOnceAsync(DateTimeOffset now, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // Identity tokens: ExpiresAt <= now ONLY. Never branch on RevokedAt — see class doc.
         var access = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"DELETE FROM IdentityAccessTokens WHERE ExpiresAt <= {now}", ct).ConfigureAwait(false);
+            $@"DELETE FROM ""IdentityAccessTokens"" WHERE ""ExpiresAt"" <= {now}", ct).ConfigureAwait(false);
 
         var refresh = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"DELETE FROM IdentityRefreshTokens WHERE ExpiresAt <= {now}", ct).ConfigureAwait(false);
+            $@"DELETE FROM ""IdentityRefreshTokens"" WHERE ""ExpiresAt"" <= {now}", ct).ConfigureAwait(false);
 
         // Magic-links: expired OR already consumed (single-use; a consumed link is dead weight).
         var magic = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"DELETE FROM MagicLinks WHERE ExpiresAt <= {now} OR ConsumedAt IS NOT NULL", ct).ConfigureAwait(false);
+            $@"DELETE FROM ""MagicLinks"" WHERE ""ExpiresAt"" <= {now} OR ""ConsumedAt"" IS NOT NULL", ct).ConfigureAwait(false);
 
         // Run-locks: a lock whose LockedUntil has passed is free; the row is no longer meaningful.
         var locks = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"DELETE FROM SyncRunLocks WHERE LockedUntil <= {now}", ct).ConfigureAwait(false);
+            $@"DELETE FROM ""SyncRunLocks"" WHERE ""LockedUntil"" <= {now}", ct).ConfigureAwait(false);
 
         // Pending pairings (FIX A): a pairing whose CreatedUtc + TTL has passed is dead — its code can
         // no longer be viewed at /pair, approved, or completed — so the row is swept here. Previously
@@ -106,7 +108,7 @@ public sealed class EphemeralPurgeService : BackgroundService
         // now - PendingPairingTtlMinutes; rows older than that are removed regardless of Approved.
         var pairingCutoff = now.AddMinutes(-_pendingPairingTtlMinutes);
         var pairings = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"DELETE FROM PendingPairings WHERE CreatedUtc < {pairingCutoff}", ct).ConfigureAwait(false);
+            $@"DELETE FROM ""PendingPairings"" WHERE ""CreatedUtc"" < {pairingCutoff}", ct).ConfigureAwait(false);
 
         return access + refresh + magic + locks + pairings;
     }

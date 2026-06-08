@@ -129,13 +129,15 @@ public sealed class EfDeviceStore : IDeviceStore
         // unapproved, and unexpired. The Approved=0 guard makes a second approve a no-op (0 rows),
         // so it can never create a phantom device or overwrite the live OneTimeApiKey. Issued as
         // parameterised set-based SQL (injection-safe via interpolation) so the DateTimeOffset
-        // compare is translated by BOTH SQL Server (prod) and SQLite (tests) — the same reason the
+        // compare is translated by BOTH PostgreSQL (prod) and SQLite (tests) — the same reason the
         // EphemeralPurgeService uses raw SQL for its DateTimeOffset predicates. Column + table names
-        // mirror the ZyncMasterDbContext mapping. The bit literals 1/0 work on both providers.
+        // mirror the ZyncMasterDbContext mapping; identifiers are double-quoted and booleans written
+        // as TRUE/FALSE so both providers parse them identically (unquoted identifiers fold to
+        // lowercase on PostgreSQL and boolean = 1 is a type error).
         var affected = await db.Database.ExecuteSqlInterpolatedAsync(
-            $@"UPDATE PendingPairings
-               SET Approved = 1, ApprovedDeviceId = {approvedDeviceId}, OneTimeApiKey = {oneTimeApiKey}
-               WHERE Code = {code} AND Approved = 0 AND CreatedUtc >= {notBefore}", ct);
+            $@"UPDATE ""PendingPairings""
+               SET ""Approved"" = TRUE, ""ApprovedDeviceId"" = {approvedDeviceId}, ""OneTimeApiKey"" = {oneTimeApiKey}
+               WHERE ""Code"" = {code} AND ""Approved"" = FALSE AND ""CreatedUtc"" >= {notBefore}", ct);
 
         return affected >= 1;
     }
@@ -172,10 +174,12 @@ public sealed class EfDeviceStore : IDeviceStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         // Set-based delete of every pending pairing older than the TTL cutoff. Raw parameterised SQL
         // for the DateTimeOffset compare (not LINQ-translatable on SQLite — see GetPendingByCodeAsync
-        // / EphemeralPurgeService). Approved-but-not-yet-completed rows are also swept: once expired,
+        // / EphemeralPurgeService); identifiers double-quoted so PostgreSQL (prod) and SQLite (tests)
+        // parse them identically (unquoted identifiers fold to lowercase on PostgreSQL).
+        // Approved-but-not-yet-completed rows are also swept: once expired,
         // the device can no longer complete the (TTL-bounded) handshake, so the row is dead weight.
         return await db.Database.ExecuteSqlInterpolatedAsync(
-            $"DELETE FROM PendingPairings WHERE CreatedUtc < {cutoff}", ct);
+            $@"DELETE FROM ""PendingPairings"" WHERE ""CreatedUtc"" < {cutoff}", ct);
     }
 
     private DeviceRow ToRow(Device d) => new()
