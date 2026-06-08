@@ -444,6 +444,10 @@ if (!app.Environment.IsDevelopment())
 app.UseWebSockets(new WebSocketOptions
 {
     KeepAliveInterval = TimeSpan.FromSeconds(15),
+    // The missing-PONG deadline: without it a silent half-open client (slept laptop, no RST) lingers in
+    // ReceiveAsync and stays phantom-online in the registry until the 10-min lease. With it, the dead
+    // socket aborts within ~15s, the receive loop returns, and the finally block evicts + re-broadcasts.
+    KeepAliveTimeout = TimeSpan.FromSeconds(15),
 });
 
 app.UseAuthentication();

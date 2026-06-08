@@ -173,10 +173,13 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
             {
                 using var socket = new ClientWebSocket();
                 // Keepalive PINGs surface a dead/half-open connection that ReceiveAsync would otherwise
-                // sit on forever (no server frames arrive on a silently-dropped socket). A failed PING
-                // faults the receive, breaking PumpAsync so the loop reconnects — without this the App
-                // keeps a phantom-online presence cache through the dead window.
+                // sit on forever (no server frames arrive on a silently-dropped socket). KeepAliveTimeout
+                // is the missing-PONG deadline: without it (default Infinite) a truly silent half-open
+                // socket — laptop slept, peer powered off with no RST — would NOT fault until the OS TCP
+                // timeout (minutes/never). With both set, a missing PONG aborts ReceiveAsync within ~15s,
+                // PumpAsync breaks, the loop reconnects, and the App never keeps a phantom-online cache.
                 socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+                socket.Options.KeepAliveTimeout = TimeSpan.FromSeconds(15);
 
                 var apiKey = await _apiKeyProvider(ct).ConfigureAwait(false);
                 socket.Options.SetRequestHeader(ApiKeyHeader, apiKey);
