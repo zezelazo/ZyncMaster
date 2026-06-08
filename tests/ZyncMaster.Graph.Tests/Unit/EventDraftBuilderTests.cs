@@ -88,17 +88,26 @@ public sealed class EventDraftBuilderTests
     }
 
     [Fact]
-    public void BuildForUpdate_MergesIntoExistingBody()
+    public void BuildForUpdate_ReplacesBodyCompletely_DoesNotAccumulate()
     {
-        var existing = "<p>User text</p>\n<!-- calimport:participants:start --><ul><li>OLD</li></ul><!-- calimport:participants:end -->";
+        // The destination body already holds a participants block from a prior sync (and Graph has stripped
+        // the comment markers on save, so the stale table lingers without markers). An update must REPLACE
+        // the body with a fresh render of the SOURCE — exactly ONE participants block + the source
+        // description — never prepend another (the N-copies accumulation bug).
+        var existingWithOldBlock =
+            "<p>User text</p>\n<p><b>Participants (reference only — not invited):</b></p>\n" +
+            "<table><tr><td>OLD</td></tr></table>";
         var participants = new[] { new ParticipantRecord { Name = "NewBob", Email = "newbob@x.com" } };
-        var rec = MakeRecord(participants: participants);
+        var rec = MakeRecord(description: "Fresh desc", participants: participants);
 
-        var d = _sut.BuildForUpdate(rec, 30, existing);
+        var d = _sut.BuildForUpdate(rec, 30, existingWithOldBlock);
 
-        d.BodyHtml.Should().Contain("User text");
         d.BodyHtml.Should().Contain("NewBob");
-        d.BodyHtml.Should().NotContain("OLD");
+        d.BodyHtml.Should().Contain("Fresh desc");
+        d.BodyHtml.Should().NotContain("OLD");        // the stale destination block is dropped
+        d.BodyHtml.Should().NotContain("User text");  // the destination body is replaced completely
+        System.Text.RegularExpressions.Regex.Matches(d.BodyHtml, "calimport:participants:start")
+            .Count.Should().Be(1);                    // exactly one block — no accumulation
     }
 
     [Fact]
@@ -124,22 +133,25 @@ public sealed class EventDraftBuilderTests
     }
 
     [Fact]
-    public void BuildForUpdate_NullExistingBodyHtml_PassesEmptyStringToRenderer()
+    public void BuildForUpdate_RendersFreshBodyFromSource_NeverMerges()
     {
+        // The update body is built from the SOURCE (BuildBodyForCreate), independent of whatever the
+        // destination currently has — and the merge path is never used (Graph strips its markers).
         var rendererMock = new Mock<IParticipantRenderer>(MockBehavior.Strict);
         rendererMock
-            .Setup(r => r.MergeIntoExistingBody(It.IsAny<string>(), It.IsAny<IReadOnlyList<ParticipantRecord>>()))
-            .Returns("merged-body");
+            .Setup(r => r.BuildBodyForCreate(It.IsAny<string>(), It.IsAny<IReadOnlyList<ParticipantRecord>>()))
+            .Returns("fresh-body");
 
         var sut = new EventDraftBuilder(rendererMock.Object);
-        var rec = MakeRecord();
+        var rec = MakeRecord(description: "Desc");
 
-        var d = sut.BuildForUpdate(rec, 30, existingBodyHtml: null!);
+        var d = sut.BuildForUpdate(rec, 30, existingBodyHtml: "<p>whatever the destination had</p>");
 
-        d.BodyHtml.Should().Be("merged-body");
+        d.BodyHtml.Should().Be("fresh-body");
         rendererMock.Verify(
-            r => r.MergeIntoExistingBody("", It.IsAny<IReadOnlyList<ParticipantRecord>>()),
-            Times.Once);
+            r => r.BuildBodyForCreate("Desc", It.IsAny<IReadOnlyList<ParticipantRecord>>()), Times.Once);
+        rendererMock.Verify(
+            r => r.MergeIntoExistingBody(It.IsAny<string>(), It.IsAny<IReadOnlyList<ParticipantRecord>>()), Times.Never);
     }
 
     [Fact]
