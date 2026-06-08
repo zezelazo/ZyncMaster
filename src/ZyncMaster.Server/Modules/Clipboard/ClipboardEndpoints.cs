@@ -100,13 +100,15 @@ public static class ClipboardEndpoints
             string deviceId,
             UpdateClipboardSettingsRequest req,
             IClipboardSettingsStore settings,
+            ClipboardBroadcaster broadcaster,
+            ICurrentUserAccessor currentUser,
             CancellationToken ct) =>
         {
             var validation = new UpdateClipboardSettingsRequestValidator().Validate(req);
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
 
-            await settings.UpsertAsync(new ClipboardDeviceSettings
+            var updated = new ClipboardDeviceSettings
             {
                 DeviceId = deviceId,
                 AutoSync = req.AutoSync,
@@ -115,7 +117,14 @@ public static class ClipboardEndpoints
                 ViewerHotkey = req.ViewerHotkey,
                 Density = req.Density,
                 ShowHints = req.ShowHints,
-            }, ct);
+            };
+
+            await settings.UpsertAsync(updated, ct);
+
+            // Live-push the change to the user's OTHER open windows so their clipboard screen reflects
+            // the new send/receive/autoSync flags without a manual refresh. The deviceId being edited is
+            // the origin and is excluded. Best-effort: a dead peer socket never fails the PATCH.
+            await broadcaster.BroadcastSettingsAsync(currentUser.UserId, deviceId, updated, ct);
 
             return Results.Ok();
         }).RequireCookieOrApiKeyOrIdentityBearer();

@@ -181,6 +181,81 @@ public class ClipboardBroadcasterTests
     }
 
     [Fact]
+    public async Task BroadcastSettings_reaches_other_devices_not_origin()
+    {
+        var reg = new ClipboardConnectionRegistry();
+        var d1 = new CapturingWebSocket();
+        var d2 = new CapturingWebSocket();
+        var d3 = new CapturingWebSocket();
+        Conn(reg, "u1", "d1", d1);
+        Conn(reg, "u1", "d2", d2);
+        Conn(reg, "u1", "d3", d3);
+
+        var settings = new ClipboardDeviceSettings
+        {
+            DeviceId = "d1",
+            AutoSync = false,
+            Send = true,
+            Receive = false,
+            ViewerHotkey = "Ctrl+Alt+V",
+            Density = "mini",
+            ShowHints = false,
+        };
+
+        var bc = new ClipboardBroadcaster(reg);
+        await bc.BroadcastSettingsAsync("u1", "d1", settings, CancellationToken.None);
+
+        // Origin device never gets its own change echoed back.
+        d1.Sent.Should().BeEmpty();
+        d2.Sent.Should().HaveCount(1);
+        d3.Sent.Should().HaveCount(1);
+
+        var frame = JObject.Parse(d2.Sent[0]);
+        frame["type"]!.Value<string>().Should().Be("settings");
+        frame["deviceId"]!.Value<string>().Should().Be("d1");
+        frame["settings"]!["deviceId"]!.Value<string>().Should().Be("d1");
+        frame["settings"]!["autoSync"]!.Value<bool>().Should().BeFalse();
+        frame["settings"]!["receive"]!.Value<bool>().Should().BeFalse();
+        frame["settings"]!["density"]!.Value<string>().Should().Be("mini");
+        frame["settings"]!["viewerHotkey"]!.Value<string>().Should().Be("Ctrl+Alt+V");
+    }
+
+    [Fact]
+    public async Task BroadcastSettings_does_not_leak_across_users()
+    {
+        var reg = new ClipboardConnectionRegistry();
+        var d2 = new CapturingWebSocket();
+        var other = new CapturingWebSocket();
+        Conn(reg, "u1", "d2", d2);
+        Conn(reg, "u2", "x1", other);
+
+        var settings = new ClipboardDeviceSettings { DeviceId = "d1" };
+
+        var bc = new ClipboardBroadcaster(reg);
+        await bc.BroadcastSettingsAsync("u1", "d1", settings, CancellationToken.None);
+
+        d2.Sent.Should().HaveCount(1);
+        other.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BroadcastSettings_swallows_a_failing_socket()
+    {
+        var reg = new ClipboardConnectionRegistry();
+        var bad = new ThrowingWebSocket();
+        var good = new CapturingWebSocket();
+        Conn(reg, "u1", "d2", bad);
+        Conn(reg, "u1", "d3", good);
+
+        var bc = new ClipboardBroadcaster(reg);
+        Func<Task> act = () => bc.BroadcastSettingsAsync(
+            "u1", "d1", new ClipboardDeviceSettings { DeviceId = "d1" }, CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+        good.Sent.Should().HaveCount(1);
+    }
+
+    [Fact]
     public async Task BroadcastItem_swallows_a_failing_socket()
     {
         var reg = new ClipboardConnectionRegistry();

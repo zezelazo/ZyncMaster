@@ -53,6 +53,26 @@ public sealed class ClipboardBroadcaster
             await SendBestEffortAsync(conn, json, ct).ConfigureAwait(false);
     }
 
+    // Push a per-device settings change to the user's OTHER devices so an open clipboard screen on
+    // another window reflects the new send/receive/autoSync flags without a manual refresh. The
+    // origin device (which already applied the change) is excluded. Best-effort, same as items.
+    public async Task BroadcastSettingsAsync(
+        string userId, string originDeviceId, ClipboardDeviceSettings settings, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var frame = new
+        {
+            type = "settings",
+            deviceId = settings.DeviceId,
+            settings = ClipboardDto.ToWire(settings),
+        };
+
+        var json = Serialize(frame);
+        foreach (var conn in _registry.ForUserExcept(userId, originDeviceId))
+            await SendBestEffortAsync(conn, json, ct).ConfigureAwait(false);
+    }
+
     public async Task<bool> RelayKeyAsync(string userId, WrappedKeyEnvelope env, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(env);

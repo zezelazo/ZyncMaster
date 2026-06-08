@@ -434,7 +434,17 @@ if (!app.Environment.IsDevelopment())
 
 // WebSockets must be enabled before the endpoints that accept an upgrade (/ws/clipboard) and
 // before auth so the upgrade request is authenticated like any other request.
-app.UseWebSockets();
+//
+// KeepAliveInterval makes the framework send a periodic ping on each open socket. This is what
+// detects a HALF-OPEN clipboard socket (peer vanished without a Close frame, e.g. laptop slept or
+// network dropped): the ping send eventually faults, the next ReceiveAsync in ClipboardHub throws a
+// WebSocketException, the receive loop returns, and the /ws/clipboard finally block evicts the gone
+// device from ClipboardConnectionRegistry and re-broadcasts presence. Without it the server keeps a
+// phantom-online device forever and clients sit in ReceiveAsync — the root of the presence flicker.
+app.UseWebSockets(new WebSocketOptions
+{
+    KeepAliveInterval = TimeSpan.FromSeconds(15),
+});
 
 app.UseAuthentication();
 app.UseAuthorization();

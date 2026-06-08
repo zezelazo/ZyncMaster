@@ -232,6 +232,91 @@ public class ClipboardEndpointsTests
         defDto.GetProperty("deviceId").GetString().Should().Be("never-set");
     }
 
+    // Capturing socket: records each text frame sent and reports Open so the broadcaster treats it
+    // as live. Mirrors the one in ClipboardBroadcasterTests; kept local so this file is self-contained.
+    private sealed class CapturingWebSocket : System.Net.WebSockets.WebSocket
+    {
+        public List<string> Sent { get; } = new();
+        public override System.Net.WebSockets.WebSocketState State => System.Net.WebSockets.WebSocketState.Open;
+        public override Task SendAsync(ArraySegment<byte> buffer, System.Net.WebSockets.WebSocketMessageType messageType, bool endOfMessage, System.Threading.CancellationToken cancellationToken)
+        {
+            Sent.Add(Encoding.UTF8.GetString(buffer.Array!, buffer.Offset, buffer.Count));
+            return Task.CompletedTask;
+        }
+        public override System.Net.WebSockets.WebSocketCloseStatus? CloseStatus => null;
+        public override string? CloseStatusDescription => null;
+        public override string? SubProtocol => null;
+        public override void Abort() { }
+        public override Task CloseAsync(System.Net.WebSockets.WebSocketCloseStatus closeStatus, string? statusDescription, System.Threading.CancellationToken cancellationToken) => Task.CompletedTask;
+        public override Task CloseOutputAsync(System.Net.WebSockets.WebSocketCloseStatus closeStatus, string? statusDescription, System.Threading.CancellationToken cancellationToken) => Task.CompletedTask;
+        public override void Dispose() { }
+        public override Task<System.Net.WebSockets.WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, System.Threading.CancellationToken cancellationToken) => throw new NotImplementedException();
+    }
+
+    [Fact]
+    public async Task Settings_patch_broadcasts_to_users_other_connected_device()
+    {
+        // BUG B fix: a per-device settings change must propagate to the user's OTHER open windows.
+        // The PATCH handler now fans the new settings out over the WS to every connected device of
+        // the user except the one being edited. We register a capturing socket for "dev-other" in
+        // the live registry, PATCH "dev-a", and assert dev-other received a {type:"settings"} frame.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var registry = h.Factory.Services.GetRequiredService<ClipboardConnectionRegistry>();
+        var otherSocket = new CapturingWebSocket();
+        registry.Add(new ClipboardConnection { UserId = userId, DeviceId = "dev-other", Socket = otherSocket });
+
+        var patch = await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = false,
+            send = true,
+            receive = false,
+            viewerHotkey = "Ctrl+Alt+V",
+            density = "mini",
+            showHints = false,
+        });
+        patch.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        otherSocket.Sent.Should().HaveCount(1);
+        using var frame = JsonDocument.Parse(otherSocket.Sent[0]);
+        frame.RootElement.GetProperty("type").GetString().Should().Be("settings");
+        frame.RootElement.GetProperty("deviceId").GetString().Should().Be("dev-a");
+        var s = frame.RootElement.GetProperty("settings");
+        s.GetProperty("deviceId").GetString().Should().Be("dev-a");
+        s.GetProperty("autoSync").GetBoolean().Should().BeFalse();
+        s.GetProperty("receive").GetBoolean().Should().BeFalse();
+        s.GetProperty("density").GetString().Should().Be("mini");
+    }
+
+    [Fact]
+    public async Task Settings_patch_does_not_echo_to_the_origin_device()
+    {
+        // The window editing dev-a already applied the change locally, so the origin (dev-a) must NOT
+        // receive its own settings frame back. Only OTHER devices do.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var registry = h.Factory.Services.GetRequiredService<ClipboardConnectionRegistry>();
+        var originSocket = new CapturingWebSocket();
+        registry.Add(new ClipboardConnection { UserId = userId, DeviceId = "dev-a", Socket = originSocket });
+
+        var patch = await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = true,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Win+Q",
+            density = "rich",
+            showHints = true,
+        });
+        patch.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        originSocket.Sent.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Settings_patch_invalid_density_returns_400()
     {
