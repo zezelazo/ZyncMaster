@@ -199,21 +199,38 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // nothing subscribes (headless/tests). Carries the affected device id and its new settings.
     public event Action<string, ClipboardSettings>? ClipboardSettingsChanged;
 
+    // Raised when the live online roster changed (a server presence frame arrived, or the connection
+    // dropped and the cache was cleared) so the host can push a "refresh the roster" signal to the UI
+    // — the open clipboard devices screen then re-fetches and repaints the online dots + "(N online)"
+    // count without the user navigating. Wired by the composition root; a no-op when nothing subscribes
+    // (headless/tests). Carries the current online-device ids (empty on a reset/all-offline frame).
+    public event Action<IReadOnlyList<string>>? ClipboardPresenceChanged;
+
     // Caches the latest online-device set from a server presence broadcast. Replacing the whole set on
     // each frame keeps it consistent with the server's authoritative roster (a device dropping off is
     // simply absent from the next frame).
     private void OnPresenceChanged(IReadOnlyList<string> onlineDeviceIds)
     {
-        _onlineDeviceIds = onlineDeviceIds is null
+        var snapshot = onlineDeviceIds is null
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(onlineDeviceIds, StringComparer.Ordinal);
+        _onlineDeviceIds = snapshot;
+        // Relay to the host so it can push the change to the user's open windows. Emit a copy (the
+        // cached HashSet is volatile and replaced wholesale on the next frame) as a stable list.
+        ClipboardPresenceChanged?.Invoke(new List<string>(snapshot));
     }
 
     // The live connection dropped: the cached roster is stale, so clear it. GetClipboardDevices then
     // falls back to the LastSeenUtc <= DeviceOnlineWindow heuristic until a fresh presence frame
     // arrives — a genuinely-online device (last-seen within the window) is rescued instead of being
     // stuck "offline" because the non-null cache bypassed the fallback.
-    private void OnPresenceReset() => _onlineDeviceIds = null;
+    private void OnPresenceReset()
+    {
+        _onlineDeviceIds = null;
+        // Notify the UI too: during the reconnect window the roster is recomputed from the last-seen
+        // fallback, so a forced refresh keeps the online dots honest instead of frozen on the stale set.
+        ClipboardPresenceChanged?.Invoke(System.Array.Empty<string>());
+    }
 
     // A server settings broadcast for some device: re-raise it so the host can push the change to the
     // user's other open windows (next phase). EngineActions itself only relays — it does not persist
@@ -1156,7 +1173,9 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return new ClipboardDevicesView { ThisDeviceId = thisId, Devices = views };
     }
 
-    private static ClipboardSettingsView ToSettingsView(ClipboardSettings s) => new()
+    // internal (not private) so UiBridge can reuse the exact Engine→wire mapping when it pushes a live
+    // "clipboard:settings" event to the UI (no duplicate mapping that could drift from this one).
+    internal static ClipboardSettingsView ToSettingsView(ClipboardSettings s) => new()
     {
         AutoSync = s.AutoSync,
         Send = s.Send,

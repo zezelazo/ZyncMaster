@@ -64,6 +64,37 @@ public sealed class UiBridge
         _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
     }
 
+    // Sends an unsolicited "clipboard:presence" event so an open clipboard devices/settings screen can
+    // refresh the online dots + "(N online)" count in near-real-time across the user's windows. The
+    // payload carries the current online-device ids; the UI treats the event as a "re-fetch the roster"
+    // signal (it re-queries getClipboardDevices rather than trusting this list as the whole view).
+    public void PushClipboardPresence(System.Collections.Generic.IReadOnlyList<string> onlineDeviceIds)
+    {
+        var envelope = new
+        {
+            @event = "clipboard:presence",
+            payload = new { onlineDeviceIds = onlineDeviceIds ?? System.Array.Empty<string>() },
+        };
+        _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
+    // Sends an unsolicited "clipboard:settings" event when one device's per-device clipboard settings
+    // changed on the server (a sibling window edited send/receive/autoSync). The UI uses it as a signal
+    // to re-fetch the roster so the affected device's toggles update live; the deviceId + settings are
+    // included so a future UI could patch that one row without a full re-fetch.
+    public void PushClipboardSettings(string deviceId, ZyncMaster.Engine.ClipboardSettings settings)
+    {
+        if (deviceId == null) throw new ArgumentNullException(nameof(deviceId));
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+
+        var envelope = new
+        {
+            @event = "clipboard:settings",
+            payload = new { deviceId, settings = EngineActions.ToSettingsView(settings) },
+        };
+        _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
     private void OnReceived(string json)
     {
         // Fire-and-forget: inbound dispatch is async but the transport callback is sync.

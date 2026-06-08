@@ -2729,6 +2729,26 @@ function loadClipboardDevices(repaintView) {
     });
 }
 
+// refreshClipboardDevices — FORCED re-fetch of the roster, bypassing the once-only guard in
+// loadClipboardDevices. Driven by the live "clipboard:presence" / "clipboard:settings" pushes so the
+// online dots, "(N online)" count and per-device send/receive toggles update in near-real-time across
+// the user's open windows. Cheap: it only runs when the clipboard settings screen is actually visible
+// (the only screen that reads live.clipboardDevices), and it skips while a fetch is already in flight
+// so a burst of presence frames coalesces into one refresh. On success it softRepaints that screen so
+// the user's accordion/expand state and scroll are preserved (no full re-render).
+function refreshClipboardDevices() {
+  if (!Bridge.available || live.clipboardDevicesLoading) return;
+  if (state.view !== 'clipboard-settings') return;
+  live.clipboardDevicesLoading = true;
+  Bridge.call('getClipboardDevices')
+    .then((d) => { live.clipboardDevices = d || { thisDeviceId: null, devices: [] }; })
+    .catch(() => { /* keep the last good roster on a transient failure */ })
+    .finally(() => {
+      live.clipboardDevicesLoading = false;
+      if (state.view === 'clipboard-settings') softRepaint();
+    });
+}
+
 // thisClipboardDevice — the device record flagged isThis (or matched by thisDeviceId), or null.
 function thisClipboardDevice() {
   const d = live.clipboardDevices;
@@ -4351,6 +4371,15 @@ async function boot() {
   if (Bridge.available) {
     Bridge.start();
     Bridge.onStatus((s) => applyNativeStatus(s));
+
+    // Live clipboard roster + per-device settings: the host pushes "clipboard:presence" when a device
+    // goes on/offline (or the socket dropped) and "clipboard:settings" when a sibling window edits a
+    // device's send/receive/autoSync. Both are a "re-fetch the roster" signal — refreshClipboardDevices
+    // forces a fresh getClipboardDevices ONLY while the clipboard settings screen is visible, then
+    // softRepaints, so the online dots, "(N online)" count and toggles update across the user's windows
+    // without a manual refresh. Registered once; the payloads are not trusted as the whole view.
+    Bridge.onEvent('clipboard:presence', () => refreshClipboardDevices());
+    Bridge.onEvent('clipboard:settings', () => refreshClipboardDevices());
 
     // Load device capabilities once. The web panel maps this to {outlookCom:false}; the desktop
     // App probes Outlook Classic. A failure leaves the safe default (COM disabled). Repaint so
