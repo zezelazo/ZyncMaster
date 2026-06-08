@@ -105,6 +105,22 @@ public sealed class HttpPairsClientTests
     }
 
     [Fact]
+    public async Task ListAccounts_MapsScopeFromWire()
+    {
+        var (client, _) = Make(HttpStatusCode.OK,
+            @"[ { ""accountRef"": ""a1"", ""displayName"": ""A"", ""email"": ""a@t"", ""isDefault"": false, ""scope"": ""read"" },
+                { ""accountRef"": ""a2"", ""displayName"": ""B"", ""email"": ""b@t"", ""isDefault"": false, ""scope"": ""readwrite"" },
+                { ""accountRef"": ""a3"", ""displayName"": ""C"", ""email"": ""c@t"", ""isDefault"": false } ]");
+
+        var result = await client.ListAccountsAsync(Bearerr, CancellationToken.None);
+
+        result[0].Scope.Should().Be("read");
+        result[1].Scope.Should().Be("readwrite");
+        // A missing scope field maps to empty (legacy account, unknown consent level).
+        result[2].Scope.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ListCalendars_GetsAccountScopedUrlAndParses()
     {
         var (client, stub) = Make(HttpStatusCode.OK,

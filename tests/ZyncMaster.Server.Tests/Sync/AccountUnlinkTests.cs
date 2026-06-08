@@ -58,7 +58,7 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
     };
 
     [Fact]
-    public async Task Delete_account_disables_referencing_pairs_and_returns_ids()
+    public async Task Delete_account_deletes_referencing_pairs_and_returns_ids()
     {
         var factory = Build();
         var pairs = factory.Services.GetRequiredService<ISyncPairStore>();
@@ -74,8 +74,9 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
         var ids = doc.RootElement.GetProperty("affectedPairIds").EnumerateArray().Select(e => e.GetString()).ToList();
         ids.Should().BeEquivalentTo(new[] { "p-dest", "p-src" });
 
-        (await pairs.GetAsync("p-dest"))!.State.Should().Be("disabled");
-        (await pairs.GetAsync("p-src"))!.State.Should().Be("disabled");
+        // Forget now DELETES the referencing pairs (not disables them): they are gone from the store.
+        (await pairs.GetAsync("p-dest")).Should().BeNull();
+        (await pairs.GetAsync("p-src")).Should().BeNull();
         (await pairs.GetAsync("p-unrelated"))!.State.Should().Be("active");
     }
 
@@ -216,7 +217,7 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
     }
 
     [Fact]
-    public async Task Delete_pool_account_unlinks_and_disables_pairs()
+    public async Task Delete_pool_account_unlinks_and_deletes_pairs()
     {
         using var factory = BuildPool();
         var client = await AuthedClientAsync(factory);
@@ -246,11 +247,11 @@ public class AccountUnlinkTests : IClassFixture<ServerTestFactory>
         doc.RootElement.GetProperty("affectedPairIds").EnumerateArray()
             .Select(e => e.GetString()).Should().BeEquivalentTo(new[] { "p-pool" });
 
-        // The account is gone from the pool (so gone from the unified listing) and the pair is disabled.
+        // The account is gone from the pool (so gone from the unified listing) and the pair is deleted.
         var after = await client.GetFromJsonAsync<JsonElement>("/api/accounts");
         after.EnumerateArray().Select(a => a.GetProperty("accountRef").GetString())
             .Should().NotContain(poolId);
-        (await pairs.GetAsync("p-pool"))!.State.Should().Be("disabled");
+        (await pairs.GetAsync("p-pool")).Should().BeNull();
     }
 
     [Fact]

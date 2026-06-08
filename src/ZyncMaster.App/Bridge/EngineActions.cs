@@ -744,6 +744,9 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default)
         => _calendarConnect.ConnectCalendarAsync(scope, ct);
 
+    public Task<ConnectCalendarOutcome> UpgradeAccountScopeAsync(string accountId, CancellationToken ct = default)
+        => _calendarConnect.UpgradeAccountScopeAsync(accountId, ct);
+
     public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
         => _calendarConnect.ListCalendarAccountsAsync(ct);
 

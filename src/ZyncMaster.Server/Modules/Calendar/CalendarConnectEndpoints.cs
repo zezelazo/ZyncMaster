@@ -254,21 +254,57 @@ public static class CalendarConnectEndpoints
             }
             else
             {
-                // Fresh connect: add a new account to the pool.
-                var account = new CalendarAccount
+                // Idempotent by email: connecting an account that is already in the pool must NOT
+                // create a duplicate row. Find an existing active account for this user with the same
+                // mailbox and refresh it in place (token + profile, and promote the scope when the new
+                // grant is broader). Only a genuinely new mailbox inserts a row.
+                var normalized = NormalizeEmail(email);
+                CalendarAccount? existing = null;
+                if (normalized.Length > 0)
                 {
-                    Id = Guid.NewGuid().ToString("N"),
-                    UserId = stateModel.UserId,
-                    Kind = AccountKind.Graph,
-                    Provider = "microsoft",
-                    AccountEmail = email,
-                    Authority = opts.Value.Authority,
-                    Scope = scope,
-                    DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName,
-                    Status = "active",
-                    ConnectedAt = DateTimeOffset.UtcNow,
-                };
-                await accounts.AddAsync(account, result.RefreshToken, ct);
+                    foreach (var a in await accounts.ListAsync(ct))
+                    {
+                        // Defense-in-depth: ICalendarAccountStore.ListAsync is already user-scoped
+                        // (and the ambient user is pinned to stateModel.UserId above), so this only
+                        // ever sees the caller's own accounts. Still match on UserId explicitly so the
+                        // ownership invariant is locally evident and never silently relies on the pin.
+                        if (a.UserId == stateModel.UserId &&
+                            a.Kind == AccountKind.Graph &&
+                            string.Equals(NormalizeEmail(a.AccountEmail), normalized, StringComparison.Ordinal))
+                        {
+                            existing = a;
+                            break;
+                        }
+                    }
+                }
+
+                if (existing is not null)
+                {
+                    if (!string.IsNullOrEmpty(result.RefreshToken))
+                        await accounts.UpdateRefreshTokenAsync(existing.Id, result.RefreshToken, ct);
+                    if (!string.IsNullOrWhiteSpace(email) || !string.IsNullOrWhiteSpace(displayName))
+                        await accounts.UpdateProfileAsync(existing.Id, email, displayName, ct);
+                    // Promote read -> readwrite if the new consent is broader; never downgrade.
+                    if (scope == AccountScope.ReadWrite && existing.Scope == AccountScope.Read)
+                        await accounts.UpgradeScopeAsync(existing.Id, AccountScope.ReadWrite, ct);
+                }
+                else
+                {
+                    var account = new CalendarAccount
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        UserId = stateModel.UserId,
+                        Kind = AccountKind.Graph,
+                        Provider = "microsoft",
+                        AccountEmail = email,
+                        Authority = opts.Value.Authority,
+                        Scope = scope,
+                        DisplayName = string.IsNullOrWhiteSpace(displayName) ? email : displayName,
+                        Status = "active",
+                        ConnectedAt = DateTimeOffset.UtcNow,
+                    };
+                    await accounts.AddAsync(account, result.RefreshToken, ct);
+                }
             }
 
             // Loopback back to the App. No tokens here — only status + nonce. The App refreshes
@@ -331,14 +367,15 @@ public static class CalendarConnectEndpoints
                 await RevokeAtIdpAsync(account, refreshToken, ct);
             }
 
-            // Track A-3 — disable every pair that references this account (source or destination)
+            // Track A-3 — DELETE every pair that references this account (source or destination)
             // before the delete, so a removed account never leaves a pair pointing at a forgotten
             // account that would later fail to resolve a token. Each pair endpoint's AccountRef may
             // be a legacy UPN or a pool accountId; resolve both sides through the adapter and
             // compare on the canonical accountId. Pairs for other accounts/users are untouched
-            // (the pair store is user-scoped). The response contract stays 204 NoContent (the
-            // disabled pairs are observable via GET /api/pairs).
-            await DisablePairsForAccountAsync(id, pairs, adapter, ct);
+            // (the pair store is user-scoped). The destination calendar's events are intentionally
+            // left intact. The response contract stays 204 NoContent (the deleted pairs are
+            // observable by their absence from GET /api/pairs).
+            await DeletePairsForAccountAsync(id, pairs, adapter, ct);
 
             await accounts.RemoveAsync(id, ct);
 
@@ -401,15 +438,18 @@ public static class CalendarConnectEndpoints
         }).RequireIdentityBearer();
     }
 
-    // Track A-3 — disable every pair whose source or destination resolves to the given accountId.
-    // Returns the ids of the pairs that were disabled (already-disabled pairs are left as-is and
-    // not reported again). Comparison is on the canonical accountId so a legacy-UPN endpoint and a
-    // pool-accountId endpoint for the same underlying account both match.
-    internal static async Task<List<string>> DisablePairsForAccountAsync(
+    // Track A-3 — DELETE every pair whose source or destination resolves to the given accountId.
+    // Returns the ids of the pairs that were deleted (consumed as affectedPairIds by the callers).
+    // Comparison is on the canonical accountId so a legacy-UPN endpoint and a pool-accountId endpoint
+    // for the same underlying account both match. The destination calendar's events are NEVER touched
+    // — forget is fire-and-forget w.r.t. the destination. A deleted pair's SyncRunLock row (keyed by
+    // pairId) is self-expiring (LockedUntil) and the pair never runs again, so it needs no extra
+    // cleanup; the pinned-device id lived on the SyncPairRow and is removed with it.
+    internal static async Task<List<string>> DeletePairsForAccountAsync(
         string accountId, ISyncPairStore pairs, ILegacyConnectedAccountAdapter adapter, CancellationToken ct)
     {
         var all = await pairs.ListAsync(ct);
-        var affected = new List<string>();
+        var deleted = new List<string>();
 
         foreach (var pair in all)
         {
@@ -422,13 +462,11 @@ public static class CalendarConnectEndpoints
             if (!references)
                 continue;
 
-            affected.Add(pair.Id);
-            if (string.Equals(pair.State, "disabled", StringComparison.Ordinal))
-                continue;
-            await pairs.UpdateAsync(pair with { State = "disabled" }, ct);
+            deleted.Add(pair.Id);
+            await pairs.RemoveAsync(pair.Id, ct);
         }
 
-        return affected;
+        return deleted;
     }
 
     // Resolves the canonical accountId an endpoint points at. OutlookCom endpoints have no server
@@ -455,6 +493,13 @@ public static class CalendarConnectEndpoints
         // Must remain best-effort: swallow transport failures so a disconnect always completes.
         return Task.CompletedTask;
     }
+
+    // Case/whitespace-insensitive mailbox key for dedup, so a re-connect of the same casilla is
+    // treated as the same account. Keep this in sync with PairEndpoints.NormalizeMailbox (the
+    // account-listing's collapse-by-email): if one's trimming/casing rules change, the other must too,
+    // or dedup-on-connect and collapse-on-list would diverge.
+    private static string NormalizeEmail(string? email) =>
+        (email ?? "").Trim().ToLowerInvariant();
 
     private static AccountScope? ParseScope(string? scopeText) => scopeText?.ToLowerInvariant() switch
     {

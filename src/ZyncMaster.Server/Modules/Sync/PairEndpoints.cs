@@ -61,6 +61,10 @@ public static class PairEndpoints
                     DisplayName = AccountDisplayName(account),
                     Email = account.AccountEmail ?? "",
                     IsDefault = false,
+                    // Surface the pool account's consent level ("read" | "readwrite") so the wizard can
+                    // tell a read-only source from a read/write destination. Legacy accounts have no
+                    // tracked scope and keep the record default ("").
+                    Scope = account.Scope.ToString().ToLowerInvariant(),
                 });
             }
 
@@ -132,11 +136,11 @@ public static class PairEndpoints
             // endpoints regardless of whether they carry the raw pool id or a legacy UPN.
             var accountId = await adapter.ResolveAccountIdAsync(accountRef, ct);
 
-            // Disable every pair whose source or destination resolves to this canonical accountId
-            // so a removed account never leaves an active pair pointing at a forgotten account.
-            // Reuses the same canonical-id disable routine the pool-delete endpoint uses.
+            // Track A-3 — DELETE every pair referencing this account (source or destination). The
+            // destination calendar's events are intentionally left intact. Shared with the pool-delete
+            // endpoint via the same canonical-id routine.
             var affectedPairIds = await CalendarConnectEndpoints
-                .DisablePairsForAccountAsync(accountId, pairs, adapter, ct);
+                .DeletePairsForAccountAsync(accountId, pairs, adapter, ct);
 
             // Remove from whichever store actually backs the account: a real pool account by its
             // canonical id, otherwise the legacy store by the raw UPN ref (as before).

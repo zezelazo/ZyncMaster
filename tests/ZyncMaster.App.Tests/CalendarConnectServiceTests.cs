@@ -19,10 +19,11 @@ public class CalendarConnectServiceTests
     private sealed class FakeServer : ICalendarServerClient
     {
         public string? AuthorizeUrlToReturn = "https://login.microsoftonline.com/authorize?x=1";
+        public string? UpgradeUrlToReturn = "https://login.microsoftonline.com/upgrade?x=1";
         public IReadOnlyList<CalendarAccountSummary> AccountsToReturn = new List<CalendarAccountSummary>();
 
-        public int StartCalls, ListCalls;
-        public string? LastAccessToken, LastScope, LastNonce;
+        public int StartCalls, ListCalls, UpgradeCalls;
+        public string? LastAccessToken, LastScope, LastNonce, LastAccountId;
         public int LastPort;
 
         public Task<string?> StartGraphConnectAsync(
@@ -34,6 +35,17 @@ public class CalendarConnectServiceTests
             LastPort = port;
             LastNonce = nonce;
             return Task.FromResult(AuthorizeUrlToReturn);
+        }
+
+        public Task<string?> UpgradeAccountScopeAsync(
+            string accessToken, string accountId, int port, string nonce, CancellationToken ct = default)
+        {
+            UpgradeCalls++;
+            LastAccessToken = accessToken;
+            LastAccountId = accountId;
+            LastPort = port;
+            LastNonce = nonce;
+            return Task.FromResult(UpgradeUrlToReturn);
         }
 
         public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(
@@ -266,6 +278,67 @@ public class CalendarConnectServiceTests
 
         var act = async () => await connect;
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    // ---- UpgradeAccountScopeAsync (shares the interactive loopback trunk) ----------------------
+
+    [Fact]
+    public async Task Upgrade_happy_path_opens_authorize_url_and_completes_on_callback()
+    {
+        var server = new FakeServer { UpgradeUrlToReturn = "https://upgrade.example/x" };
+        var loopback = new FakeLoopback { Port = 49777 };
+        var browser = new FakeBrowser();
+        var svc = Build(server, SignedIn(), loopback, browser);
+
+        browser.OpenCallsRelay = _ =>
+            loopback.CallbackToReturn = Callback(("status", "connected"), ("nonce", server.LastNonce ?? ""));
+
+        var outcome = await svc.UpgradeAccountScopeAsync("acc-7");
+
+        outcome.Connected.Should().BeTrue();
+        server.UpgradeCalls.Should().Be(1);
+        server.LastAccessToken.Should().Be("access-1");
+        server.LastAccountId.Should().Be("acc-7");
+        server.LastPort.Should().Be(49777);
+        browser.OpenCalls.Should().Be(1);
+        browser.LastUrl.Should().Be("https://upgrade.example/x");
+        loopback.StartCalls.Should().Be(1);
+        loopback.StopCalls.Should().BeGreaterThanOrEqualTo(1);
+        // The upgrade path must NOT take the fresh-connect start.
+        server.StartCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Upgrade_without_identity_fails_not_signed_in_and_opens_no_browser()
+    {
+        var server = new FakeServer();
+        var loopback = new FakeLoopback();
+        var browser = new FakeBrowser();
+        var svc = Build(server, new FakeCache(), loopback, browser); // signed out
+
+        var outcome = await svc.UpgradeAccountScopeAsync("acc-7");
+
+        outcome.Connected.Should().BeFalse();
+        outcome.Error.Should().Contain("Sign in");
+        browser.OpenCalls.Should().Be(0);
+        server.UpgradeCalls.Should().Be(0);
+        loopback.StartCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Upgrade_server_returns_no_authorize_url_fails_before_browser()
+    {
+        var server = new FakeServer { UpgradeUrlToReturn = null }; // server rejected (e.g. 401/404)
+        var loopback = new FakeLoopback();
+        var browser = new FakeBrowser();
+        var svc = Build(server, SignedIn(), loopback, browser);
+
+        var outcome = await svc.UpgradeAccountScopeAsync("acc-7");
+
+        outcome.Connected.Should().BeFalse();
+        outcome.Error.Should().Contain("server");
+        browser.OpenCalls.Should().Be(0);
+        loopback.StopCalls.Should().BeGreaterThanOrEqualTo(1); // port released
     }
 
     // ---- CancelConnect / single-attempt-in-flight ---------------------------------------------

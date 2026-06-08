@@ -13,7 +13,7 @@ using Xunit;
 
 namespace ZyncMaster.Server.Tests.Calendar;
 
-// Track A-3 — DELETE /api/calendar/accounts/{id} must disable every sync pair that references the
+// Track A-3 — DELETE /api/calendar/accounts/{id} must DELETE every sync pair that references the
 // deleted account (source or destination) and leave pairs for other accounts/users untouched.
 // Exercised through the real bearer-gated endpoint over the SQLite harness.
 public sealed class CalendarAccountDeleteCascadeTests
@@ -98,7 +98,7 @@ public sealed class CalendarAccountDeleteCascadeTests
     }
 
     [Fact]
-    public async Task Delete_account_disables_pairs_referencing_it_on_either_side()
+    public async Task Delete_account_deletes_pairs_referencing_it_on_either_side()
     {
         var factory = Build();
         var (token, userId) = IssueBearer(factory, "del-cascade", "del-cascade@test");
@@ -114,8 +114,10 @@ public sealed class CalendarAccountDeleteCascadeTests
 
         resp.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-        (await PairStateAsync(factory, "p-dest")).Should().Be("disabled");
-        (await PairStateAsync(factory, "p-src")).Should().Be("disabled");
+        // Forget DELETES the referencing pairs: their rows are gone, so PairStateAsync (row?.State)
+        // is null. The unrelated pair is left active.
+        (await PairStateAsync(factory, "p-dest")).Should().BeNull();
+        (await PairStateAsync(factory, "p-src")).Should().BeNull();
         (await PairStateAsync(factory, "p-unrelated")).Should().Be("active");
     }
 

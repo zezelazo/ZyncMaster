@@ -1383,6 +1383,9 @@ const addPairLive = {
   // a calendar of a DIFFERENT account while a subset selection already exists, we stash the intent
   // here and show an inline confirm instead of silently wiping their prior selection.
   srcSwitchPrompt: null, // null | { accountRef, calendarId }
+  // Account-accordion expand state for the wizard pickers (Sets of accountRefs). null = not yet
+  // initialized; each picker lazily opens the selected/only account on first render.
+  expandedSrc: null, expandedDst: null,
 };
 function resetAddPairLive() {
   Object.assign(addPairLive, {
@@ -1397,6 +1400,7 @@ function resetAddPairLive() {
     cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
     submitError: null, submitting: false,
     srcSwitchPrompt: null,
+    expandedSrc: null, expandedDst: null,
   });
 }
 
@@ -1443,6 +1447,7 @@ function startEditPair(id) {
     origDstCalendarName: dst.calendarName || null,
     cleanupPrevDest: false, cleanupCount: null, cleanupCountKey: null,
     submitError: null, submitting: false, srcSwitchPrompt: null,
+    expandedSrc: null, expandedDst: null,
   });
   navigate('add-pair');
 }
@@ -1523,33 +1528,87 @@ function completeAddPair() {
 }
 
 // ---------------- Add Pair wizard (bridged / live data) ----------------
-// A list of online accounts (from listAccounts), each expandable into its calendars
-// (from listCalendars). Selecting a calendar invokes onPick with the chosen endpoint. When
-// `allowCreate` is true (the DESTINATION step) each account also gets a "+ New calendar" affordance
-// that creates a fresh calendar on that account via the createCalendar bridge action and selects it.
+// accountAccordionHead(acc, expandedSet, summary, active) — a clickable collapsible header for an
+// account in the wizard pickers. Toggling flips membership in expandedSet (a Set of accountRefs kept
+// on addPairLive, so it survives rerenders) and re-renders. `summary` is the right-side hint shown
+// (e.g. calendar count / selection); `active` highlights the header when this account is the chosen
+// source/destination. Returns { head, open } so the caller renders the calendars only when open.
+function accountAccordionHead(acc, expandedSet, summary, active) {
+  const open = expandedSet.has(acc.accountRef);
+  const accName = acc.displayName || acc.accountRef;
+  const head = el('button', {
+    class: `cal-acct-head${open ? ' is-open' : ''}${active ? ' is-active' : ''}`,
+    type: 'button', 'aria-expanded': String(open),
+    onclick: () => {
+      if (open) expandedSet.delete(acc.accountRef); else expandedSet.add(acc.accountRef);
+      if (state.view === 'add-pair') rerender();
+    },
+  },
+    el('span', { class: 'cal-acct-head__chev', 'aria-hidden': 'true' }, iconEl('chevrondown', 14, 2.4)),
+    el('span', { class: 'cal-acct-head__name', text: accName }),
+    summary ? el('span', { class: 'cal-acct-head__sum', text: summary }) : null);
+  return { head, open };
+}
+
+// A list of online accounts (from listAccounts) as collapsible accordions: an "+ Add account" button
+// sits on TOP, and each account's calendars (from listCalendars) show only when that account is
+// expanded. Selecting a calendar invokes onPick with the chosen endpoint. When `allowCreate` is true
+// (the DESTINATION step) each writable account also gets a "+ New calendar" affordance.
 function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
+  const a = addPairLive;
   const wrap = el('div', { class: 'glass glass--card', style: 'padding:4px' });
-  const list = el('div', { class: 'cal-list' });
 
   const accounts = live.accounts || [];
+
+  // "+ Add account" on TOP (above the accounts), not buried after the calendars. A destination must
+  // be writable, so connect read/write; clear any chosen calendar so Continue can't point at the old
+  // account's calendar, and auto-expand the freshly added account.
+  if (allowCreate) wrap.append(addAccountRow('readwrite', (newRef) => {
+    a.dstAccountRef = newRef; a.dstCalendarId = null; a.dstCalendarName = null;
+    if (newRef) { (a.expandedDst = a.expandedDst || new Set()).add(newRef); }
+  }));
+
   if (accounts.length === 0) {
-    list.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts. Connect one on the server first.' }));
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
+    return wrap;
   }
 
+  // Accordion expand state (survives rerenders). Initialize once: open the selected account, or the
+  // only account when there is just one; otherwise everything starts collapsed.
+  if (!a.expandedDst) {
+    a.expandedDst = new Set();
+    if (a.dstAccountRef) a.expandedDst.add(a.dstAccountRef);
+    else if (accounts.length === 1) a.expandedDst.add(accounts[0].accountRef);
+  }
+
+  const list = el('div', { class: 'cal-list', role: 'list' });
+
   accounts.forEach((acc) => {
+    const accName = acc.displayName || acc.accountRef;
     const cals = live.calendars[acc.accountRef];
-    list.append(el('div', { class: 'route__label', style: 'padding:8px 10px 2px', text: acc.displayName || acc.accountRef }));
+    const active = a.dstAccountRef === acc.accountRef;
+    const summary = cals ? `${cals.length} calendar${cals.length === 1 ? '' : 's'}` : '';
+
+    const { head, open } = accountAccordionHead(acc, a.expandedDst, summary, active);
+    const group = el('div', { class: `cal-acct-group${open ? ' is-open' : ''}`, role: 'group', 'aria-label': accName });
+    group.append(head);
+    list.append(group);
+    if (!open) return;
+
+    const body = el('div', { class: 'cal-acct-body' });
+    group.append(body);
+
     if (!cals) {
-      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
       loadCalendars(acc.accountRef).then(() => { if (state.view === 'add-pair') rerender(); });
       return;
     }
     if (cals.length === 0) {
-      list.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
     }
     cals.forEach((c) => {
       const selected = selectedCalendarId === c.id;
-      list.append(el('button', { class: `cal-item${selected ? ' is-selected' : ''}`,
+      body.append(el('button', { class: `cal-item${selected ? ' is-selected' : ''}`,
         onclick: () => onPick(acc, c) },
         pairBadge('Outlook'),
         el('div', null,
@@ -1558,9 +1617,10 @@ function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
         el('div', { class: 'cal-item__check', html: selected ? icon('check', { size: 12, stroke: 2.6 }) : '' })));
     });
 
-    // "+ New calendar" — destination only. Reveals an inline name field; confirming creates the
-    // calendar on this account and auto-selects it (mirrors the Connect-account inline states).
-    if (allowCreate) list.append(newCalendarRow(acc, onPick));
+    // "+ New calendar" — destination only, and only on a WRITABLE account. Creating a calendar is a
+    // Graph write, so a read-only destination account must be upgraded first (handled in the select
+    // path); offering create here would write before the upgrade and fail.
+    if (allowCreate && acc.scope !== 'read') body.append(newCalendarRow(acc, onPick));
   });
 
   wrap.append(list);
@@ -1570,7 +1630,7 @@ function onlineCalendarPicker(selectedCalendarId, onPick, allowCreate) {
 // newCalendarRow(acc, onPick) — an inline "+ New calendar" control for one account. Clicking it
 // swaps in a name input + Create/Cancel; Create calls createCalendarFor, which on success refreshes
 // the account's calendars, selects the new one (onPick), and re-renders the wizard. Failures show
-// inline feedback without disturbing the rest of the picker. Pattern mirrors connectCalendarAccount.
+// inline feedback without disturbing the rest of the picker. Pattern mirrors connectAccount.
 function newCalendarRow(acc, onPick) {
   const row = el('div', { class: 'cal-new' });
 
@@ -1607,6 +1667,29 @@ function newCalendarRow(acc, onPick) {
   };
 
   showButton();
+  return row;
+}
+
+// addAccountRow(scope, onAdded) — inline "+ Add account" control for the wizard, mirroring
+// newCalendarRow. Clicking it runs connectAccount (OAuth in the system browser) with a Cancel; on
+// success onAdded(newRef) fires so the step can select the new account (newRef may be null if the
+// account was already connected — Phase B idempotency — in which case we just re-render and the user
+// taps it in the list). `scope` is 'read' for the source step, 'readwrite' for the destination step.
+function addAccountRow(scope, onAdded) {
+  // role=listitem so it traverses cleanly when appended inside the wizard's role=list calendar list.
+  // The trigger keeps `connect-cal__label` (connectAccount swaps that span to "Connecting…") but NOT
+  // `connect-cal` itself, so it shares newCalendarRow's left-aligned pill look instead of stretching
+  // full-width — the two inline "+ New calendar" / "+ Add account" rows then render consistently.
+  const row = el('div', { class: 'cal-new', role: 'listitem' });
+  const trigger = el('button', { class: 'cal-new__trigger', type: 'button' },
+    iconEl('plus', 13, 2.2), el('span', { class: 'connect-cal__label', text: 'Add account' }));
+  trigger.addEventListener('click', () => {
+    connectAccount({ scope, btn: trigger, wrap: row, onConnected: (newRef) => {
+      if (newRef && typeof onAdded === 'function') onAdded(newRef);
+      if (state.view === 'add-pair') rerender();
+    } });
+  });
+  row.append(trigger);
   return row;
 }
 
@@ -1699,24 +1782,39 @@ function comSourceMultiSelect() {
   return wrap;
 }
 
-// Online source multi-select: "All calendars" + a checkbox per calendar across the connected
-// accounts. Selecting calendars records their Graph ids in srcCalendarIds and pins srcAccountRef to
+// Online source multi-select: an "+ Add account" button on TOP, then "All calendars", then each
+// connected account as a COLLAPSIBLE accordion — its calendars show only when the account is
+// expanded. Selecting calendars records their Graph ids in srcCalendarIds and pins srcAccountRef to
 // the account of the first selected calendar (a source pair targets ONE account's calendars).
 function onlineSourceMultiSelect() {
   const a = addPairLive;
   const wrap = el('div', { class: 'glass glass--card cal-multi', style: 'padding:4px' });
-  // Flipping All on/off makes a pending subset account-switch confirm meaningless — clear it.
-  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; a.srcSwitchPrompt = null; }));
 
   const accounts = live.accounts || [];
+
+  // "+ Add account" on TOP (above the accounts/options), not buried after the calendars. A source
+  // only needs to be read, so connect read-only; auto-expand the freshly added account.
+  wrap.append(addAccountRow('read', (newRef) => {
+    a.srcAccountRef = newRef; a.srcSwitchPrompt = null;
+    if (newRef) { (a.expandedSrc = a.expandedSrc || new Set()).add(newRef); }
+  }));
+
   if (accounts.length === 0) {
-    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts. Connect one on the server first.' }));
+    wrap.append(el('div', { class: 'cal-item__sub', style: 'padding:12px', text: 'No connected accounts yet.' }));
     return wrap;
   }
 
-  // The whole set of accounts is a single list of grouped calendars. role=list + per-account
-  // role=group (labelled by the account name) gives assistive tech the account→calendars
-  // relationship the old flat stack of <div>s lacked.
+  // Accordion expand state (survives rerenders). Initialize once: open the selected account, or the
+  // only account when there is just one; otherwise everything starts collapsed.
+  if (!a.expandedSrc) {
+    a.expandedSrc = new Set();
+    if (a.srcAccountRef) a.expandedSrc.add(a.srcAccountRef);
+    else if (accounts.length === 1) a.expandedSrc.add(accounts[0].accountRef);
+  }
+
+  // Flipping All on/off makes a pending subset account-switch confirm meaningless — clear it.
+  wrap.append(allCalendarsRow(() => a.srcAllCalendars, (v) => { a.srcAllCalendars = v; a.srcSwitchPrompt = null; }));
+
   const list = el('div', { class: 'cal-list', role: 'list' });
 
   // applySwitch — commit a confirmed account switch in subset mode: drop the old account's
@@ -1731,21 +1829,32 @@ function onlineSourceMultiSelect() {
 
   accounts.forEach((acc) => {
     const accName = acc.displayName || acc.accountRef;
-    // Group each account's header + calendars so the relationship is explicit to screen readers.
-    const group = el('div', { class: 'cal-acct-group', role: 'group', 'aria-label': accName });
-    const heading = el('div', { class: 'route__label', id: `srcacct-${acc.accountRef}`, style: 'padding:8px 10px 2px', text: accName });
-    group.append(heading);
-    group.setAttribute('aria-labelledby', heading.id);
-    list.append(group);
-
     const cals = live.calendars[acc.accountRef];
+    const accountChosen = a.srcAccountRef === acc.accountRef;
+
+    // Collapsed summary: the selection state when chosen, else the calendar count.
+    let summary;
+    if (accountChosen && a.srcAllCalendars) summary = 'Source · all';
+    else if (accountChosen && a.srcCalendarIds.length) summary = `${a.srcCalendarIds.length} selected`;
+    else if (cals) summary = `${cals.length} calendar${cals.length === 1 ? '' : 's'}`;
+    else summary = '';
+
+    const { head, open } = accountAccordionHead(acc, a.expandedSrc, summary, accountChosen);
+    const group = el('div', { class: `cal-acct-group${open ? ' is-open' : ''}`, role: 'group', 'aria-label': accName });
+    group.append(head);
+    list.append(group);
+    if (!open) return;
+
+    const body = el('div', { class: 'cal-acct-body' });
+    group.append(body);
+
     if (!cals) {
-      group.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'Loading calendars…' }));
       loadCalendars(acc.accountRef).then(() => { if (state.view === 'add-pair') rerender(); });
       return;
     }
     if (cals.length === 0) {
-      group.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
+      body.append(el('div', { class: 'cal-item__sub', style: 'padding:6px 12px', text: 'No calendars on this account.' }));
       return;
     }
 
@@ -1754,8 +1863,7 @@ function onlineSourceMultiSelect() {
     // re-pins the same account with no real change), pick the ACCOUNT explicitly and render its
     // calendars as a read-only, informative list so it is clear what "All" will include.
     if (a.srcAllCalendars) {
-      const accountChosen = a.srcAccountRef === acc.accountRef;
-      group.append(calCheckRow(
+      body.append(calCheckRow(
         accName,
         accountChosen ? 'Source account — All calendars below will be mirrored' : 'Use this account as the source',
         accountChosen,
@@ -1775,13 +1883,12 @@ function onlineSourceMultiSelect() {
             el('div', { class: 'cal-item__name', text: c.displayName || c.id }),
             el('div', { class: 'cal-item__sub', text: accountChosen ? 'Included by “All calendars”' : 'Pick this account to include' }))));
       });
-      group.append(roList);
+      body.append(roList);
       return;
     }
 
     // Subset mode: each calendar is an independently selectable checkbox.
     cals.forEach((c) => {
-      const accountChosen = a.srcAccountRef === acc.accountRef;
       const checked = accountChosen && a.srcCalendarIds.includes(c.id);
       const itemRow = el('div', { role: 'listitem' });
       itemRow.append(calCheckRow(c.displayName || c.id, accName, checked, () => {
@@ -1803,7 +1910,7 @@ function onlineSourceMultiSelect() {
         a.srcCalendarId = first || null;
         a.srcCalendarName = fc ? (fc.displayName || fc.id) : null;
       }));
-      group.append(itemRow);
+      body.append(itemRow);
 
       // Inline confirm for the pending account switch, anchored under the tapped calendar.
       if (a.srcSwitchPrompt && a.srcSwitchPrompt.accountRef === acc.accountRef && a.srcSwitchPrompt.calendarId === c.id) {
@@ -1815,7 +1922,7 @@ function onlineSourceMultiSelect() {
           el('div', { class: 'cal-switch-confirm__actions' },
             el('button', { class: 'btn btn--ghost', type: 'button', text: 'Keep current', onclick: () => { a.srcSwitchPrompt = null; rerender(); } }),
             el('button', { class: 'btn btn--primary', type: 'button', text: 'Switch account', onclick: () => { applySwitch(acc, c, cals); rerender(); } })));
-        group.append(confirm);
+        body.append(confirm);
       }
     });
   });
@@ -1905,6 +2012,24 @@ function renderAddPairLive(root) {
     root.append(el('div', { class: 'wizard-title', text: 'Pick the destination' }));
     root.append(el('div', { class: 'wizard-sub', text: 'Events are written here. Past events on the destination are never touched.' }));
     root.append(onlineCalendarPicker(a.dstCalendarId, (acc, c) => {
+      // A destination must be writable. If this account is read-only, grant read/write first
+      // (interactive consent) before committing it as the destination; on cancel/fail, do nothing.
+      if (acc.scope === 'read') {
+        announce('Granting write access to this account…');
+        Bridge.call('upgradeAccountScope', JSON.stringify(acc.accountRef), 210000)
+          .then((r) => {
+            if (r && r.connected) {
+              live.accounts = null;
+              return loadAccounts().then(() => {
+                a.dstAccountRef = acc.accountRef; a.dstCalendarId = c.id; a.dstCalendarName = c.displayName || c.id;
+                rerender();
+              });
+            }
+            announce((r && r.cancelled) ? 'Upgrade cancelled.' : 'Could not grant write access.');
+          })
+          .catch(() => announce('Could not grant write access.'));
+        return;
+      }
       a.dstAccountRef = acc.accountRef; a.dstCalendarId = c.id; a.dstCalendarName = c.displayName || c.id; rerender();
     }, true));
     root.append(el('div', { class: 'wizard-foot' },
@@ -2320,6 +2445,11 @@ function cfgRow(label, hint, control) {
 // entrance animation when the data arrives.
 function ensureCalendarAccounts(view) {
   if (!Bridge.available) return;
+  // Also prime live.pairs (desktop App) so the forget confirm can count the syncs that will be
+  // deleted. Without this, opening Calendar Settings without first visiting the pair list leaves
+  // live.pairs === null, and confirmDisconnectAccount would under-warn ("no syncs") about a delete
+  // the server will still perform. loadPairs() is idempotent/cached, so this is cheap on repeat.
+  if (Bridge.desktopApp && live.pairs === null) loadPairs();
   if (live.accounts !== null) return;
   loadAccounts().finally(() => { if (state.view === view) softRepaint(); });
 }
@@ -2852,9 +2982,17 @@ function accountLabel(acc) {
 function accountCard(acc) {
   const { title, sub } = accountLabel(acc);
   const avatar = el('div', { class: 'acct-avatar', 'aria-hidden': 'true' }, iconEl('calendar', 15, 1.7));
+
+  // Per-account consent badge (spec Pieza 1). Legacy accounts without a scope show no badge.
+  const scopeLabel = acc.scope === 'read' ? 'Read-only (source)'
+    : (acc.scope === 'readwrite' ? 'Read & write' : '');
+  const subEl = el('div', { class: 'acct-text__sub cfg-row__hint', text: sub });
+  // Own class (not a nested cfg-row__hint) so the muted styling isn't applied twice (compounded).
+  if (scopeLabel) subEl.append(el('span', { class: 'acct-text__scope', text: ` · ${scopeLabel}` }));
+
   const text = el('div', { class: 'acct-text' },
     el('div', { class: 'acct-text__title', text: title }),
-    el('div', { class: 'acct-text__sub cfg-row__hint', text: sub }));
+    subEl);
   const left = el('div', { class: 'acct-id' }, avatar, text);
   const disconnectBtn = el('button', {
     class: 'btn btn--ghost acct-disconnect',
@@ -2865,57 +3003,82 @@ function accountCard(acc) {
   return el('div', { class: 'cfg-row acct-row' }, left, disconnectBtn);
 }
 
-// confirmDisconnectAccount(acc) — a small confirm before unlinking, so the user understands the
-// scope of the action: it disconnects ONLY that calendar account (and disables its sync pairs) and
-// does NOT sign them out of the app. On confirm it runs the existing unlinkAccount(accountRef).
+// confirmDisconnectAccount(acc) — confirm before forgetting a calendar account. It DELETES every sync
+// pair that uses this account (as source or destination), on every device, while events already
+// created in the destination calendars stay untouched. You stay signed in. The shown count is an
+// estimate from the loaded pairs (the server resolves the canonical accountId, so legacy/pool mixes
+// can differ); unlinkAccount announces the real deleted count from affectedPairIds afterwards.
 function confirmDisconnectAccount(acc) {
   const { title } = accountLabel(acc);
+  const ref = acc.accountRef;
+  // Three states: known-some (count > 0), known-none (pairs loaded, count 0), and UNKNOWN
+  // (live.pairs === null — the pair list was never loaded on this screen). We must NOT collapse
+  // unknown into "no syncs": that would tell the user nothing destructive happens when the server
+  // may still delete syncs. So when pairs are unknown we show the destructive copy unconditionally
+  // (dropping the "about N" clause), and only show the benign copy when we KNOW the count is zero.
+  const pairsKnown = live.pairs !== null;
+  const affected = (live.pairs || []).filter((p) => {
+    const s = (p.source && p.source.accountRef) || null;
+    const d = (p.destination && p.destination.accountRef) || null;
+    return s === ref || d === ref;
+  }).length;
+  const destructive = !pairsKnown || affected > 0;
+
+  let detail;
+  if (affected > 0) {
+    detail = `Forgetting this account deletes the syncs that use it as a source or destination ` +
+      `(about ${affected}), on all your devices. Events already created in the destination ` +
+      `calendars are NOT deleted. You stay signed in to the app.`;
+  } else if (!pairsKnown) {
+    detail = `Forgetting this account deletes the syncs that use it as a source or destination, on ` +
+      `all your devices. Events already created in the destination calendars are NOT deleted. You ` +
+      `stay signed in to the app.`;
+  } else {
+    detail = `This calendar account has no syncs. Forgetting it only removes the connection, on all ` +
+      `your devices. You stay signed in to the app.`;
+  }
+
   const cancelBtn = el('button', { class: 'btn btn--ghost', type: 'button', text: 'Keep connected' });
   const confirmBtn = el('button', { class: 'btn btn--primary acct-disconnect--confirm', type: 'button' },
-    el('span', { text: 'Disconnect' }));
+    el('span', { text: destructive ? 'Forget and delete syncs' : 'Forget' }));
 
   const body = el('div', { class: 'disconnect-modal' },
-    el('div', { class: 'disconnect-modal__lead', text: `Disconnect ${title}?` }),
-    el('div', { class: 'cfg-row__hint disconnect-modal__detail' },
-      'Its sync pairs will be disabled and this calendar will stop syncing. ' +
-      'You stay signed in to the app - only this calendar connection is removed.'),
+    el('div', { class: 'disconnect-modal__lead', text: `Forget ${title}?` }),
+    el('div', { class: 'cfg-row__hint disconnect-modal__detail', text: detail }),
     el('div', { class: 'modal__foot' }, cancelBtn, confirmBtn));
 
-  const modal = openModal({ title: 'Disconnect calendar', body });
-
+  const modal = openModal({ title: 'Forget calendar account', body });
   cancelBtn.addEventListener('click', () => modal.close());
   confirmBtn.addEventListener('click', () => {
-    confirmBtn.disabled = true;
-    cancelBtn.disabled = true;
-    const span = confirmBtn.querySelector('span');
-    if (span) span.textContent = 'Disconnecting…';
+    confirmBtn.disabled = true; cancelBtn.disabled = true;
+    const span = confirmBtn.querySelector('span'); if (span) span.textContent = 'Forgetting…';
     modal.close();
     unlinkAccount(acc.accountRef);
   });
 }
 
-// connectAccountCard() — the "connect a calendar" card. Clear, jargon-free heading + copy. When the
-// signed-in identity is a Microsoft account we offer a one-click "Use <email>" primary (reuse that
-// identity's calendar) and keep "Connect a different account" as the path to any other mailbox.
+// connectAccountCard() — the "add a calendar account" card on the Calendar screen (which is ONLY the
+// account list; identity lives in Settings). Adding an account never changes your sign-in; the copy
+// says so. Two scopes: a source-only mailbox connects read-only (least privilege, friendlier to
+// enterprise tenants); a destination connects read/write.
 function connectAccountCard() {
-  const reuseEmail = (identityAuth.me && identityAuth.me.email) || null;
   const wrap = el('div', { class: 'connect-cal__wrap' });
+  const repaint = () => { if (state.view === 'calendar-settings') softRepaint(); };
 
-  const primaryLabel = reuseEmail ? `Use ${reuseEmail}` : 'Connect a calendar account';
-  const connectBtn = el('button', { class: 'btn btn--primary connect-cal', onclick: () => connectCalendarAccount(connectBtn, wrap) },
-    iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: primaryLabel }));
-  wrap.append(connectBtn);
+  const sourceBtn = el('button', { class: 'btn btn--primary connect-cal',
+    onclick: () => connectAccount({ scope: 'read', btn: sourceBtn, wrap, onConnected: repaint }) },
+    iconEl('link', 13, 1.8), el('span', { class: 'connect-cal__label', text: 'Add a source account (read-only)' }));
 
-  // When we reused the identity email above, also offer connecting a different mailbox. It runs the
-  // same flow (the system browser lets the user pick another account), so it shares the handler.
-  if (reuseEmail) {
-    const otherBtn = el('button', { class: 'btn btn--ghost connect-cal connect-cal--other', onclick: () => connectCalendarAccount(otherBtn, wrap) },
-      el('span', { class: 'connect-cal__label', text: 'Connect a different account' }));
-    wrap.append(otherBtn);
-  }
+  const destBtn = el('button', { class: 'btn btn--ghost connect-cal connect-cal--other',
+    onclick: () => connectAccount({ scope: 'readwrite', btn: destBtn, wrap, onConnected: repaint }) },
+    el('span', { class: 'connect-cal__label', text: 'Add a destination account (read & write)' }));
 
-  return cfgSection('Connect a calendar',
-    el('div', { class: 'cfg-row__hint', style: 'padding:0 2px 6px', text: 'Connect the calendar of an account you want to sync. We only read the source and write the destination - your sign-in stays separate.' }),
+  wrap.append(sourceBtn, destBtn);
+
+  return cfgSection('Add a calendar account',
+    el('div', { class: 'cfg-row__hint', style: 'padding:0 2px 6px',
+      text: 'Connect the calendar of an account you want to sync. Pick read-only for a source you only ' +
+            'mirror FROM, or read & write for a destination you sync INTO. This does not change your sign-in.' }),
     wrap);
 }
 
@@ -3672,11 +3835,14 @@ function unlinkAccount(accountRef) {
       ? accounts.find((x) => x.accountRef === accountRef) || { accountRef }
       : accounts.find((x) => x.isDefault) || accounts[0];
     if (!target) { announce('No connected account to unlink.'); return; }
+    let removed = 0;
     Bridge.call('unlinkAccount', target.accountRef)
-      .then(() => { live.accounts = null; return loadPairs(); })
+      .then((r) => { removed = (r && r.affectedPairIds || []).length; live.accounts = null; return loadPairs(); })
       .then(() => loadAccounts())
       .then(() => {
-        announce('Account unlinked.');
+        announce(removed > 0
+          ? `Forgot the account; removed ${removed} sync${removed === 1 ? '' : 's'}.`
+          : 'Forgot the account.');
         if (state.view === 'config' || state.view === 'calendar-settings') softRepaint();
       })
       .catch(() => { announce('Unlink failed.'); });
@@ -3684,27 +3850,21 @@ function unlinkAccount(accountRef) {
   if (live.accounts === null && !accountRef) loadAccounts().then(run); else run();
 }
 
-// connectCalendarAccount(btn?, wrap?) — connect a calendar OAuth grant into the per-user account
-// pool. Calls the host's connectCalendar with a read/write scope (a long-running interactive flow,
-// so a generous timeout). On {Connected:true} it drops the cached accounts and reloads them (the new
-// account now shows up via listAccounts), then repaints. {Cancelled} and {Error} surface inline
-// feedback on the button without disturbing the rest of the screen.
-//
-// While the connect is in flight the system browser is open and we are blocked on the loopback
-// callback. Mirroring the sign-in gate's Cancel button, we mount a small Cancel affordance next to
-// the connecting button that asks the host to abort the in-flight connect (cancelConnect) and free
-// the loopback port. The host then resolves the pending connectCalendar with a quiet Cancelled
-// outcome ({cancelled:true}), which the .then below renders as "Cancelled" — no red error.
-function connectCalendarAccount(btn, wrap) {
+// connectAccount({ scope, btn, wrap, onConnected }) — core OAuth connect of a calendar account into
+// the per-user pool. `scope` is 'read' (source-only; least privilege, friendlier to enterprise
+// tenants) or 'readwrite' (destination). Long-running interactive flow (system browser) with a Cancel
+// affordance. On success it refreshes the account list and calls onConnected(newRef): newRef is the
+// accountRef that appeared since the pre-connect snapshot, or null when the connect refreshed an
+// already-listed account (server connect is idempotent by email — Phase B). All feedback is inline.
+function connectAccount({ scope, btn, wrap, onConnected }) {
   if (!Bridge.desktopApp) return;
   const span = btn && btn.querySelector('span.connect-cal__label');
   const orig = span ? span.textContent : '';
   if (span) span.textContent = 'Connecting…';
   if (btn) btn.disabled = true;
 
-  // Cancel affordance: fire-and-forget cancelConnect. The in-flight connectCalendar promise then
-  // settles with {cancelled:true}, so we do NOT restore the UI here — the shared .then/.finally
-  // path owns that, exactly like cancelAppLogin leaves the recovery to the login promise.
+  const before = new Set((live.accounts || []).map((a) => a.accountRef));
+
   let cancelBtn = null;
   if (wrap) {
     cancelBtn = el('button', { class: 'btn btn--ghost connect-cal__cancel', text: 'Cancel',
@@ -3713,31 +3873,25 @@ function connectCalendarAccount(btn, wrap) {
   }
   const removeCancel = () => { if (cancelBtn && cancelBtn.parentNode) cancelBtn.parentNode.removeChild(cancelBtn); cancelBtn = null; };
 
-  Bridge.call('connectCalendar', JSON.stringify({ scope: 'readwrite' }), 210000)
+  Bridge.call('connectCalendar', JSON.stringify({ scope: scope === 'readwrite' ? 'readwrite' : 'read' }), 210000)
     .then((r) => {
       if (r && r.connected) {
         announce('Calendar account connected.');
         live.accounts = null;
         return loadAccounts().then(() => {
           (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) loadCalendars(acc.accountRef); });
-          if (state.view === 'calendar-settings') softRepaint();
+          const newRef = (live.accounts || []).map((a) => a.accountRef).find((ref) => !before.has(ref)) || null;
+          if (typeof onConnected === 'function') onConnected(newRef);
         });
       }
-      if (r && r.cancelled) {
-        if (span) span.textContent = 'Cancelled';
-      } else {
-        if (span) span.textContent = 'Failed';
-        announce((r && r.error) ? `Connect failed: ${r.error}` : 'Connect failed.');
-      }
+      if (r && r.cancelled) { if (span) span.textContent = 'Cancelled'; }
+      else { if (span) span.textContent = 'Failed'; announce((r && r.error) ? `Connect failed: ${r.error}` : 'Connect failed.'); }
     })
     .catch(() => { if (span) span.textContent = 'Failed'; announce('Connect failed.'); })
     .finally(() => {
       removeCancel();
-      // Only restore the button if we didn't navigate away after a successful connect.
-      if (state.view === 'calendar-settings') {
-        if (btn) btn.disabled = false;
-        if (span && span.textContent !== orig) setTimeout(() => { if (span) span.textContent = orig || 'Connect a calendar account'; }, 1800);
-      }
+      if (btn) btn.disabled = false;
+      if (span && span.textContent !== orig) setTimeout(() => { if (span) span.textContent = orig; }, 1800);
     });
 }
 

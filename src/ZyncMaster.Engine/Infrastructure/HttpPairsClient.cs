@@ -50,6 +50,7 @@ public sealed class HttpPairsClient : IPairsClient
                 DisplayName = item["displayName"]?.Value<string>() ?? "",
                 Email = item["email"]?.Value<string>() ?? "",
                 IsDefault = item["isDefault"]?.Value<bool>() ?? false,
+                Scope = item["scope"]?.Value<string>() ?? "",
             });
         return list;
     }

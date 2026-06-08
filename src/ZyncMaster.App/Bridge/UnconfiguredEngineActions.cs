@@ -157,6 +157,9 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<ConnectCalendarOutcome> ConnectCalendarAsync(string scope, CancellationToken ct = default)
         => Task.FromResult(ConnectCalendarOutcome.Fail("Set the server URL in Settings before connecting a calendar."));
 
+    public Task<ConnectCalendarOutcome> UpgradeAccountScopeAsync(string accountId, CancellationToken ct = default)
+        => Task.FromResult(ConnectCalendarOutcome.Fail("Set the server URL in Settings before connecting a calendar."));
+
     public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<CalendarAccountSummary>>(new List<CalendarAccountSummary>());
 

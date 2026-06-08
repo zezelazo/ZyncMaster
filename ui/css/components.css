@@ -754,12 +754,40 @@
 .cal-item.is-readonly { cursor: default; }
 .cal-item.is-muted { opacity: 0.55; }
 
-/* Semantic grouping wrappers for the online source multi-select (role=group / role=list). They
-   exist purely to carry the account→calendars relationship for assistive tech; display:contents
-   keeps the visual grid/flow of .cal-list (and its .cal-item + .cal-item borders) unchanged. */
-.cal-acct-group,
+/* Account accordion (wizard source/destination pickers). The group is a real block: a clickable
+   header toggles its body. .cal-readonly-list and the subset role=listitem wrappers keep
+   display:contents so the calendar rows inside the body retain their .cal-item grid/flow + borders. */
+.cal-acct-group { display: block; }
+.cal-acct-group + .cal-acct-group { border-top: 1px solid var(--ctrl-stroke); }
 .cal-readonly-list,
-.cal-acct-group > [role="listitem"] { display: contents; }
+.cal-acct-body > [role="listitem"] { display: contents; }
+
+.cal-acct-head {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 10px 12px;
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--ink-1); text-align: left;
+  transition: background var(--d-fast);
+}
+.cal-acct-head:hover { background: var(--ctrl-hover); }
+.cal-acct-head__chev {
+  display: inline-flex; flex: none; color: var(--ink-3);
+  transform: rotate(-90deg);
+  transition: transform var(--d-fast), color var(--d-fast);
+}
+.cal-acct-head.is-open .cal-acct-head__chev { transform: rotate(0deg); }
+.cal-acct-head__name {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cal-acct-head__sum { flex: none; font-size: 11px; color: var(--ink-3); }
+.cal-acct-head.is-active,
+.cal-acct-head.is-active .cal-acct-head__chev { color: var(--azure); }
+.cal-acct-body { padding-bottom: 4px; }
+
+/* Per-account consent badge in the Calendar account list — its own class so the muted styling of the
+   sub-line isn't applied twice (compounded). */
+.acct-text__scope { color: var(--ink-3); }
 
 /* Inline confirm shown when switching the source to a different account in subset mode — switching
    would clear the existing selection, so we ask first instead of wiping it silently. */
