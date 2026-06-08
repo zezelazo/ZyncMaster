@@ -171,7 +171,7 @@ public static class ClipboardEndpoints
             await broadcaster.BroadcastPresenceAsync(userId, http.RequestAborted);
             try
             {
-                await ClipboardHub.RunReceiveLoopAsync(conn, registry, broadcaster, http.RequestAborted);
+                await ClipboardHub.RunReceiveLoopAsync(conn, http.RequestAborted);
             }
             finally
             {

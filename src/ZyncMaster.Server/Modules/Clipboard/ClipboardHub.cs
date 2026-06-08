@@ -14,8 +14,6 @@ public static class ClipboardHub
 
     public static async Task RunReceiveLoopAsync(
         ClipboardConnection conn,
-        ClipboardConnectionRegistry reg,
-        ClipboardBroadcaster bc,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(conn);
