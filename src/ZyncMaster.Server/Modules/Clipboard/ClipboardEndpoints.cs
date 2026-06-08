@@ -81,6 +81,18 @@ public static class ClipboardEndpoints
             return Results.Ok(rows.Select(ClipboardDto.ToWire));
         }).RequireCookieOrApiKeyOrIdentityBearer();
 
+        // GET settings for a SPECIFIC device — what the App actually calls (GetSettingsAsync) on
+        // clipboard startup and per device in the roster. The store is user-scoped and GetAsync returns
+        // DEFAULTS for a device with no stored row, so a never-configured (or another user's) device id
+        // resolves to a fresh settings object rather than 404. Without this route the App got 405 (the
+        // path only matched the PATCH below) and the whole clipboard pipeline aborted before the hotkey.
+        app.MapGet("/api/clipboard/settings/{deviceId}", async (
+            string deviceId, IClipboardSettingsStore settings, CancellationToken ct) =>
+        {
+            var row = await settings.GetAsync(deviceId, ct);
+            return Results.Ok(ClipboardDto.ToWire(row));
+        }).RequireCookieOrApiKeyOrIdentityBearer();
+
         // PATCH settings for a specific device id (any of the user's devices, even offline). The
         // store stamps the ambient user, so a deviceId belonging to another user is created under the
         // CALLER's scope and never overwrites the other user's row.

@@ -194,6 +194,45 @@ public class ClipboardEndpointsTests
     }
 
     [Fact]
+    public async Task Settings_get_by_device_returns_that_devices_settings_and_defaults_for_unknown()
+    {
+        // The App's HttpWsClipboardTransport.GetSettingsAsync calls GET /api/clipboard/settings/{deviceId}
+        // for THIS device (clipboard startup) and for every device in the roster. The route was missing
+        // (only GET /settings (list) + PATCH /settings/{id} existed), so the App got 405 and the whole
+        // clipboard pipeline aborted before registering the hotkey or connecting. This pins the route.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var patch = await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = false,
+            send = true,
+            receive = false,
+            viewerHotkey = "Ctrl+Alt+V",
+            density = "mini",
+            showHints = false,
+        });
+        patch.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // A single device's settings — 200 with a single object (NOT 405, NOT an array).
+        var resp = await device.GetAsync("/api/clipboard/settings/dev-a");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var dto = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        dto.GetProperty("deviceId").GetString().Should().Be("dev-a");
+        dto.GetProperty("autoSync").GetBoolean().Should().BeFalse();
+        dto.GetProperty("receive").GetBoolean().Should().BeFalse();
+        dto.GetProperty("viewerHotkey").GetString().Should().Be("Ctrl+Alt+V");
+        dto.GetProperty("density").GetString().Should().Be("mini");
+
+        // An unknown/never-PATCHed device returns DEFAULTS (200), not 404 — the common first-run case.
+        var def = await device.GetAsync("/api/clipboard/settings/never-set");
+        def.StatusCode.Should().Be(HttpStatusCode.OK);
+        var defDto = await def.Content.ReadFromJsonAsync<JsonElement>();
+        defDto.GetProperty("deviceId").GetString().Should().Be("never-set");
+    }
+
+    [Fact]
     public async Task Settings_patch_invalid_density_returns_400()
     {
         using var h = new Harness();
