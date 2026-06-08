@@ -36,7 +36,7 @@ jobs:
     env:
       HAS_SIGNING_CERT: ${{ secrets.SIGNING_CERT != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Fail if the tag already exists
         shell: pwsh
@@ -53,7 +53,7 @@ jobs:
           Write-Host "Tag $tag is free; continuing."
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           # SDK pinned by global.json; NuGet cache keyed on the committed lock files.
           dotnet-version: '10.0.x'
@@ -194,7 +194,7 @@ jobs:
           "ASSET_PATH=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Create GitHub prerelease
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ inputs.version }}
           name: Zync Master App v${{ inputs.version }} (beta)
