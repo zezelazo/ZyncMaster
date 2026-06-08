@@ -38,25 +38,26 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
 // the Data Protection key ring.
 //
 // Connection string resolution: production MUST supply "ConnectionStrings:ZyncMasterDb"
-// (in Azure App Service this comes from the connection-strings blade — type "SQLAzure" —
-// surfaced to the app as the env var SQLAZURECONNSTR_ZyncMasterDb, or equivalently an app
-// setting "ConnectionStrings__ZyncMasterDb"). The LocalDB-style fallback below is ONLY used
-// in the Development environment; in any other environment a missing connection string is a
-// fail-fast configuration error rather than a silent fall-through to a non-existent LocalDB.
+// (on the VPS this is a plain env var ConnectionStrings__ZyncMasterDb read from the systemd
+// EnvironmentFile /etc/default/syncmaster, in Npgsql format). The localhost-PostgreSQL fallback
+// below is ONLY used in the Development environment; in any other environment a missing
+// connection string is a fail-fast configuration error rather than a silent fall-through.
 var connectionString = builder.Configuration.GetConnectionString("ZyncMasterDb");
 if (string.IsNullOrWhiteSpace(connectionString))
 {
     if (builder.Environment.IsDevelopment())
     {
+        // Local dev default: a PostgreSQL on localhost. Override via user-secrets / env var
+        // ConnectionStrings__ZyncMasterDb. Tests never reach this path (ServerTestFactory swaps SQLite).
         connectionString =
-            "Server=(localdb)\\MSSQLLocalDB;Database=ZyncMaster;Trusted_Connection=True;MultipleActiveResultSets=true";
+            "Host=localhost;Port=5432;Database=syncmaster_dev;Username=syncmaster_app;Password=devpassword";
     }
     else
     {
         throw new InvalidOperationException(
             "Missing required connection string 'ConnectionStrings:ZyncMasterDb'. " +
-            "In production set it via the Azure App Service connection-strings blade (type SQLAzure) " +
-            "or the app setting 'ConnectionStrings__ZyncMasterDb'.");
+            "In production set it via the systemd EnvironmentFile (/etc/default/syncmaster) as " +
+            "'ConnectionStrings__ZyncMasterDb' (Npgsql format: Host=...;Port=5432;Database=bd_syncmaster;Username=syncmaster_app;Password=...).");
     }
 }
 
@@ -73,9 +74,9 @@ ZyncMaster.Server.Configuration.StartupConfigValidator.ValidateOAuthConfig(
     builder.Environment.IsDevelopment(),
     builder.Configuration["Microsoft:ClientSecret"]);
 
-builder.Services.AddDbContextFactory<ZyncMasterDbContext>(o => o.UseSqlServer(connectionString));
+builder.Services.AddDbContextFactory<ZyncMasterDbContext>(o => o.UseNpgsql(connectionString));
 builder.Services.AddDbContext<ZyncMasterDbContext>(
-    o => o.UseSqlServer(connectionString),
+    o => o.UseNpgsql(connectionString),
     contextLifetime: ServiceLifetime.Scoped,
     optionsLifetime: ServiceLifetime.Singleton);
 
@@ -320,55 +321,9 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-// Apply pending EF Core migrations on startup against the configured SQL Server database.
-// This is guarded by IsSqlServer() so it runs for the real app but is SKIPPED under the
-// WebApplicationFactory test harness, which swaps the context to the SQLite provider and
-// builds its schema with EnsureCreated() — calling Migrate() on a SQLite/EnsureCreated DB
-// would throw on the relational-mismatch. The provider check is robust regardless of how
-// the test host is configured. Fail-fast: if migration throws we log and rethrow rather
-// than serve traffic against a half-migrated database.
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<ZyncMasterDbContext>();
-    if (db.Database.IsSqlServer())
-    {
-        var logger = scope.ServiceProvider
-            .GetRequiredService<ILoggerFactory>()
-            .CreateLogger("Startup.Migrate");
-        // Azure SQL (especially on the lower tiers / when waking) frequently resets the FIRST
-        // login TCP handshake on a cold start: "Connection reset by peer" / SqlException 35 during
-        // login. A single Migrate() attempt that hits that reset would kill the process and the
-        // container never binds its port -> Azure reports "did not start within 230s". So retry the
-        // migration with backoff, treating the first transient failures as the DB still coming up;
-        // only refuse to start (fail-fast against a half-migrated DB) once retries are exhausted.
-        const int maxAttempts = 8;
-        var delay = TimeSpan.FromSeconds(3);
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                logger.LogInformation("Applying pending database migrations (attempt {Attempt}/{Max}).", attempt, maxAttempts);
-                db.Database.Migrate();
-                logger.LogInformation("Database migrations applied.");
-                break;
-            }
-            catch (Exception ex) when (attempt < maxAttempts)
-            {
-                // Transient on a cold DB — log a warning and back off (capped) rather than crash.
-                logger.LogWarning(ex,
-                    "Database migration attempt {Attempt}/{Max} failed; retrying in {Delay}s.",
-                    attempt, maxAttempts, delay.TotalSeconds);
-                await Task.Delay(delay);
-                delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 1.8, 20));
-            }
-            catch (Exception ex)
-            {
-                logger.LogCritical(ex, "Database migration failed after {Max} attempts; refusing to start.", maxAttempts);
-                throw;
-            }
-        }
-    }
-}
+// NOTE: schema is NOT applied at startup. Production migrations run via `efbundle` as the
+// postgres superuser at deploy time (the app's DB role is CRUD-only, no DDL). The test host
+// (ServerTestFactory) builds its SQLite schema with EnsureCreated(). See the deploy spec.
 
 // Honour the Azure App Service reverse-proxy forwarded headers FIRST, before any middleware
 // that reads the client IP or scheme — the per-IP magic-link rate limiter and UseHttpsRedirection

@@ -6,8 +6,8 @@ using Xunit;
 namespace ZyncMaster.Server.Tests.Storage;
 
 // Guards against editing the EF model without adding a matching migration. The production
-// migrations are generated for the SQL Server provider, and the model snapshot under
-// Data/Migrations is provider-specific, so the context here is configured with UseSqlServer
+// migrations are generated for the PostgreSQL (Npgsql) provider, and the model snapshot under
+// Data/Migrations is provider-specific, so the context here is configured with UseNpgsql
 // (no real database is touched — HasPendingModelChanges compares the in-memory model against
 // the latest migration snapshot only). If this fails, run:
 //   dotnet ef migrations add <Name> -p src/ZyncMaster.Server -s src/ZyncMaster.Server
@@ -18,7 +18,7 @@ public class MigrationsIntegrityTests
     {
         var options = new DbContextOptionsBuilder<ZyncMasterDbContext>()
             // A syntactically valid connection string; HasPendingModelChanges does not open it.
-            .UseSqlServer("Server=(localdb)\\MSSQLLocalDB;Database=ZyncMaster_IntegrityCheck;Trusted_Connection=True")
+            .UseNpgsql("Host=localhost;Port=5432;Database=ZyncMaster_IntegrityCheck;Username=check;Password=check")
             .Options;
 
         using var db = new ZyncMasterDbContext(options);
