@@ -265,9 +265,11 @@ public sealed class EngineHost : IDisposable
     }
 
     // Hard ceiling on a single clipboard image (bytes) the device will publish. Mirrors the server's
-    // image cap so an oversize image is dropped before the wire, not 413'd after. 8 MiB is generous
-    // for a screenshot while bounding the per-item payload.
-    private const long ClipboardHardMaxImageBytes = 8L * 1024 * 1024;
+    // image cap so an oversize image is dropped client-side, not 413'd after. Kept in lockstep with
+    // ClipboardOptions.HardMaxImageBytes (src/ZyncMaster.Server/Modules/Clipboard/ClipboardOptions.cs
+    // + appsettings.json "Clipboard:HardMaxImageBytes" = 52428800), i.e. 50 MiB. The soft 25 MB cap
+    // is enforced separately by the server.
+    private const long ClipboardHardMaxImageBytes = 52_428_800L; // 50 MiB — matches server HardMaxImageBytes
 
     public void Dispose()
     {
