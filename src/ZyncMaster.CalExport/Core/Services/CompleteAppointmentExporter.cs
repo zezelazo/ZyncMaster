@@ -37,6 +37,8 @@ public sealed class CompleteAppointmentExporter : IAppointmentExporter
                 end                      = r.EndOffset.ToString("o"),
                 endUtc                   = r.EndOffset.UtcDateTime.ToString("o") + "Z",
                 durationMinutes          = r.Duration,
+                // When the original invitation/appointment was created at the source (null if unknown).
+                created                  = r.Created?.ToString("o"),
                 organizer = new
                 {
                     name  = r.OrganizerName,

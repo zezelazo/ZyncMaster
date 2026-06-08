@@ -140,7 +140,7 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
             $"{GraphBaseUrl}me/calendars/{Uri.EscapeDataString(calendarId)}/calendarView" +
             $"?startDateTime={Uri.EscapeDataString(start)}" +
             $"&endDateTime={Uri.EscapeDataString(end)}" +
-            "&$select=id,iCalUId,subject,body,start,end,isAllDay,isCancelled,organizer" +
+            "&$select=id,iCalUId,subject,body,start,end,isAllDay,isCancelled,organizer,createdDateTime" +
             "&$top=50";
 
         var records = new List<AppointmentRecord>();
@@ -229,6 +229,11 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
             EndOffset = endOffset,
             StartTimeZoneId = startTimeZone,
             StartTimeZoneDisplayName = startTimeZone,
+            Created = System.DateTimeOffset.TryParse(
+                ev["createdDateTime"]?.Value<string>(),
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out var createdVal) ? createdVal : (System.DateTimeOffset?)null,
         };
     }
 

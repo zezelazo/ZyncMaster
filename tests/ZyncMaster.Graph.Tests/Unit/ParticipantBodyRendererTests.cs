@@ -28,6 +28,25 @@ public sealed class ParticipantBodyRendererTests
     }
 
     [Fact]
+    public void BuildBodyForCreate_RendersInvitationCreated_WhenProvided()
+    {
+        var created = new DateTimeOffset(2026, 6, 8, 14, 30, 0, TimeSpan.FromHours(-5));
+
+        var html = _sut.BuildBodyForCreate("Desc", Array.Empty<ParticipantRecord>(), created);
+
+        html.Should().Contain("Invitation created:");
+        html.Should().Contain("2026-06-08 14:30");
+    }
+
+    [Fact]
+    public void BuildBodyForCreate_OmitsInvitationCreated_WhenNull()
+    {
+        var html = _sut.BuildBodyForCreate("Desc", Array.Empty<ParticipantRecord>(), created: null);
+
+        html.Should().NotContain("Invitation created");
+    }
+
+    [Fact]
     public void BuildBodyForCreate_NoDescription_OnlyBlock()
     {
         var html = _sut.BuildBodyForCreate("", SampleParticipants());

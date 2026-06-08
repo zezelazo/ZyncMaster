@@ -365,6 +365,7 @@ public sealed class OutlookCalendarService : ICalendarService
                 EndOffset                = endOffset,
                 StartTimeZoneId          = tzId,
                 StartTimeZoneDisplayName = tzDisplayName,
+                Created                  = TryGetCreationTime(appt),
                 Participants             = participants,
             };
         }
@@ -392,6 +393,19 @@ public sealed class OutlookCalendarService : ICalendarService
     {
         try   { return (string)(appt.GlobalAppointmentID ?? ""); }
         catch { return ""; }
+    }
+
+    // Outlook AppointmentItem.CreationTime (local DateTime). Best-effort: a COM/property failure yields
+    // null so the export still succeeds without the "invitation created" line.
+    private static DateTimeOffset? TryGetCreationTime(dynamic appt)
+    {
+        try
+        {
+            DateTime created = appt.CreationTime;
+            if (created == default) return null;
+            return new DateTimeOffset(created, TimeZoneInfo.Local.GetUtcOffset(created));
+        }
+        catch { return null; }
     }
 
     private static string ResolveId(string globalAppointmentId, string organizerEmail, DateTimeOffset start, string subject)

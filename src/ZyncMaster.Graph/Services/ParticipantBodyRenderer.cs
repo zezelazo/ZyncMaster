@@ -16,7 +16,7 @@ public sealed class ParticipantBodyRenderer : IParticipantRenderer
         @"<!--\s*calimport:participants:start\s*-->.*?<!--\s*calimport:participants:end\s*-->",
         RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public string BuildBodyForCreate(string description, IReadOnlyList<ParticipantRecord> participants)
+    public string BuildBodyForCreate(string description, IReadOnlyList<ParticipantRecord> participants, DateTimeOffset? created = null)
     {
         if (participants == null) throw new ArgumentNullException(nameof(participants));
 
@@ -25,6 +25,16 @@ public sealed class ParticipantBodyRenderer : IParticipantRenderer
         // Participants go first so they are visible at the top of the event body.
         if (participants.Count > 0)
             sb.Append(RenderBlock(participants));
+
+        // "Invitation created" line: when the original appointment/invitation was created at the source.
+        if (created is { } c)
+        {
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append("<p><b>Invitation created:</b> ");
+            sb.Append(WebUtility.HtmlEncode(
+                c.ToString("yyyy-MM-dd HH:mm zzz", System.Globalization.CultureInfo.InvariantCulture)));
+            sb.Append("</p>");
+        }
 
         if (!string.IsNullOrEmpty(description))
         {

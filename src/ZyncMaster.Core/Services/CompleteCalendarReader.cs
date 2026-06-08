@@ -95,6 +95,13 @@ public sealed class CompleteCalendarReader
         var durationMinutes = ReadRequiredInt(ev, "durationMinutes", index);
         var description     = ev["description"]?.Value<string>()              ?? "";
 
+        // Optional "created" (the source invitation creation time, ISO 8601). Absent/blank => null.
+        var createdStr      = ev["created"]?.Value<string>();
+        DateTimeOffset? created = !string.IsNullOrEmpty(createdStr)
+            && DateTimeOffset.TryParse(createdStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdVal)
+            ? createdVal
+            : (DateTimeOffset?)null;
+
         var organizer       = ev["organizer"] as JObject;
         var organizerName   = organizer?["name"]?.Value<string>()  ?? "";
         var organizerEmail  = organizer?["email"]?.Value<string>() ?? "";
@@ -137,6 +144,7 @@ public sealed class CompleteCalendarReader
             EndOffset                = endOffset,
             StartTimeZoneId          = tzId,
             StartTimeZoneDisplayName = tzDisplay,
+            Created                  = created,
             Participants             = participants,
         };
     }

@@ -16,7 +16,7 @@ public sealed class EventDraftBuilder
     {
         if (record == null) throw new ArgumentNullException(nameof(record));
 
-        var body = _renderer.BuildBodyForCreate(record.Description, record.Participants);
+        var body = _renderer.BuildBodyForCreate(record.Description, record.Participants, record.Created);
         return BuildCommon(record, reminderMinutes, body, pairId);
     }
 
@@ -32,7 +32,7 @@ public sealed class EventDraftBuilder
         // were gone, the merge couldn't find the block, and it PREPENDED a fresh one every time — the
         // participants list accumulated N copies. Rebuilding from the source each update is idempotent and
         // replaces completely. existingBodyHtml is intentionally no longer used.
-        var body = _renderer.BuildBodyForCreate(record.Description, record.Participants);
+        var body = _renderer.BuildBodyForCreate(record.Description, record.Participants, record.Created);
         return BuildCommon(record, reminderMinutes, body, pairId);
     }
 

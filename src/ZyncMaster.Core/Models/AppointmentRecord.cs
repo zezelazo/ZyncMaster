@@ -25,6 +25,11 @@ public sealed class AppointmentRecord
     public string         StartTimeZoneDisplayName { get; init; } = "";
     public string         Description              { get; init; } = "";
 
+    // When the invitation/appointment was created at the source (Outlook AppointmentItem.CreationTime
+    // for COM; Graph event createdDateTime). Null when the source did not report it. Rendered into the
+    // mirrored event body so the destination shows when the original invitation was created.
+    public DateTimeOffset? Created                 { get; init; }
+
     public IReadOnlyList<ParticipantRecord> Participants { get; init; }
         = Array.Empty<ParticipantRecord>();
 }
