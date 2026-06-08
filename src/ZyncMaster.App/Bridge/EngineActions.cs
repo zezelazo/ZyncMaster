@@ -183,10 +183,21 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
         // Track the live online roster the server pushes over the connection. Once any presence frame
         // has been seen it becomes the authoritative online set for the devices view (the last-seen
-        // heuristic is only the fallback until then).
+        // heuristic is only the fallback until then). A reset (socket drop) discards the cached roster
+        // so the fallback rescues a live device during the reconnect window, and a settings broadcast
+        // is re-raised so the host can push it to the user's other open windows.
         if (_clipboardTransport is not null)
+        {
             _clipboardTransport.PresenceChanged += OnPresenceChanged;
+            _clipboardTransport.PresenceReset += OnPresenceReset;
+            _clipboardTransport.SettingsChanged += OnSettingsChanged;
+        }
     }
+
+    // Raised when the host should push a per-device clipboard settings change to the UI (so the user's
+    // other open windows update without a manual refresh). Wired by the composition root; a no-op when
+    // nothing subscribes (headless/tests). Carries the affected device id and its new settings.
+    public event Action<string, ClipboardSettings>? ClipboardSettingsChanged;
 
     // Caches the latest online-device set from a server presence broadcast. Replacing the whole set on
     // each frame keeps it consistent with the server's authoritative roster (a device dropping off is
@@ -197,6 +208,18 @@ public sealed class EngineActions : IEngineActions, IDisposable
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(onlineDeviceIds, StringComparer.Ordinal);
     }
+
+    // The live connection dropped: the cached roster is stale, so clear it. GetClipboardDevices then
+    // falls back to the LastSeenUtc <= DeviceOnlineWindow heuristic until a fresh presence frame
+    // arrives — a genuinely-online device (last-seen within the window) is rescued instead of being
+    // stuck "offline" because the non-null cache bypassed the fallback.
+    private void OnPresenceReset() => _onlineDeviceIds = null;
+
+    // A server settings broadcast for some device: re-raise it so the host can push the change to the
+    // user's other open windows (next phase). EngineActions itself only relays — it does not persist
+    // here (the originating PATCH already did).
+    private void OnSettingsChanged(string deviceId, ClipboardSettings settings)
+        => ClipboardSettingsChanged?.Invoke(deviceId, settings);
 
     // Seeds the live clipboard settings + this device's identity once the App has loaded them (after
     // sign-in + device registration). Called by EngineHost/App composition before the capture loop
@@ -1324,7 +1347,11 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public void Dispose()
     {
         if (_clipboardTransport is not null)
+        {
             _clipboardTransport.PresenceChanged -= OnPresenceChanged;
+            _clipboardTransport.PresenceReset -= OnPresenceReset;
+            _clipboardTransport.SettingsChanged -= OnSettingsChanged;
+        }
         _registerGate.Dispose();
         _ownedHttp?.Dispose();
     }

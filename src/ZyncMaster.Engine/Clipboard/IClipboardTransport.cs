@@ -23,4 +23,16 @@ public interface IClipboardTransport
     // the full set of currently-online device ids. Consumers (the devices view) prefer this live set
     // and fall back to the last-seen heuristic until the first presence frame arrives.
     event Action<IReadOnlyList<string>> PresenceChanged;
+
+    // Raised when the live connection DROPS (not a clean shutdown). The last cached presence roster is
+    // now stale — a device that was "online" may simply be in the reconnect window — so consumers must
+    // DISCARD the cached roster and fall back to the last-seen heuristic until a fresh presence frame
+    // arrives on the next connect. Without this reset a genuinely-online device shows offline during
+    // the reconnect window (the non-null cache bypasses the fallback).
+    event Action PresenceReset;
+
+    // Raised when the server broadcasts a per-device clipboard settings change ({type:"settings",
+    // deviceId, settings:{...}}) so the user's OTHER open windows update without a manual refresh. The
+    // arguments are the affected device id and its new settings.
+    event Action<string, ClipboardSettings> SettingsChanged;
 }

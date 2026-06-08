@@ -496,6 +496,50 @@ public class ClipboardBridgeTests
     }
 
     [Fact]
+    public async Task PresenceReset_clears_cached_roster_and_falls_back_to_lastSeen_window()
+    {
+        // BUG A fix: when the live socket drops the App must DISCARD the last presence frame so a
+        // genuinely-online device is rescued by the 10-min last-seen fallback during the reconnect
+        // window (instead of being stuck "offline" because the stale non-null cache bypassed it).
+        var now = DateTimeOffset.UtcNow;
+        var clock = new Mock<IClock>();
+        clock.SetupGet(c => c.UtcNow).Returns(now);
+
+        var devices = new Mock<IClipboardDevicesSource>();
+        devices.Setup(d => d.ListDevicesAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardDeviceRow>)new[]
+            {
+                new ClipboardDeviceRow { Id = "dev-A", Name = "A", LastSeenUtc = now.AddHours(-3) },   // stale -> offline
+                new ClipboardDeviceRow { Id = "dev-B", Name = "B", LastSeenUtc = now.AddMinutes(-1) }, // within window
+                new ClipboardDeviceRow { Id = "dev-C", Name = "C", LastSeenUtc = now.AddMinutes(-20) },// older than 10min -> offline
+            });
+
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetSettingsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ClipboardSettings());
+
+        var actions = BuildEngine(transport, devices: devices, clock: clock.Object);
+
+        // 1) A presence frame seeds [A,B,C] with only B online.
+        transport.Raise(t => t.PresenceChanged += null, (IReadOnlyList<string>)new[] { "dev-B" });
+
+        // 2) The socket drops -> the transport raises a presence RESET (no live roster anymore).
+        transport.Raise(t => t.PresenceReset += null);
+
+        var view = await actions.GetClipboardDevicesAsync(CancellationToken.None);
+
+        // The cache is cleared, so the last-seen window governs: B (1 min ago) is rescued ONLINE,
+        // while A (3h) and C (20 min, older than the 10-min window) are offline.
+        view.Devices.Should().HaveCount(3);
+        view.Devices[0].Id.Should().Be("dev-A");
+        view.Devices[0].Online.Should().BeFalse();
+        view.Devices[1].Id.Should().Be("dev-B");
+        view.Devices[1].Online.Should().BeTrue();   // rescued by the fallback
+        view.Devices[2].Id.Should().Be("dev-C");
+        view.Devices[2].Online.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetClipboardDevices_falls_back_to_lastSeen_when_no_presence_received()
     {
         var now = DateTimeOffset.UtcNow;
@@ -722,5 +766,69 @@ public class ClipboardBridgeTests
         await actions.CloseClipboardViewerAsync(CancellationToken.None);
 
         closed.Should().Be(1);
+    }
+
+    // ---------- BUG B: settings broadcast subscription ----------
+
+    [Fact]
+    public void ClipboardSettingsChanged_relays_a_transport_settings_event_with_deviceId_and_values()
+    {
+        // BUG B fix (App side): a server 'settings' broadcast surfaces on the transport as
+        // SettingsChanged(deviceId, settings); EngineActions re-raises it so the host can push it to
+        // the other open windows.
+        var transport = new Mock<IClipboardTransport>();
+        var actions = BuildEngine(transport);
+
+        string? gotDeviceId = null;
+        ClipboardSettings? gotSettings = null;
+        actions.ClipboardSettingsChanged += (id, s) => { gotDeviceId = id; gotSettings = s; };
+
+        transport.Raise(t => t.SettingsChanged += null,
+            "dev-9", new ClipboardSettings { Density = "mini", Send = false, AutoSync = false });
+
+        gotDeviceId.Should().Be("dev-9");
+        gotSettings.Should().NotBeNull();
+        gotSettings!.Density.Should().Be("mini");
+        gotSettings.Send.Should().BeFalse();
+        gotSettings.AutoSync.Should().BeFalse();
+    }
+
+    // ---------- HttpWsClipboardTransport.HandleFrame: 'settings' frame ----------
+
+    [Fact]
+    public void HandleFrame_settings_frame_raises_SettingsChanged_with_deviceId_and_values()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        string? gotDeviceId = null;
+        ClipboardSettings? gotSettings = null;
+        transport.SettingsChanged += (id, s) => { gotDeviceId = id; gotSettings = s; };
+
+        transport.HandleFrame(
+            "{\"type\":\"settings\",\"deviceId\":\"dev-7\",\"settings\":{\"autoSync\":false,\"send\":false,\"receive\":true,\"density\":\"mini\",\"showHints\":false,\"viewerHotkey\":\"Ctrl+Shift+V\"}}");
+
+        gotDeviceId.Should().Be("dev-7");
+        gotSettings.Should().NotBeNull();
+        gotSettings!.AutoSync.Should().BeFalse();
+        gotSettings.Send.Should().BeFalse();
+        gotSettings.Receive.Should().BeTrue();
+        gotSettings.Density.Should().Be("mini");
+        gotSettings.ShowHints.Should().BeFalse();
+        gotSettings.ViewerHotkey.Should().Be("Ctrl+Shift+V");
+    }
+
+    [Fact]
+    public void HandleFrame_settings_frame_missing_deviceId_does_not_raise()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        var raised = 0;
+        transport.SettingsChanged += (_, _) => raised++;
+
+        transport.HandleFrame("{\"type\":\"settings\",\"settings\":{\"density\":\"mini\"}}");
+
+        raised.Should().Be(0);
     }
 }

@@ -36,6 +36,8 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
     public event Action<ClipboardEntry>? ItemReceived;
     public event Action<string, byte[]>? KeyReceived;
     public event Action<IReadOnlyList<string>>? PresenceChanged;
+    public event Action? PresenceReset;
+    public event Action<string, ClipboardSettings>? SettingsChanged;
 
     // The latest online-device roster the server pushed via a "presence" frame. Null until the first
     // presence frame arrives (so consumers can tell "no presence yet" from "presence says nobody is
@@ -170,6 +172,12 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
             try
             {
                 using var socket = new ClientWebSocket();
+                // Keepalive PINGs surface a dead/half-open connection that ReceiveAsync would otherwise
+                // sit on forever (no server frames arrive on a silently-dropped socket). A failed PING
+                // faults the receive, breaking PumpAsync so the loop reconnects — without this the App
+                // keeps a phantom-online presence cache through the dead window.
+                socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+
                 var apiKey = await _apiKeyProvider(ct).ConfigureAwait(false);
                 socket.Options.SetRequestHeader(ApiKeyHeader, apiKey);
 
@@ -190,6 +198,13 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
 
             if (ct.IsCancellationRequested)
                 return;
+
+            // The connection just dropped (PumpAsync returned, or a failure threw) and we are NOT
+            // shutting down: the cached presence roster is now stale. Discard it and signal a reset so
+            // the devices view falls back to the last-seen heuristic during the reconnect window — a
+            // genuinely-online device is rescued by the fallback instead of being stuck "offline".
+            _onlineDeviceIds = null;
+            PresenceReset?.Invoke();
 
             try { await Task.Delay(backoff, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
@@ -224,7 +239,9 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
         }
     }
 
-    private void HandleFrame(string json)
+    // internal (not private) so the frame-routing logic can be unit-tested directly without a live
+    // socket. The rest of the transport stays an untested process boundary.
+    internal void HandleFrame(string json)
     {
         JObject frame;
         try
@@ -267,6 +284,18 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
                 var online = ParseOnlineIds(frame["onlineDeviceIds"] as JArray);
                 _onlineDeviceIds = online;
                 PresenceChanged?.Invoke(online);
+                break;
+
+            case "settings":
+                // Server broadcast of a per-device settings change so the user's other open windows
+                // update live. A frame without a deviceId is malformed and ignored (we have nothing to
+                // attribute the change to); the settings object falls back to defaults per field.
+                var settingsDeviceId = frame["deviceId"]?.Value<string>();
+                if (!string.IsNullOrEmpty(settingsDeviceId))
+                {
+                    var settings = MapSettings(frame["settings"] as JObject ?? new JObject());
+                    SettingsChanged?.Invoke(settingsDeviceId, settings);
+                }
                 break;
         }
     }
