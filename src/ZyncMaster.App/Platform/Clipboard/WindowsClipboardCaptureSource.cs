@@ -93,11 +93,16 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
         var dib = Win32Clipboard.TryReadImageDib();
         if (dib is { Length: > 0 })
         {
+            // ImageBytes stays the raw CF_DIB (the server stores it verbatim). Additionally build a
+            // small downscaled PNG so the viewer shows a real preview; a failed/oversize decode just
+            // leaves Thumbnail null (typed tile only). DibThumbnailEncoder is best-effort and never
+            // throws, so capture is never blocked by a bad image.
             return new ClipboardEntry
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Type = ClipboardEntryType.Image,
                 ImageBytes = dib,
+                Thumbnail = DibThumbnailEncoder.TryCreatePngThumbnail(dib),
                 SizeBytes = dib.Length,
                 CreatedUtc = _now(),
                 OriginDeviceId = id,
