@@ -7,6 +7,10 @@ public sealed class ServerOptions
     public string RedirectUri { get; set; } = "";
     public string Scopes { get; set; } = "offline_access Calendars.ReadWrite User.Read";
 
+    // Reverse-proxy path prefix the app is mounted under (e.g. "/zync"). Empty in local dev and
+    // tests. Set in production via Server__PathBase to match the nginx location.
+    public string PathBase { get; init; } = string.Empty;
+
     // Identity (sign-in) OAuth scopes. Distinct from calendar Scopes above: this flow only
     // proves who the user is (openid email profile), it NEVER requests calendar access nor
     // stores a calendar refresh token. Connecting a calendar is a separate, later flow.

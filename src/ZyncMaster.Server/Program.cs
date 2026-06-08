@@ -28,7 +28,8 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
 {
     o.ForwardedHeaders =
         Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
-        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto |
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedHost;
     o.KnownIPNetworks.Clear();
     o.KnownProxies.Clear();
 });
@@ -330,6 +331,14 @@ var app = builder.Build();
 // both depend on RemoteIpAddress / Request.Scheme reflecting the real client, not the proxy. See
 // the ForwardedHeadersOptions registration above for why clearing the known-proxy list is safe on
 // App Service (the front-end overwrites X-Forwarded-* and is the only ingress).
+//
+// UsePathBase FIRST (before forwarded headers and any routing), so the app serves correctly under
+// nginx's /zync/ prefix. Empty in local dev and tests (Server:PathBase defaults to ""), so those
+// hosts are unaffected and routes resolve at the root.
+var pathBase = builder.Configuration.GetSection("Server").Get<ServerOptions>()?.PathBase ?? string.Empty;
+if (!string.IsNullOrWhiteSpace(pathBase))
+    app.UsePathBase(pathBase);
+
 app.UseForwardedHeaders();
 
 // Security headers (L3). Applied to every response, including static panel/UI assets.
