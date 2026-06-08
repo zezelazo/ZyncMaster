@@ -353,6 +353,15 @@ public sealed class DeviceService
             return primary == 19 || extended == 2067;
         }
 
+        // PostgreSQL — Npgsql.PostgresException.SqlState "23505" is unique_violation. Matched by
+        // type FullName + reflected string property (same provider-agnostic approach as above), so
+        // DeviceService needs no compile-time reference to Npgsql's exception type.
+        if (typeName == "Npgsql.PostgresException")
+        {
+            var sqlState = ReadStringProperty(inner, "SqlState");
+            return sqlState == "23505";
+        }
+
         return false;
     }
 
@@ -365,6 +374,12 @@ public sealed class DeviceService
             return null;
         var value = prop.GetValue(instance);
         return value is int i ? i : null;
+    }
+
+    private static string? ReadStringProperty(Exception ex, string name)
+    {
+        var prop = ex.GetType().GetProperty(name);
+        return prop?.GetValue(ex) as string;
     }
 
     // Returns the device identified by the api-key principal (the caller's own device), or null if

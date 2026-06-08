@@ -76,11 +76,18 @@ public sealed class EfSyncRunLock : ISyncRunLock
     // pair is busy. We surface that as "not acquired" rather than throwing.
     private static bool IsUniqueViolation(Exception ex)
     {
-        var t = ex.GetType().Name;
+        var t = ex.GetType();
+        var fullName = t.FullName ?? "";
+        // PostgreSQL: Npgsql.PostgresException.SqlState 23505 (unique_violation).
+        if (fullName == "Npgsql.PostgresException"
+            && t.GetProperty("SqlState")?.GetValue(ex) as string == "23505")
+            return true;
+        // SQLite (tests): SqliteException SQLITE_CONSTRAINT(_UNIQUE).
+        if (fullName == "Microsoft.Data.Sqlite.SqliteException")
+            return true;
+        // Fallback for providers/messages we don't special-case (PK collision on INSERT).
         var msg = ex.Message ?? "";
-        return t.Contains("Sqlite", StringComparison.OrdinalIgnoreCase)
-            || t.Contains("SqlException", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase)
+        return msg.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase)
             || msg.Contains("PRIMARY KEY", StringComparison.OrdinalIgnoreCase)
             || msg.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
     }
