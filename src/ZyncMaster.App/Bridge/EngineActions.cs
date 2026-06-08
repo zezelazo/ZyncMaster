@@ -87,8 +87,15 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public Func<ClipboardEntry, CancellationToken, Task<bool>>? PasteThroughClipboardService { get; set; }
 
     // Device is considered online when its last-seen lease is within this window. The server heartbeat
-    // runs comfortably inside this, so a live App keeps its device "online" for the roster.
+    // runs comfortably inside this, so a live App keeps its device "online" for the roster. Used as the
+    // FALLBACK when no live presence frame has been received yet.
     private static readonly TimeSpan DeviceOnlineWindow = TimeSpan.FromMinutes(10);
+
+    // The latest live online-device roster the transport reported via PresenceChanged, or null until the
+    // first presence frame arrives. When present it is the authoritative "who is online" set for the
+    // devices view; until then GetClipboardDevices falls back to the DeviceOnlineWindow last-seen
+    // heuristic. Stored as a HashSet for O(1) membership; replaced wholesale on each presence frame.
+    private volatile HashSet<string>? _onlineDeviceIds;
 
     // One warm-up probe must fail fast, not hang on the App's default HttpClient timeout: the UI
     // re-polls, so a short per-attempt budget keeps the "waking up" feedback responsive.
@@ -173,6 +180,22 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _clipboardKeys = clipboardKeys;
         _clipboardHotkey = clipboardHotkey;
         _clipboardDevices = clipboardDevices;
+
+        // Track the live online roster the server pushes over the connection. Once any presence frame
+        // has been seen it becomes the authoritative online set for the devices view (the last-seen
+        // heuristic is only the fallback until then).
+        if (_clipboardTransport is not null)
+            _clipboardTransport.PresenceChanged += OnPresenceChanged;
+    }
+
+    // Caches the latest online-device set from a server presence broadcast. Replacing the whole set on
+    // each frame keeps it consistent with the server's authoritative roster (a device dropping off is
+    // simply absent from the next frame).
+    private void OnPresenceChanged(IReadOnlyList<string> onlineDeviceIds)
+    {
+        _onlineDeviceIds = onlineDeviceIds is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(onlineDeviceIds, StringComparer.Ordinal);
     }
 
     // Seeds the live clipboard settings + this device's identity once the App has loaded them (after
@@ -1020,9 +1043,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
         };
     }
 
-    // Best-effort small PNG data URI for an image item. Only the stored Thumbnail (already a PNG when
-    // the server/origin produced one) is surfaced; the raw CF_DIB ImageBytes are NOT converted here
-    // (DIB->PNG is a known follow-up). Returns null when there is no cheap preview.
+    // Best-effort small PNG data URI for an image item. Only the stored Thumbnail (a downscaled PNG the
+    // origin produced at capture from the CF_DIB via DibThumbnailEncoder) is surfaced; the raw CF_DIB
+    // ImageBytes are NOT decoded here. Returns null when there is no thumbnail (older items, or a
+    // capture whose decode failed).
     private static string? BuildImagePreview(ClipboardEntry entry)
     {
         if (entry.Thumbnail is { Length: > 0 } thumb)
@@ -1044,6 +1068,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
             .ConfigureAwait(false);
 
         var now = _clock.UtcNow;
+        // Prefer the live presence roster when the server has pushed at least one frame; otherwise fall
+        // back per-device to the last-seen-within-window heuristic. Snapshot the volatile reference once
+        // so the whole view is computed against a single consistent roster.
+        var presence = _onlineDeviceIds;
         var views = new List<ClipboardDeviceView>(rows.Count);
         foreach (var row in rows)
         {
@@ -1067,7 +1095,9 @@ public sealed class EngineActions : IEngineActions, IDisposable
             {
                 Id = row.Id,
                 Name = row.Name,
-                Online = row.LastSeenUtc is { } seen && now - seen <= DeviceOnlineWindow,
+                Online = presence is not null
+                    ? presence.Contains(row.Id)
+                    : row.LastSeenUtc is { } seen && now - seen <= DeviceOnlineWindow,
                 IsThis = !string.IsNullOrEmpty(_clipboardDeviceId)
                          && string.Equals(row.Id, _clipboardDeviceId, StringComparison.Ordinal),
                 Settings = ToSettingsView(settings),
@@ -1267,6 +1297,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
     public void Dispose()
     {
+        if (_clipboardTransport is not null)
+            _clipboardTransport.PresenceChanged -= OnPresenceChanged;
         _registerGate.Dispose();
         _ownedHttp?.Dispose();
     }

@@ -35,6 +35,15 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
 
     public event Action<ClipboardEntry>? ItemReceived;
     public event Action<string, byte[]>? KeyReceived;
+    public event Action<IReadOnlyList<string>>? PresenceChanged;
+
+    // The latest online-device roster the server pushed via a "presence" frame. Null until the first
+    // presence frame arrives (so consumers can tell "no presence yet" from "presence says nobody is
+    // online" and fall back to the last-seen heuristic accordingly).
+    private volatile IReadOnlyList<string>? _onlineDeviceIds;
+
+    // The last online set the server reported, or null when no presence frame has been seen yet.
+    public IReadOnlyList<string>? LatestOnlineDeviceIds => _onlineDeviceIds;
 
     // apiKeyProvider supplies the device api key for the X-Api-Key header (the App's device-key store
     // feeds it), matching how the App's other device-key calls obtain auth.
@@ -251,7 +260,13 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
                 break;
 
             case "presence":
-                // Online-device roster — not surfaced today; safe to ignore.
+                // Server roster broadcast on any device connect/disconnect: cache the live online set
+                // and notify so the devices view can prefer it over the last-seen heuristic. A missing/
+                // malformed list is treated as an empty roster (everyone offline) rather than ignored,
+                // so a genuine "all offline" presence still updates consumers.
+                var online = ParseOnlineIds(frame["onlineDeviceIds"] as JArray);
+                _onlineDeviceIds = online;
+                PresenceChanged?.Invoke(online);
                 break;
         }
     }
@@ -308,6 +323,23 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
         ["density"] = s.Density,
         ["showHints"] = s.ShowHints,
     };
+
+    // Reads the onlineDeviceIds array of a presence frame into a string list, skipping null/blank
+    // entries. A null array (field absent) yields an empty list — "nobody online".
+    private static IReadOnlyList<string> ParseOnlineIds(JArray? arr)
+    {
+        if (arr is null)
+            return Array.Empty<string>();
+
+        var ids = new List<string>(arr.Count);
+        foreach (var token in arr)
+        {
+            var id = token?.Value<string>();
+            if (!string.IsNullOrEmpty(id))
+                ids.Add(id);
+        }
+        return ids;
+    }
 
     private static byte[]? DecodeBase64(string? value)
     {

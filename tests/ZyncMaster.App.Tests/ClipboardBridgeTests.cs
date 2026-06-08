@@ -419,6 +419,72 @@ public class ClipboardBridgeTests
     }
 
     [Fact]
+    public async Task GetClipboardDevices_prefers_live_presence_over_lastSeen()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var clock = new Mock<IClock>();
+        clock.SetupGet(c => c.UtcNow).Returns(now);
+
+        var devices = new Mock<IClipboardDevicesSource>();
+        devices.Setup(d => d.ListDevicesAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardDeviceRow>)new[]
+            {
+                // dev-1 was last seen long ago (heuristic => offline) but presence says it IS online.
+                new ClipboardDeviceRow { Id = "dev-1", Name = "Studio PC", LastSeenUtc = now.AddHours(-3) },
+                // dev-2 was last seen recently (heuristic => online) but presence does NOT list it.
+                new ClipboardDeviceRow { Id = "dev-2", Name = "Laptop", LastSeenUtc = now.AddMinutes(-1) },
+            });
+
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetSettingsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ClipboardSettings());
+
+        var actions = BuildEngine(transport, devices: devices, clock: clock.Object);
+
+        // The server pushes a presence frame: only dev-1 is online.
+        transport.Raise(t => t.PresenceChanged += null,
+            (IReadOnlyList<string>)new[] { "dev-1" });
+
+        var view = await actions.GetClipboardDevicesAsync(CancellationToken.None);
+
+        // Presence is authoritative: dev-1 online (despite stale last-seen), dev-2 offline (despite
+        // fresh last-seen).
+        view.Devices.Should().HaveCount(2);
+        view.Devices[0].Id.Should().Be("dev-1");
+        view.Devices[0].Online.Should().BeTrue();
+        view.Devices[1].Id.Should().Be("dev-2");
+        view.Devices[1].Online.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetClipboardDevices_falls_back_to_lastSeen_when_no_presence_received()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var clock = new Mock<IClock>();
+        clock.SetupGet(c => c.UtcNow).Returns(now);
+
+        var devices = new Mock<IClipboardDevicesSource>();
+        devices.Setup(d => d.ListDevicesAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardDeviceRow>)new[]
+            {
+                new ClipboardDeviceRow { Id = "dev-1", Name = "Studio PC", LastSeenUtc = now.AddMinutes(-1) }, // online
+                new ClipboardDeviceRow { Id = "dev-2", Name = "Laptop", LastSeenUtc = now.AddHours(-2) },      // offline
+            });
+
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetSettingsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ClipboardSettings());
+
+        var actions = BuildEngine(transport, devices: devices, clock: clock.Object);
+
+        // No PresenceChanged ever fires -> the last-seen heuristic governs.
+        var view = await actions.GetClipboardDevicesAsync(CancellationToken.None);
+
+        view.Devices[0].Online.Should().BeTrue();
+        view.Devices[1].Online.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task UpdateClipboardSettings_persists_via_transport_and_validates_density()
     {
         var transport = new Mock<IClipboardTransport>();

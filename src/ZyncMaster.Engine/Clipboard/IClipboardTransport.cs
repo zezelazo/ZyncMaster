@@ -17,4 +17,10 @@ public interface IClipboardTransport
     Task ConnectAsync(CancellationToken ct = default);
     event Action<ClipboardEntry> ItemReceived;
     event Action<string, byte[]> KeyReceived;
+
+    // Raised when the server broadcasts the live online-device roster ({type:"presence",
+    // onlineDeviceIds:[...]}) over the connection (on any device connect/disconnect). The argument is
+    // the full set of currently-online device ids. Consumers (the devices view) prefer this live set
+    // and fall back to the last-seen heuristic until the first presence frame arrives.
+    event Action<IReadOnlyList<string>> PresenceChanged;
 }

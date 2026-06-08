@@ -42,6 +42,7 @@ public sealed class ClipboardServiceTests
 
         public event Action<ClipboardEntry>? ItemReceived;
         public event Action<string, byte[]>? KeyReceived;
+        public event Action<IReadOnlyList<string>> PresenceChanged { add { } remove { } }
         public void RaiseItem(ClipboardEntry e) => ItemReceived?.Invoke(e);
         public void RaiseKey(string from, byte[] wrapped) => KeyReceived?.Invoke(from, wrapped);
     }

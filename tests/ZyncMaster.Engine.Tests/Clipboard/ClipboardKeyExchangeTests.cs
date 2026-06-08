@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -59,6 +60,7 @@ public sealed class ClipboardKeyExchangeTests
         public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
         public event Action<ClipboardEntry> ItemReceived { add { } remove { } }
         public event Action<string, byte[]> KeyReceived { add { } remove { } }
+        public event Action<IReadOnlyList<string>> PresenceChanged { add { } remove { } }
     }
 
     [Fact]
