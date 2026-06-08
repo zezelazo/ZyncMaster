@@ -61,6 +61,8 @@ public sealed class ClipboardKeyExchangeTests
         public event Action<ClipboardEntry> ItemReceived { add { } remove { } }
         public event Action<string, byte[]> KeyReceived { add { } remove { } }
         public event Action<IReadOnlyList<string>> PresenceChanged { add { } remove { } }
+        public event Action PresenceReset { add { } remove { } }
+        public event Action<string, ClipboardSettings> SettingsChanged { add { } remove { } }
     }
 
     [Fact]

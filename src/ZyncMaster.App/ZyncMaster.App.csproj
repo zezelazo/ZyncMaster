@@ -33,6 +33,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Exposes internals (e.g. HttpWsClipboardTransport.HandleFrame) so the WS frame-routing logic
+         can be unit-tested without a live socket. -->
+    <InternalsVisibleTo Include="ZyncMaster.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ZyncMaster.Engine\ZyncMaster.Engine.csproj" />
     <ProjectReference Include="..\ZyncMaster.Core\ZyncMaster.Core.csproj" />
 

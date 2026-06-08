@@ -258,6 +258,75 @@ public class ClipboardBridgeTests
         msg.GetProperty("payload").GetProperty("text").GetString().Should().Be("live");
     }
 
+    [Fact]
+    public void PushClipboardPresence_sends_a_clipboard_presence_event_with_onlineDeviceIds()
+    {
+        // BUG A fix (push side): the host relays a presence change to the UI as a "re-fetch the roster"
+        // signal carrying the current online ids.
+        var transport = new FakeTransport();
+        var engine = new ClipboardSpyActions();
+        var bridge = new UiBridge(transport, engine);
+
+        bridge.PushClipboardPresence(new[] { "a", "b" });
+
+        transport.Sent.Should().ContainSingle();
+        var msg = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]);
+        msg.GetProperty("event").GetString().Should().Be("clipboard:presence");
+        var online = msg.GetProperty("payload").GetProperty("onlineDeviceIds");
+        online.GetArrayLength().Should().Be(2);
+        online[0].GetString().Should().Be("a");
+        online[1].GetString().Should().Be("b");
+    }
+
+    [Fact]
+    public void PushClipboardSettings_sends_a_clipboard_settings_event_with_deviceId_and_settingsView()
+    {
+        // BUG B fix (push side): a sibling-window settings change surfaces to the UI as a
+        // "clipboard:settings" event carrying the affected deviceId and the camelCase ToSettingsView.
+        var transport = new FakeTransport();
+        var engine = new ClipboardSpyActions();
+        var bridge = new UiBridge(transport, engine);
+
+        bridge.PushClipboardSettings(
+            "dev-9",
+            new ZyncMaster.Engine.ClipboardSettings { Density = "mini", Send = false, Receive = true, AutoSync = false, ShowHints = false, ViewerHotkey = "Ctrl+Shift+V" });
+
+        transport.Sent.Should().ContainSingle();
+        var msg = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]);
+        msg.GetProperty("event").GetString().Should().Be("clipboard:settings");
+        var payload = msg.GetProperty("payload");
+        payload.GetProperty("deviceId").GetString().Should().Be("dev-9");
+        var settings = payload.GetProperty("settings");
+        settings.GetProperty("density").GetString().Should().Be("mini");
+        settings.GetProperty("send").GetBoolean().Should().BeFalse();
+        settings.GetProperty("receive").GetBoolean().Should().BeTrue();
+        settings.GetProperty("autoSync").GetBoolean().Should().BeFalse();
+        settings.GetProperty("showHints").GetBoolean().Should().BeFalse();
+        settings.GetProperty("viewerHotkey").GetString().Should().Be("Ctrl+Shift+V");
+    }
+
+    [Fact]
+    public void PushClipboardSettings_throws_on_null_deviceId()
+    {
+        var transport = new FakeTransport();
+        var bridge = new UiBridge(transport, new ClipboardSpyActions());
+
+        Action act = () => bridge.PushClipboardSettings(null!, new ZyncMaster.Engine.ClipboardSettings());
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void PushClipboardSettings_throws_on_null_settings()
+    {
+        var transport = new FakeTransport();
+        var bridge = new UiBridge(transport, new ClipboardSpyActions());
+
+        Action act = () => bridge.PushClipboardSettings("dev-9", null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
     // ---------- EngineActions behaviour over fakes ----------
 
     private static EngineActions BuildEngine(
@@ -791,6 +860,42 @@ public class ClipboardBridgeTests
         gotSettings!.Density.Should().Be("mini");
         gotSettings.Send.Should().BeFalse();
         gotSettings.AutoSync.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ClipboardPresenceChanged_fires_with_the_online_ids_on_a_presence_frame()
+    {
+        // BUG A fix (App side): a server presence frame surfaces on the transport as
+        // PresenceChanged(onlineIds); EngineActions re-raises ClipboardPresenceChanged so the host can
+        // push a "refresh the roster" signal to the user's other open windows.
+        var transport = new Mock<IClipboardTransport>();
+        var actions = BuildEngine(transport);
+
+        IReadOnlyList<string>? got = null;
+        actions.ClipboardPresenceChanged += ids => got = ids;
+
+        transport.Raise(t => t.PresenceChanged += null, (IReadOnlyList<string>)new[] { "dev-B" });
+
+        got.Should().NotBeNull();
+        got.Should().ContainSingle().Which.Should().Be("dev-B");
+    }
+
+    [Fact]
+    public void ClipboardPresenceChanged_fires_with_an_empty_list_on_a_presence_reset()
+    {
+        // On a socket drop the transport raises PresenceReset; EngineActions clears the cache and
+        // re-raises ClipboardPresenceChanged with an EMPTY roster so the UI recomputes the dots from
+        // the last-seen fallback instead of staying frozen on the stale set.
+        var transport = new Mock<IClipboardTransport>();
+        var actions = BuildEngine(transport);
+
+        IReadOnlyList<string>? got = null;
+        actions.ClipboardPresenceChanged += ids => got = ids;
+
+        transport.Raise(t => t.PresenceReset += null);
+
+        got.Should().NotBeNull();
+        got.Should().BeEmpty();
     }
 
     // ---------- HttpWsClipboardTransport.HandleFrame: 'settings' frame ----------

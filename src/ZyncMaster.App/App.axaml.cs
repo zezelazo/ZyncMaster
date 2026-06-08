@@ -212,6 +212,11 @@ public partial class App : Application
         bootEngine.Actions.CloseClipboardViewer = () => _clipboardViewer?.Dismiss();
         bootEngine.ClipboardHotkey.Pressed += OnClipboardHotkeyPressed;
         bootEngine.ClipboardTransport.ItemReceived += OnClipboardItemReceived;
+        // Live roster + per-device settings: push to the MAIN window bridge (the clipboard devices /
+        // settings screen lives in the dashboard, not the viewer) so an open screen refreshes its online
+        // dots, "(N online)" count and the per-device send/receive toggles across the user's windows.
+        bootEngine.Actions.ClipboardPresenceChanged += OnClipboardPresenceChanged;
+        bootEngine.Actions.ClipboardSettingsChanged += OnClipboardSettingsChanged;
         _clipboardTask = Task.Run(() => StartClipboardAsync(bootEngine, _shutdown.Token));
 
         // FIX C — the device-lease heartbeat runs independently of the scheduler's startup delay so
@@ -347,6 +352,8 @@ public partial class App : Application
         {
             try { engine.ClipboardHotkey.Pressed -= OnClipboardHotkeyPressed; } catch { }
             try { engine.ClipboardTransport.ItemReceived -= OnClipboardItemReceived; } catch { }
+            try { engine.Actions.ClipboardPresenceChanged -= OnClipboardPresenceChanged; } catch { }
+            try { engine.Actions.ClipboardSettingsChanged -= OnClipboardSettingsChanged; } catch { }
             try { engine.ClipboardService.Stop(); } catch { }
             try { (engine.ClipboardHotkey as IDisposable)?.Dispose(); } catch { }
             try { (engine.ClipboardCapture as IDisposable)?.Dispose(); } catch { }
@@ -398,6 +405,25 @@ public partial class App : Application
         {
             engine.Logger.Log(LogLevel.Warning, "Clipboard live push failed.", ex);
         }
+    }
+
+    // The live online roster changed (a server presence frame arrived, or the socket dropped and the
+    // cache was cleared): push it to the main-window bridge so an open clipboard devices/settings screen
+    // re-fetches and repaints the online dots + "(N online)" count. Best-effort — a push failure must
+    // not break the receive loop.
+    private void OnClipboardPresenceChanged(System.Collections.Generic.IReadOnlyList<string> onlineDeviceIds)
+    {
+        try { _bridge?.PushClipboardPresence(onlineDeviceIds); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard presence push failed.", ex); }
+    }
+
+    // A sibling window changed one device's per-device clipboard settings (send/receive/autoSync), the
+    // server broadcast it, and the transport relayed it: push it to the main-window bridge so an open
+    // settings screen updates that device's toggles live. Best-effort.
+    private void OnClipboardSettingsChanged(string deviceId, ZyncMaster.Engine.ClipboardSettings settings)
+    {
+        try { _bridge?.PushClipboardSettings(deviceId, settings); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard settings push failed.", ex); }
     }
 
     // Creates (once) the clipboard viewer window + its own WebView2 host + bridge over the shared
