@@ -267,7 +267,8 @@ public class ClipboardBridgeTests
         Mock<IClipboardDevicesSource>? devices = null,
         Mock<IClipboardHotkey>? hotkey = null,
         IDeviceKeyStore? deviceKeyStore = null,
-        IClock? clock = null)
+        IClock? clock = null,
+        Mock<IPairsClient>? pairs = null)
     {
         var settings = new EngineSettings { ServerBaseUrl = "https://server.test" };
         var deviceKeys = deviceKeyStore ?? KeyStore("device-key").Object;
@@ -287,7 +288,7 @@ public class ClipboardBridgeTests
         return new EngineActions(
             deviceKeys, pairing, sync,
             new Mock<ISettingsRepository<AppSettings>>().Object, new AppSettingsResolver(), "settings.json",
-            new Mock<IPairsClient>().Object, new Mock<IIdentityTokenCache>().Object,
+            (pairs ?? new Mock<IPairsClient>()).Object, new Mock<IIdentityTokenCache>().Object,
             new BasicTxtExporter(new Mock<ICalExportRunner>().Object), new Mock<IAutoStartManager>().Object,
             settings, _ => Task.FromResult<string?>(null), "host.exe",
             identity, calendarConnect,
@@ -416,6 +417,44 @@ public class ClipboardBridgeTests
         d2.Online.Should().BeFalse();   // last seen 2h ago is outside the online window
         d2.IsThis.Should().BeFalse();
         d2.Settings.Density.Should().Be("rich");
+    }
+
+    [Fact]
+    public async Task GetClipboardDevices_resolves_this_device_on_demand_when_clipboard_not_initialized()
+    {
+        // The clipboard pipeline never started (InitializeClipboard was not called), so the engine has
+        // no cached clipboard device id. The device is still registered (calendar sync works), so the
+        // view must resolve THIS device from the registration on demand and mark it — otherwise the UI
+        // wrongly shows "this device is not registered yet" on a device that is plainly registered.
+        var now = DateTimeOffset.UtcNow;
+        var clock = new Mock<IClock>();
+        clock.SetupGet(c => c.UtcNow).Returns(now);
+
+        var devices = new Mock<IClipboardDevicesSource>();
+        devices.Setup(d => d.ListDevicesAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardDeviceRow>)new[]
+            {
+                new ClipboardDeviceRow { Id = "dev-1", Name = "Studio PC", LastSeenUtc = now.AddMinutes(-1) },
+            });
+
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetSettingsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ClipboardSettings());
+
+        // The registration resolves this device as dev-1 via GetDeviceMeAsync (what GetDeviceAsync calls).
+        var pairs = new Mock<IPairsClient>();
+        pairs.Setup(p => p.GetDeviceMeAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DeviceInfo { DeviceId = "dev-1", Name = "Studio PC" });
+
+        var actions = BuildEngine(transport, devices: devices, clock: clock.Object, pairs: pairs);
+        // NOTE: no InitializeClipboard call — _clipboardDeviceId starts empty.
+
+        var view = await actions.GetClipboardDevicesAsync(CancellationToken.None);
+
+        view.ThisDeviceId.Should().Be("dev-1");
+        view.Devices.Should().ContainSingle();
+        view.Devices[0].IsThis.Should().BeTrue();
+        view.Devices[0].Online.Should().BeTrue();
     }
 
     [Fact]

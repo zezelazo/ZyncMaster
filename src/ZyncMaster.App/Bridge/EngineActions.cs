@@ -1061,8 +1061,29 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // to that device's defaults rather than failing the whole view.
     public async Task<ClipboardDevicesView> GetClipboardDevicesAsync(CancellationToken ct = default)
     {
+        // Resolve THIS device's id. It is normally seeded by InitializeClipboard once the clipboard
+        // pipeline starts, but that startup is a fragile multi-step flow that can fail (a restrictive
+        // network, or before registration settles) and leave the id empty. The device is still
+        // registered (calendar sync works), so fall back to resolving it on demand — otherwise the UI
+        // wrongly shows "this device is not registered yet" on a plainly registered device. Cache it so
+        // later calls and capture-origin stamping reuse it.
+        var thisId = _clipboardDeviceId;
+        if (string.IsNullOrEmpty(thisId))
+        {
+            try
+            {
+                var me = await GetDeviceAsync(ct).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(me?.DeviceId))
+                    thisId = _clipboardDeviceId = me!.DeviceId;
+            }
+            catch (Exception ex)
+            {
+                _logger.Log(LogLevel.Warning, "Clipboard devices: could not resolve this device's id.", ex);
+            }
+        }
+
         if (_clipboardDevices is null || _clipboardTransport is null)
-            return new ClipboardDevicesView { ThisDeviceId = _clipboardDeviceId };
+            return new ClipboardDevicesView { ThisDeviceId = thisId };
 
         var rows = await WithDeviceKeyAsync((key, c) => _clipboardDevices.ListDevicesAsync(key, c), ct)
             .ConfigureAwait(false);
@@ -1091,8 +1112,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
                 settings = new ClipboardSettings();
             }
 
-            var isThis = !string.IsNullOrEmpty(_clipboardDeviceId)
-                         && string.Equals(row.Id, _clipboardDeviceId, StringComparison.Ordinal);
+            var isThis = !string.IsNullOrEmpty(thisId)
+                         && string.Equals(row.Id, thisId, StringComparison.Ordinal);
 
             views.Add(new ClipboardDeviceView
             {
@@ -1109,7 +1130,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
             });
         }
 
-        return new ClipboardDevicesView { ThisDeviceId = _clipboardDeviceId, Devices = views };
+        return new ClipboardDevicesView { ThisDeviceId = thisId, Devices = views };
     }
 
     private static ClipboardSettingsView ToSettingsView(ClipboardSettings s) => new()
