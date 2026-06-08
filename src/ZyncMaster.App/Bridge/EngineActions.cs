@@ -1091,15 +1091,20 @@ public sealed class EngineActions : IEngineActions, IDisposable
                 settings = new ClipboardSettings();
             }
 
+            var isThis = !string.IsNullOrEmpty(_clipboardDeviceId)
+                         && string.Equals(row.Id, _clipboardDeviceId, StringComparison.Ordinal);
+
             views.Add(new ClipboardDeviceView
             {
                 Id = row.Id,
                 Name = row.Name,
-                Online = presence is not null
-                    ? presence.Contains(row.Id)
-                    : row.LastSeenUtc is { } seen && now - seen <= DeviceOnlineWindow,
-                IsThis = !string.IsNullOrEmpty(_clipboardDeviceId)
-                         && string.Equals(row.Id, _clipboardDeviceId, StringComparison.Ordinal),
+                // The local device is always treated as online regardless of roster timing: OR-ing isThis
+                // guards against a presence frame that races ahead of registry.Add and omits this device.
+                Online = isThis
+                    || (presence is not null
+                        ? presence.Contains(row.Id)
+                        : row.LastSeenUtc is { } seen && now - seen <= DeviceOnlineWindow),
+                IsThis = isThis,
                 Settings = ToSettingsView(settings),
             });
         }

@@ -43,8 +43,8 @@ public static class DibImage
 
         // pixelOffset = 14 (file header) + DIB header size + colour table / bitfield masks.
         long pixelOffset = (long)BitmapFileHeaderSize + biSize + paletteBytes;
-        if (pixelOffset > dib.Length)
-            return null; // the computed pixels would start past the end of the blob — malformed.
+        if (pixelOffset >= dib.Length)
+            return null; // the computed pixels would start at or past the end of the blob — malformed (no pixel data).
 
         long fileSize = (long)BitmapFileHeaderSize + dib.Length;
         if (fileSize > int.MaxValue || pixelOffset > int.MaxValue)
