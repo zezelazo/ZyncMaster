@@ -2441,7 +2441,7 @@ function backFromAddCalendar() { clearTimeout(addCal.timer); addCal.step = 0; na
 // transport (the desktop App) resolves Bridge.available asynchronously after boot's /health
 // probe, so reading Bridge.available now would still be false and would wrongly seed the demo
 // name into the real App. Deciding in the render keeps the value impersonal for any real shell.
-const settings = { autoSync: true, startup: true, interval: 15, windowDays: 14, deviceName: '' };
+const settings = { autoSync: true, startup: true, interval: 15, windowDays: 14, deviceName: '', pastePanelOpacity: 70 };
 
 function toggle(get, set) {
   const t = el('div', { class: 'toggle', role: 'switch', 'aria-checked': String(get()), tabindex: '0' });
@@ -2865,6 +2865,31 @@ function densitySegmented(dev) {
   return seg;
 }
 
+// pasteOpacitySlider() — the App-local "paste panel opacity" control (0..100). The floating hotkey
+// paste panel's card is drawn as a dark fill at this opacity over the desktop (70 = 70% opaque /
+// 30% transparent). App-local (settings.json), NOT a per-device/server setting, so it is NOT routed
+// through persistClipboardSettings — it saves via setPastePanelOpacity. Applies ONLY to the hotkey
+// viewer; the in-dashboard clipboard view is unaffected. A native range + a live numeric readout;
+// the value persists on release (change), while input only updates the readout (no save spam).
+function pasteOpacitySlider() {
+  const wrap = el('div', { class: 'cb-opacity' });
+  const value = Math.max(0, Math.min(100, Number(settings.pastePanelOpacity)));
+  const readout = el('span', { class: 'cb-opacity__val', text: `${value}%` });
+  const range = el('input', {
+    type: 'range', min: '0', max: '100', step: '5', value: String(value),
+    class: 'cb-opacity__range', 'aria-label': 'Paste panel opacity',
+  });
+  range.addEventListener('input', () => { readout.textContent = `${range.value}%`; });
+  range.addEventListener('change', () => {
+    const v = Math.max(0, Math.min(100, parseInt(range.value, 10) || 0));
+    settings.pastePanelOpacity = v;
+    readout.textContent = `${v}%`;
+    if (Bridge.available) Bridge.call('setPastePanelOpacity', String(v)).catch(() => {});
+  });
+  wrap.append(range, readout);
+  return wrap;
+}
+
 // deviceRow(dev, thisId) — one row in the "Your devices" accordion. status dot + name (+ "this
 // device" badge) + last-seen line + compact send/receive toggles. Works for offline devices too.
 function deviceRow(dev, thisId) {
@@ -2899,6 +2924,12 @@ function renderClipboardSettings(root) {
     return;
   }
 
+  // Hydrate the App-local paste-panel opacity from the host (settings.json) so the slider shows the
+  // persisted value. It rides along on the devices view (App-local, not a per-device server setting).
+  if (typeof data.pastePanelOpacity === 'number') {
+    settings.pastePanelOpacity = Math.max(0, Math.min(100, data.pastePanelOpacity));
+  }
+
   const me = thisClipboardDevice();
   const thisName = (me && me.name) ? ` (${me.name})` : '';
 
@@ -2913,6 +2944,9 @@ function renderClipboardSettings(root) {
       cfgRow('Receive clipboards', null, clipToggle(me, 'receive', { label: 'Receive clipboards' })),
       cfgRow('Viewer hotkey', null, hotkeyChip(me)),
       cfgRow('Viewer density', null, densitySegmented(me)),
+      cfgRow('Paste panel opacity',
+        el('div', { class: 'cfg-row__hint', text: 'Transparency of the floating hotkey paste panel' }),
+        pasteOpacitySlider()),
       cfgRow('Show shortcut hints',
         el('div', { class: 'cfg-row__hint', text: 'Key bar at the foot of the viewer (Rich only)' }),
         clipToggle(me, 'showHints', { label: 'Show shortcut hints' }))));
@@ -4278,6 +4312,10 @@ function pushConfig() {
     intervalMinutes: settings.interval,
     runAtStartup: settings.startup,
     theme: storedTheme(),
+    // App-local paste-panel opacity. saveConfig is a wholesale replace, so carry it through here too
+    // (it is otherwise saved on its own via setPastePanelOpacity) to avoid snapping it back to the
+    // POCO default whenever the main config is saved.
+    pastePanelOpacity: settings.pastePanelOpacity,
   };
   Bridge.call('saveConfig', JSON.stringify(cfg)).catch(() => {});
 }

@@ -44,11 +44,17 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 12px;
+  /* No padding: the host window is transparent and sized to the card, so any padding here would show
+     as an empty border of desktop around the card. The card carries its own internal padding. */
+  padding: 0;
 }
 
 /* The glass card. Recipe matches glass.css but tuned for the dense list:
-   blur(28px) saturate(180%), top specular rim, layered stroke + drop shadow. */
+   blur(28px) saturate(180%), top specular rim, layered stroke + drop shadow.
+   The fill is a dark wash whose ALPHA is driven by --cb-paste-opacity (0..100, injected by the App
+   from the App-local pastePanelOpacity setting; default 70). At 70 the card is 70% opaque dark over
+   the live desktop (30% transparent). This applies ONLY to the floating hotkey viewer — the
+   in-dashboard clipboard view never loads this stage and uses its own glass tokens. */
 .cb-viewer {
   width: 316px;           /* rich default; mini overrides below */
   max-width: 100%;
@@ -56,7 +62,7 @@
   border-radius: var(--r-lg);
   padding: 8px;
   overflow: hidden;
-  background: var(--glass-fill);
+  background: rgba(12, 14, 22, calc(var(--cb-paste-opacity, 70) / 100));
   -webkit-backdrop-filter: blur(28px) saturate(180%);
   backdrop-filter: blur(28px) saturate(180%);
   border: 1px solid var(--glass-stroke);
@@ -67,12 +73,14 @@
   font-family: var(--font);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 24px);
+  max-height: 100vh;
 }
 .cb-viewer--mini { width: 240px; }
 
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .cb-viewer { background: var(--surface-solid); }
+  /* No blur support: keep the dark fill at the configured opacity rather than swapping to the fully
+     opaque surface token, so the panel stays semi-transparent as intended. */
+  .cb-viewer { background: rgba(12, 14, 22, calc(var(--cb-paste-opacity, 70) / 100)); }
 }
 
 /* Header: status dot + "Clipboard · N items". */
@@ -384,3 +392,36 @@
 .toggle.toggle--sm { width: 32px; height: 18px; }
 .toggle.toggle--sm::after { width: 14px; height: 14px; top: 1px; }
 .toggle.toggle--sm[aria-checked="true"]::after { left: 16px; }
+
+/* Paste-panel opacity control (settings screen). A native range + a small numeric readout, using the
+   azure accent for the thumb so it matches the rest of the clipboard settings. App-local only. */
+.cb-opacity { display: flex; align-items: center; gap: 10px; }
+.cb-opacity__range {
+  width: 132px;
+  height: 4px;
+  -webkit-appearance: none; appearance: none;
+  background: var(--ctrl-fill);
+  border: 1px solid var(--ctrl-stroke);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+}
+.cb-opacity__range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--azure);
+  border: 1px solid var(--azure-edge);
+  cursor: pointer;
+}
+.cb-opacity__range::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--azure);
+  border: 1px solid var(--azure-edge);
+  cursor: pointer;
+}
+.cb-opacity__val {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--ink-2);
+  min-width: 34px;
+  text-align: right;
+}
