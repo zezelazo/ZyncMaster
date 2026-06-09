@@ -21,6 +21,11 @@ internal static class Win32
     public const uint CF_UNICODETEXT = 13;
     public const uint CF_BITMAP = 2;
     public const uint CF_DIB = 8;
+    public const uint CF_DIBV5 = 17;
+
+    // GetDIBits usage: build a DIB whose colour table holds RGB values (vs palette indices).
+    public const uint DIB_RGB_COLORS = 0;
+    public const uint BI_RGB = 0;
 
     // ----- Hotkey modifiers (RegisterHotKey fsModifiers) -----
     public const uint MOD_ALT = 0x0001;
@@ -172,6 +177,58 @@ internal static class Win32
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr GlobalFree(IntPtr hMem);
+
+    // Enumerates the formats currently on the clipboard (0 terminates). Used only for diagnostics.
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint EnumClipboardFormats(uint format);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern int GetClipboardFormatName(uint format, System.Text.StringBuilder lpszFormatName, int cchMaxCount);
+
+    // ----- CF_BITMAP -> DIB fallback (GDI) -----
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+    }
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern int GetObject(IntPtr hgdiobj, int cbBuffer, ref BITMAP lpvObject);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    // GetDIBits with lpvBits == null fills the header (so we learn biSizeImage); with a real buffer it
+    // copies the pixels. We call it twice — once to size, once to read.
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern int GetDIBits(
+        IntPtr hdc, IntPtr hbmp, uint uStartScan, uint cScanLines,
+        byte[]? lpvBits, ref BITMAPINFOHEADER lpbi, uint uUsage);
 
     // ----- Focus / input (paste) -----
     [DllImport("user32.dll")]

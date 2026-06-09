@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.Versioning;
+using ZyncMaster.Core;
 using ZyncMaster.Engine;
 
 namespace ZyncMaster.App.Platform.Clipboard;
@@ -22,15 +23,20 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
 {
     private readonly Func<(string id, string? name)> _origin;
     private readonly Func<DateTimeOffset> _now;
+    private readonly IAppLogger _logger;
     private MessageOnlyWindow? _window;
     private bool _started;
 
     public event Action<ClipboardEntry>? Captured;
 
-    public WindowsClipboardCaptureSource(Func<(string id, string? name)> origin, Func<DateTimeOffset>? now = null)
+    public WindowsClipboardCaptureSource(
+        Func<(string id, string? name)> origin,
+        Func<DateTimeOffset>? now = null,
+        IAppLogger? logger = null)
     {
         _origin = origin ?? throw new ArgumentNullException(nameof(origin));
         _now = now ?? (() => DateTimeOffset.UtcNow);
+        _logger = logger ?? NullAppLogger.Instance;
     }
 
     public void Start()
@@ -68,7 +74,18 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
 
         var entry = BuildEntry();
         if (entry is not null)
+        {
             Captured?.Invoke(entry);
+            return;
+        }
+
+        // A clipboard update fired but nothing was extractable. This is the symptom behind "copying
+        // an image produced nothing": an image format we cannot read (no CF_DIB / no readable
+        // CF_BITMAP, e.g. a private or PNG-only payload) is dropped here. Surface it at Warning so the
+        // gap is visible in the daily log instead of failing silently.
+        _logger.Log(LogLevel.Warning,
+            "Clipboard update fired but no text or readable image was on the clipboard " +
+            $"(formats: {Win32Clipboard.DescribeAvailableFormats()}). Item dropped.");
     }
 
     private ClipboardEntry? BuildEntry()
@@ -79,6 +96,7 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
         var text = Win32Clipboard.TryReadText();
         if (!string.IsNullOrEmpty(text))
         {
+            _logger.Log(LogLevel.Info, $"Clipboard capture: text ({text.Length} chars).");
             return new ClipboardEntry
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -90,6 +108,9 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
             };
         }
 
+        // Image: read the raw CF_DIB when present, else best-effort synthesize a DIB from CF_BITMAP
+        // (apps that copy a bitmap handle but no CF_DIB — some browsers / editors — would otherwise
+        // produce nothing). Either way the result is a DIB blob the rest of the pipeline understands.
         var dib = Win32Clipboard.TryReadImageDib();
         if (dib is { Length: > 0 })
         {
@@ -97,12 +118,15 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
             // small downscaled PNG so the viewer shows a real preview; a failed/oversize decode just
             // leaves Thumbnail null (typed tile only). DibThumbnailEncoder is best-effort and never
             // throws, so capture is never blocked by a bad image.
+            var thumb = DibThumbnailEncoder.TryCreatePngThumbnail(dib);
+            _logger.Log(LogLevel.Info,
+                $"Clipboard capture: image (CF_DIB, {dib.Length} bytes, thumbnail={(thumb is { Length: > 0 } ? $"{thumb.Length} bytes" : "none")}).");
             return new ClipboardEntry
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Type = ClipboardEntryType.Image,
                 ImageBytes = dib,
-                Thumbnail = DibThumbnailEncoder.TryCreatePngThumbnail(dib),
+                Thumbnail = thumb,
                 SizeBytes = dib.Length,
                 CreatedUtc = _now(),
                 OriginDeviceId = id,

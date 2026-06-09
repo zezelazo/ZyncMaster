@@ -253,7 +253,7 @@ public sealed class EngineHost : IDisposable
         // the origin is empty and the ClipboardService still encrypts text before publish (the server
         // validates origin from the api key).
         var clipboardCapture = new Platform.Clipboard.WindowsClipboardCaptureSource(
-            () => actions.ClipboardOrigin, () => clock.UtcNow);
+            () => actions.ClipboardOrigin, () => clock.UtcNow, logger);
 
         // The orchestrator: capture -> encrypt -> publish, and receive -> decrypt -> apply. It reads
         // the live per-device settings through the engine (so an updateClipboardSettings takes effect
