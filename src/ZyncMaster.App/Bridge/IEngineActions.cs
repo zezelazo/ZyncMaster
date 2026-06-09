@@ -163,6 +163,12 @@ public interface IEngineActions
     // close. Returns true when the id was found and applied, false (a clean no-op) when it was not.
     Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default);
 
+    // Deletes the history entry with the given id on the server (DELETE /api/clipboard/items/{id}).
+    // User-scoped, so a stale/foreign id is a clean no-op; the deletion is fanned out to the user's
+    // other devices so their open clipboard screens drop the row live. No confirmation is implied here
+    // — the UI deletes immediately (optimistically) and calls this.
+    Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default);
+
     // Re-registers the global viewer hotkey and persists it in this device's clipboard settings.
     Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default);
 

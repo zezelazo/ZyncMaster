@@ -389,6 +389,7 @@ public class UiBridgeTests
         public string? UpdateClipboardSettingsArg;
         public string? PasteClipboardEntryArg;
         public bool PasteClipboardEntryToReturn = true;
+        public string? DeleteClipboardEntryArg;
         public string? SetClipboardHotkeyArg;
         public int CloseClipboardViewerCalls;
         public int? SetPastePanelOpacityArg;
@@ -431,6 +432,12 @@ public class UiBridgeTests
             if (Throw != null) await Throw();
             PasteClipboardEntryArg = id;
             return PasteClipboardEntryToReturn;
+        }
+
+        public async Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            DeleteClipboardEntryArg = id;
         }
 
         public async Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)

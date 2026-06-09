@@ -191,8 +191,15 @@ public sealed class EngineActions : IEngineActions, IDisposable
             _clipboardTransport.PresenceChanged += OnPresenceChanged;
             _clipboardTransport.PresenceReset += OnPresenceReset;
             _clipboardTransport.SettingsChanged += OnSettingsChanged;
+            _clipboardTransport.DeletedReceived += OnDeletedReceived;
         }
     }
+
+    // Raised when the host should push a clipboard history deletion to the UI (so an open dashboard
+    // clipboard screen / floating viewer drops the row live) after another device or the human panel
+    // removed it. Wired by the composition root; a no-op when nothing subscribes (headless/tests).
+    // Carries the deleted item id.
+    public event Action<string>? ClipboardDeleted;
 
     // Raised when the host should push a per-device clipboard settings change to the UI (so the user's
     // other open windows update without a manual refresh). Wired by the composition root; a no-op when
@@ -237,6 +244,11 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // here (the originating PATCH already did).
     private void OnSettingsChanged(string deviceId, ClipboardSettings settings)
         => ClipboardSettingsChanged?.Invoke(deviceId, settings);
+
+    // A server deletion broadcast arrived for some history item: re-raise it so the host can push the
+    // change to the user's open windows. EngineActions only relays — the entry is already gone on the
+    // server (the originating DELETE removed it).
+    private void OnDeletedReceived(string id) => ClipboardDeleted?.Invoke(id);
 
     // Seeds the live clipboard settings + this device's identity once the App has loaded them (after
     // sign-in + device registration). Called by EngineHost/App composition before the capture loop
@@ -1337,6 +1349,19 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return wrote;
     }
 
+    // Deletes one history entry on the server (DELETE /api/clipboard/items/{id}). User-scoped server-
+    // side, so a stale/foreign id is a clean no-op. The server fans a "deleted" frame out to the user's
+    // OTHER devices; this device already dropped the row optimistically in the UI, so it does not get
+    // its own deletion echoed back. A host with no clipboard transport wired is a no-op.
+    public async Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+        if (_clipboardTransport is null)
+            return;
+
+        await _clipboardTransport.DeleteEntryAsync(id, ct).ConfigureAwait(false);
+    }
+
     // Re-registers the global viewer hotkey and persists it in THIS device's clipboard settings (so a
     // later boot restores it). A blank hotkey throws so the bridge surfaces a clear error. Persisting
     // is best-effort: a failed save must not lose the just-registered binding.
@@ -1405,6 +1430,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
             _clipboardTransport.PresenceChanged -= OnPresenceChanged;
             _clipboardTransport.PresenceReset -= OnPresenceReset;
             _clipboardTransport.SettingsChanged -= OnSettingsChanged;
+            _clipboardTransport.DeletedReceived -= OnDeletedReceived;
         }
         _registerGate.Dispose();
         _ownedHttp?.Dispose();

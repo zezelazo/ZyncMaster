@@ -217,6 +217,7 @@ public partial class App : Application
         // dots, "(N online)" count and the per-device send/receive toggles across the user's windows.
         bootEngine.Actions.ClipboardPresenceChanged += OnClipboardPresenceChanged;
         bootEngine.Actions.ClipboardSettingsChanged += OnClipboardSettingsChanged;
+        bootEngine.Actions.ClipboardDeleted += OnClipboardDeleted;
         _clipboardTask = Task.Run(() => StartClipboardAsync(bootEngine, _shutdown.Token));
 
         // FIX C — the device-lease heartbeat runs independently of the scheduler's startup delay so
@@ -354,6 +355,7 @@ public partial class App : Application
             try { engine.ClipboardTransport.ItemReceived -= OnClipboardItemReceived; } catch { }
             try { engine.Actions.ClipboardPresenceChanged -= OnClipboardPresenceChanged; } catch { }
             try { engine.Actions.ClipboardSettingsChanged -= OnClipboardSettingsChanged; } catch { }
+            try { engine.Actions.ClipboardDeleted -= OnClipboardDeleted; } catch { }
             try { engine.ClipboardService.Stop(); } catch { }
             try { (engine.ClipboardHotkey as IDisposable)?.Dispose(); } catch { }
             try { (engine.ClipboardCapture as IDisposable)?.Dispose(); } catch { }
@@ -424,6 +426,17 @@ public partial class App : Application
     {
         try { _bridge?.PushClipboardSettings(deviceId, settings); }
         catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard settings push failed.", ex); }
+    }
+
+    // Another device (or the human panel) deleted a history entry and the server broadcast it: push the
+    // deletion to BOTH the main-window bridge (the dashboard clipboard screen) and the floating viewer
+    // bridge so each open list drops the row live. Best-effort — a push failure must not break the loop.
+    private void OnClipboardDeleted(string id)
+    {
+        try { _bridge?.PushClipboardDeleted(id); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard deleted push failed.", ex); }
+        try { _clipboardViewerBridge?.PushClipboardDeleted(id); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard deleted viewer push failed.", ex); }
     }
 
     // Creates (once) the clipboard viewer window + its own WebView2 host + bridge over the shared

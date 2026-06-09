@@ -11,12 +11,23 @@ public interface IClipboardTransport
 {
     Task PublishAsync(ClipboardEntry encrypted, CancellationToken ct = default);
     Task<IReadOnlyList<ClipboardEntry>> GetHistoryAsync(CancellationToken ct = default);
+
+    // Removes one history entry (DELETE /api/clipboard/items/{id}). User-scoped server-side, so an
+    // unknown/foreign id is a silent no-op. The server fans a "deleted" frame out to the user's OTHER
+    // devices; this caller already removed it locally, so it does not get its own deletion echoed back.
+    Task DeleteEntryAsync(string id, CancellationToken ct = default);
     Task<ClipboardSettings> GetSettingsAsync(string deviceId, CancellationToken ct = default);
     Task UpdateSettingsAsync(string deviceId, ClipboardSettings s, CancellationToken ct = default);
     Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default);
     Task ConnectAsync(CancellationToken ct = default);
     event Action<ClipboardEntry> ItemReceived;
     event Action<string, byte[]> KeyReceived;
+
+    // Raised when the server broadcasts a history deletion ({type:"deleted", id}) over the live
+    // connection — another of the user's devices (or the human panel) removed an entry. Consumers drop
+    // the item with that id from any open list (dashboard clipboard screen, floating viewer). The
+    // argument is the deleted item id.
+    event Action<string> DeletedReceived;
 
     // Raised when the server broadcasts the live online-device roster ({type:"presence",
     // onlineDeviceIds:[...]}) over the connection (on any device connect/disconnect). The argument is

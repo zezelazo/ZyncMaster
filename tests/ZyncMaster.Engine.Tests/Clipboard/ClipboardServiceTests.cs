@@ -33,6 +33,7 @@ public sealed class ClipboardServiceTests
 
         public Task<IReadOnlyList<ClipboardEntry>> GetHistoryAsync(CancellationToken ct = default) =>
             Task.FromResult((IReadOnlyList<ClipboardEntry>)Array.Empty<ClipboardEntry>());
+        public Task DeleteEntryAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
         public Task<ClipboardSettings> GetSettingsAsync(string deviceId, CancellationToken ct = default) =>
             Task.FromResult(new ClipboardSettings());
         public Task UpdateSettingsAsync(string deviceId, ClipboardSettings s, CancellationToken ct = default) => Task.CompletedTask;
@@ -42,6 +43,7 @@ public sealed class ClipboardServiceTests
 
         public event Action<ClipboardEntry>? ItemReceived;
         public event Action<string, byte[]>? KeyReceived;
+        public event Action<string> DeletedReceived { add { } remove { } }
         public event Action<IReadOnlyList<string>> PresenceChanged { add { } remove { } }
         public event Action PresenceReset { add { } remove { } }
         public event Action<string, ClipboardSettings> SettingsChanged { add { } remove { } }

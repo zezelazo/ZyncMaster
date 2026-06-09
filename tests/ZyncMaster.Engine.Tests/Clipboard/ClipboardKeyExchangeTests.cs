@@ -44,6 +44,7 @@ public sealed class ClipboardKeyExchangeTests
         public Task PublishAsync(ClipboardEntry encrypted, CancellationToken ct = default) => Task.CompletedTask;
         public Task<System.Collections.Generic.IReadOnlyList<ClipboardEntry>> GetHistoryAsync(CancellationToken ct = default) =>
             Task.FromResult((System.Collections.Generic.IReadOnlyList<ClipboardEntry>)Array.Empty<ClipboardEntry>());
+        public Task DeleteEntryAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
         public Task<ClipboardSettings> GetSettingsAsync(string deviceId, CancellationToken ct = default) =>
             Task.FromResult(new ClipboardSettings());
         public Task UpdateSettingsAsync(string deviceId, ClipboardSettings s, CancellationToken ct = default) => Task.CompletedTask;
@@ -60,6 +61,7 @@ public sealed class ClipboardKeyExchangeTests
         public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
         public event Action<ClipboardEntry> ItemReceived { add { } remove { } }
         public event Action<string, byte[]> KeyReceived { add { } remove { } }
+        public event Action<string> DeletedReceived { add { } remove { } }
         public event Action<IReadOnlyList<string>> PresenceChanged { add { } remove { } }
         public event Action PresenceReset { add { } remove { } }
         public event Action<string, ClipboardSettings> SettingsChanged { add { } remove { } }

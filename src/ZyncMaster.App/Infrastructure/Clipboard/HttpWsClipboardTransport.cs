@@ -35,6 +35,7 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
 
     public event Action<ClipboardEntry>? ItemReceived;
     public event Action<string, byte[]>? KeyReceived;
+    public event Action<string>? DeletedReceived;
     public event Action<IReadOnlyList<string>>? PresenceChanged;
     public event Action? PresenceReset;
     public event Action<string, ClipboardSettings>? SettingsChanged;
@@ -113,6 +114,14 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
                     list.Add(entry);
             }
         return list;
+    }
+
+    public async Task DeleteEntryAsync(string id, CancellationToken ct = default)
+    {
+        if (id == null) throw new ArgumentNullException(nameof(id));
+
+        var path = $"/api/clipboard/items/{Uri.EscapeDataString(id)}";
+        await SendAsync(HttpMethod.Delete, path, null, ct).ConfigureAwait(false);
     }
 
     public async Task<ClipboardSettings> GetSettingsAsync(string deviceId, CancellationToken ct = default)
@@ -265,6 +274,14 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
                     if (entry is not null)
                         ItemReceived?.Invoke(entry);
                 }
+                break;
+
+            case "deleted":
+                // Another device (or the human panel) removed a history entry: drop it from any open
+                // list. A frame without an id is malformed and ignored.
+                var deletedId = frame["id"]?.Value<string>();
+                if (!string.IsNullOrEmpty(deletedId))
+                    DeletedReceived?.Invoke(deletedId);
                 break;
 
             case "key":

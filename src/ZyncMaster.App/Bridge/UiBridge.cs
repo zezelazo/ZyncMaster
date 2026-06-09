@@ -95,6 +95,21 @@ public sealed class UiBridge
         _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
     }
 
+    // Sends an unsolicited "clipboard:deleted" event when one history entry was removed (another of the
+    // user's devices, or the human panel, deleted it). The UI drops the row with that id from any open
+    // list (the dashboard clipboard screen) without a refresh. Same envelope shape as the others.
+    public void PushClipboardDeleted(string id)
+    {
+        if (id == null) throw new ArgumentNullException(nameof(id));
+
+        var envelope = new
+        {
+            @event = "clipboard:deleted",
+            payload = new { id },
+        };
+        _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
     private void OnReceived(string json)
     {
         // Fire-and-forget: inbound dispatch is async but the transport callback is sync.
@@ -375,6 +390,13 @@ public sealed class UiBridge
                 // distinguish a successful paste from a stale id.
                 var found = await _engine.PasteClipboardEntryAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(new { status = found ? "ok" : "notfound" }, JsonOptions);
+            }
+            case "deleteClipboardEntry":
+            {
+                // Payload is the item id (a bare/quoted string). The UI already removed the row
+                // optimistically (no confirm); this propagates the delete to the server + other devices.
+                await _engine.DeleteClipboardEntryAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(new { ok = true }, JsonOptions);
             }
             case "setClipboardHotkey":
             {

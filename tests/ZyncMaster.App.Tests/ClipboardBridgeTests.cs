@@ -44,6 +44,7 @@ public class ClipboardBridgeTests
         public string? UpdateSettingsArg;
         public string? PasteArg;
         public bool PasteToReturn = true;
+        public string? DeleteArg;
         public string? HotkeyArg;
         public int CloseViewerCalls;
         public int? PastePanelOpacityArg;
@@ -70,6 +71,8 @@ public class ClipboardBridgeTests
         { UpdateSettingsArg = payloadJson; return Task.CompletedTask; }
         public Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default)
         { PasteArg = id; return Task.FromResult(PasteToReturn); }
+        public Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
+        { DeleteArg = id; return Task.CompletedTask; }
         public Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)
         { HotkeyArg = hotkey; return Task.CompletedTask; }
         public Task CloseClipboardViewerAsync(CancellationToken ct = default)
@@ -217,6 +220,36 @@ public class ClipboardBridgeTests
         engine.PasteArg.Should().Be("missing");
         var payload = JsonSerializer.Deserialize<JsonElement>(LastReply(transport).GetProperty("payload").GetString()!);
         payload.GetProperty("status").GetString().Should().Be("notfound");
+    }
+
+    [Fact]
+    public void DeleteClipboardEntry_passes_id_and_replies_ok()
+    {
+        var transport = new FakeTransport();
+        var engine = new ClipboardSpyActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("deleteClipboardEntry", "d1", "i9"));
+
+        engine.DeleteArg.Should().Be("i9");
+        var reply = LastReply(transport);
+        reply.GetProperty("correlationId").GetString().Should().Be("d1");
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void PushClipboardDeleted_sends_a_clipboard_deleted_event_with_id()
+    {
+        var transport = new FakeTransport();
+        var engine = new ClipboardSpyActions();
+        var bridge = new UiBridge(transport, engine);
+
+        bridge.PushClipboardDeleted("gone-1");
+
+        transport.Sent.Should().ContainSingle();
+        var msg = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]);
+        msg.GetProperty("event").GetString().Should().Be("clipboard:deleted");
+        msg.GetProperty("payload").GetProperty("id").GetString().Should().Be("gone-1");
     }
 
     [Fact]
@@ -947,6 +980,44 @@ public class ClipboardBridgeTests
     }
 
     [Fact]
+    public async Task DeleteClipboardEntry_forwards_the_id_to_the_transport()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.DeleteEntryAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask).Verifiable();
+
+        var actions = BuildEngine(transport);
+
+        await actions.DeleteClipboardEntryAsync("i7", CancellationToken.None);
+
+        transport.Verify(t => t.DeleteEntryAsync("i7", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteClipboardEntry_with_empty_id_throws()
+    {
+        var actions = BuildEngine();
+        Func<Task> act = () => actions.DeleteClipboardEntryAsync("", CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void ClipboardDeleted_relays_a_transport_deleted_event_with_the_id()
+    {
+        // A server 'deleted' broadcast surfaces on the transport as DeletedReceived(id); EngineActions
+        // re-raises ClipboardDeleted so the host can push it to the open clipboard screens.
+        var transport = new Mock<IClipboardTransport>();
+        var actions = BuildEngine(transport);
+
+        string? got = null;
+        actions.ClipboardDeleted += id => got = id;
+
+        transport.Raise(t => t.DeletedReceived += null, "gone-9");
+
+        got.Should().Be("gone-9");
+    }
+
+    [Fact]
     public void ClipboardPresenceChanged_fires_with_the_online_ids_on_a_presence_frame()
     {
         // BUG A fix (App side): a server presence frame surfaces on the transport as
@@ -1017,6 +1088,36 @@ public class ClipboardBridgeTests
         transport.SettingsChanged += (_, _) => raised++;
 
         transport.HandleFrame("{\"type\":\"settings\",\"settings\":{\"density\":\"mini\"}}");
+
+        raised.Should().Be(0);
+    }
+
+    // ---------- HttpWsClipboardTransport.HandleFrame: 'deleted' frame ----------
+
+    [Fact]
+    public void HandleFrame_deleted_frame_raises_DeletedReceived_with_the_id()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        string? got = null;
+        transport.DeletedReceived += id => got = id;
+
+        transport.HandleFrame("{\"type\":\"deleted\",\"id\":\"item-77\"}");
+
+        got.Should().Be("item-77");
+    }
+
+    [Fact]
+    public void HandleFrame_deleted_frame_missing_id_does_not_raise()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        var raised = 0;
+        transport.DeletedReceived += _ => raised++;
+
+        transport.HandleFrame("{\"type\":\"deleted\"}");
 
         raised.Should().Be(0);
     }
