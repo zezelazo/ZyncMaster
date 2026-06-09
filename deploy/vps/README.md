@@ -23,18 +23,10 @@ systemd + `User=www-data` + secretos en `/etc/default/`, nginx por path, desplie
 CREATE ROLE syncmaster_app  LOGIN PASSWORD '<APP_PWD>' NOSUPERUSER NOCREATEDB NOCREATEROLE;
 CREATE DATABASE bd_syncmaster OWNER postgres;
 ```
-Los `GRANT` CRUD se aplican **después** del primer deploy (cuando existan las tablas):
-```sql
-\c bd_syncmaster
-GRANT USAGE ON SCHEMA public TO syncmaster_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES    IN SCHEMA public TO syncmaster_app;
-GRANT USAGE, SELECT                  ON ALL SEQUENCES IN SCHEMA public TO syncmaster_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES    TO syncmaster_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT                  ON SEQUENCES TO syncmaster_app;
-REVOKE CREATE ON SCHEMA public FROM syncmaster_app;
-```
-> `ALTER DEFAULT PRIVILEGES` hace que las tablas que cree una migración futura (como `postgres`)
-> hereden CRUD automáticamente. Solo se corre una vez.
+Los `GRANT` CRUD a `syncmaster_app` **NO se corren a mano**: `deploy-syncmaster.sh` los aplica
+(idempotentes) en cada deploy, después del `efbundle` y antes del restart, así el primer arranque
+ya tiene permisos y cualquier tabla nueva de una migración futura queda usable de inmediato. El rol
+sigue CRUD-only (sin CREATE).
 
 ### 2. Environment file con secretos
 ```bash
