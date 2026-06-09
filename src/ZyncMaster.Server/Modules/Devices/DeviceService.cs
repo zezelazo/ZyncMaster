@@ -335,14 +335,6 @@ public sealed class DeviceService
     {
         var typeName = inner.GetType().FullName ?? string.Empty;
 
-        // SQL Server — Microsoft.Data.SqlClient.SqlException exposes an int Number.
-        if (typeName == "Microsoft.Data.SqlClient.SqlException" ||
-            typeName == "System.Data.SqlClient.SqlException")
-        {
-            var number = ReadIntProperty(inner, "Number");
-            return number is 2601 or 2627;
-        }
-
         // SQLite — Microsoft.Data.Sqlite.SqliteException exposes SqliteErrorCode (primary, 19 ==
         // SQLITE_CONSTRAINT) and SqliteExtendedErrorCode (2067 == SQLITE_CONSTRAINT_UNIQUE). Either
         // identifies the duplicate-index insert the tests trigger on the (UserId, NameLower) index.

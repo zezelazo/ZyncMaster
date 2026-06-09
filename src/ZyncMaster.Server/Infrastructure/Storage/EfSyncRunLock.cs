@@ -42,7 +42,7 @@ public sealed class EfSyncRunLock : ISyncRunLock
         // Step 1: atomically steal a free/expired lock. The WHERE clause is the gate. The steal
         // also overwrites FenceToken with ours, so the previous holder's fence no longer matches.
         var updated = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE SyncRunLocks SET LockedUntil = {until}, Owner = {owner}, FenceToken = {fence} WHERE PairId = {pairId} AND LockedUntil < {now}",
+            $@"UPDATE ""SyncRunLocks"" SET ""LockedUntil"" = {until}, ""Owner"" = {owner}, ""FenceToken"" = {fence} WHERE ""PairId"" = {pairId} AND ""LockedUntil"" < {now}",
             ct).ConfigureAwait(false);
 
         if (updated == 1)
@@ -53,7 +53,7 @@ public sealed class EfSyncRunLock : ISyncRunLock
         try
         {
             var inserted = await db.Database.ExecuteSqlInterpolatedAsync(
-                $"INSERT INTO SyncRunLocks (PairId, LockedUntil, Owner, FenceToken) VALUES ({pairId}, {until}, {owner}, {fence})",
+                $@"INSERT INTO ""SyncRunLocks"" (""PairId"", ""LockedUntil"", ""Owner"", ""FenceToken"") VALUES ({pairId}, {until}, {owner}, {fence})",
                 ct).ConfigureAwait(false);
 
             if (inserted == 1)
@@ -83,13 +83,7 @@ public sealed class EfSyncRunLock : ISyncRunLock
             && t.GetProperty("SqlState")?.GetValue(ex) as string == "23505")
             return true;
         // SQLite (tests): SqliteException SQLITE_CONSTRAINT(_UNIQUE).
-        if (fullName == "Microsoft.Data.Sqlite.SqliteException")
-            return true;
-        // Fallback for providers/messages we don't special-case (PK collision on INSERT).
-        var msg = ex.Message ?? "";
-        return msg.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("PRIMARY KEY", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
+        return fullName == "Microsoft.Data.Sqlite.SqliteException";
     }
 
     private sealed class Handle : ISyncRunLockHandle
@@ -122,7 +116,7 @@ public sealed class EfSyncRunLock : ISyncRunLock
                 var until = DateTimeOffset.UtcNow.Add(ttl);
                 await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
                 var affected = await db.Database.ExecuteSqlInterpolatedAsync(
-                    $"UPDATE SyncRunLocks SET LockedUntil = {until} WHERE PairId = {PairId} AND FenceToken = {_fence}",
+                    $@"UPDATE ""SyncRunLocks"" SET ""LockedUntil"" = {until} WHERE ""PairId"" = {PairId} AND ""FenceToken"" = {_fence}",
                     ct).ConfigureAwait(false);
                 return affected == 1;
             }
@@ -146,7 +140,7 @@ public sealed class EfSyncRunLock : ISyncRunLock
             {
                 await using var db = await _factory.CreateDbContextAsync().ConfigureAwait(false);
                 await db.Database.ExecuteSqlInterpolatedAsync(
-                    $"UPDATE SyncRunLocks SET LockedUntil = {Expired} WHERE PairId = {PairId} AND FenceToken = {_fence}")
+                    $@"UPDATE ""SyncRunLocks"" SET ""LockedUntil"" = {Expired} WHERE ""PairId"" = {PairId} AND ""FenceToken"" = {_fence}")
                     .ConfigureAwait(false);
             }
             catch

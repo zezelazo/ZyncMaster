@@ -30,6 +30,14 @@ public sealed class PostgresFixture : IDisposable
         return new ZyncMasterDbContext(opts);
     }
 
+    // A real IDbContextFactory over the live PostgreSQL, for stores that take one (e.g. EfSyncRunLock).
+    public IDbContextFactory<ZyncMasterDbContext> Factory => new PgContextFactory(this);
+
+    private sealed class PgContextFactory(PostgresFixture owner) : IDbContextFactory<ZyncMasterDbContext>
+    {
+        public ZyncMasterDbContext CreateDbContext() => owner.NewContext();
+    }
+
     public void Dispose()
     {
         if (!Available) return;
