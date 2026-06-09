@@ -355,7 +355,7 @@ namespace ZyncMaster.Server.Data.Migrations
                 name: "IX_Devices_KeyId",
                 table: "Devices",
                 column: "KeyId",
-                filter: "[KeyId] IS NOT NULL");
+                filter: "\"KeyId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Devices_UserId",

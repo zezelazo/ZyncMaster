@@ -31,6 +31,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZyncMaster.Server.Tests", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZyncMaster.App.Tests", "tests\ZyncMaster.App.Tests\ZyncMaster.App.Tests.csproj", "{CC7F3D12-53F3-45C1-9F33-2F6C3E8B5855}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZyncMaster.Server.Postgres.Tests", "tests\ZyncMaster.Server.Postgres.Tests\ZyncMaster.Server.Postgres.Tests.csproj", "{28D76350-0B52-4172-9FCB-705A28325452}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -185,6 +187,18 @@ Global
 		{CC7F3D12-53F3-45C1-9F33-2F6C3E8B5855}.Release|x64.Build.0 = Release|Any CPU
 		{CC7F3D12-53F3-45C1-9F33-2F6C3E8B5855}.Release|x86.ActiveCfg = Release|Any CPU
 		{CC7F3D12-53F3-45C1-9F33-2F6C3E8B5855}.Release|x86.Build.0 = Release|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Debug|x64.Build.0 = Debug|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Debug|x86.Build.0 = Debug|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Release|Any CPU.Build.0 = Release|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Release|x64.ActiveCfg = Release|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Release|x64.Build.0 = Release|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Release|x86.ActiveCfg = Release|Any CPU
+		{28D76350-0B52-4172-9FCB-705A28325452}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -202,6 +216,7 @@ Global
 		{A61995FB-856C-41DB-B471-793688313B46} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{BBCC6B69-B9E9-4AB9-BDDE-621DFD0C99B1} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{CC7F3D12-53F3-45C1-9F33-2F6C3E8B5855} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{28D76350-0B52-4172-9FCB-705A28325452} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {4C28F1A2-4630-4E20-BD4E-482CF7C2D6AF}

@@ -294,7 +294,7 @@ namespace ZyncMaster.Server.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("KeyId")
-                        .HasFilter("[KeyId] IS NOT NULL");
+                        .HasFilter("\"KeyId\" IS NOT NULL");
 
                     b.HasIndex("UserId");
 
