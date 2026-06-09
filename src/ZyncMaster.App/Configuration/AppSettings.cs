@@ -12,7 +12,7 @@ public sealed class AppSettings
     // serverBaseUrl so a fresh install works out of the box without hand-editing settings.json.
     // A developer can point at a local server by setting the ZYNCMASTER_SERVER_URL environment
     // variable (honoured in AppSettingsResolver) or by editing serverBaseUrl in settings.json.
-    public const string ProductionServerBaseUrl = "https://zyncmaster.azurewebsites.net";
+    public const string ProductionServerBaseUrl = "https://api.devlabperu.com/zync";
 
     // Base URL of the ZyncMaster server the device pairs and syncs against. Defaults to the
     // production server; the generated settings.json therefore ships pointing at prod, and the
