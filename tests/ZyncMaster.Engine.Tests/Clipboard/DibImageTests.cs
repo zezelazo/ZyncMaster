@@ -117,6 +117,25 @@ public sealed class DibImageTests
         ReadInt32(bmp!, 6).Should().Be(0); // bfReserved1 + bfReserved2
     }
 
+    [Fact]
+    public void DibToBmp_v5_header_124_bytes_offset_accounts_for_larger_header()
+    {
+        // CF_DIBV5 recovery keeps the 124-byte BITMAPV5HEADER, and the capture pipeline writes those
+        // bytes back under the CF_DIB format id. DibToBmp must honour biSize dynamically, so a V5 header
+        // shifts the pixel offset past the larger header instead of assuming a 40-byte BITMAPINFOHEADER.
+        const int V5HeaderSize = 124;
+        var dib = BuildDib(V5HeaderSize, biBitCount: 32, biCompression: 0, biClrUsed: 0);
+
+        var bmp = DibImage.DibToBmp(dib);
+
+        bmp.Should().NotBeNull();
+        bmp![0].Should().Be((byte)'B');
+        bmp[1].Should().Be((byte)'M');
+        // 32bpp BI_RGB has no colour table: pixelOffset = 14 + 124 = 138.
+        ReadInt32(bmp, 10).Should().Be(14 + V5HeaderSize);
+        ReadInt32(bmp, 2).Should().Be(14 + dib.Length);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData(new byte[0])]

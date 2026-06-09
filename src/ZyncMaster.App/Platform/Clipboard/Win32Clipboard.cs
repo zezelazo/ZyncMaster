@@ -72,6 +72,12 @@ internal static class Win32Clipboard
 
         if (Win32.IsClipboardFormatAvailable(Win32.CF_DIBV5))
         {
+            // NOTE: a CF_DIBV5 blob keeps its 124-byte BITMAPV5HEADER, and the sink later writes the
+            // returned bytes back under the CF_DIB format id. A strict CF_DIB consumer expects a 40-byte
+            // BITMAPINFOHEADER, so a V5 header under the CF_DIB label is technically loose. It decodes in
+            // practice because every consumer in this pipeline (DibImage, the thumbnail encoder) reads
+            // biSize first and skips the header dynamically. If a strict external consumer ever needs a
+            // 40-byte header, normalize the V5 header here or write it back as CF_DIBV5 on the sink side.
             var dibv5 = ReadGlobalBlob(Win32.CF_DIBV5);
             if (dibv5 is { Length: > 0 })
                 return dibv5;
@@ -151,8 +157,9 @@ internal static class Win32Clipboard
                 return null;
             try
             {
-                // 32bpp top-down (negative height) BI_RGB DIB: no palette, no compression, trivially
-                // decodable. A negative biHeight asks GDI for top-down rows; DibImage / decoders accept it.
+                // 32bpp bottom-up (positive biHeight) BI_RGB DIB: no palette, no compression, trivially
+                // decodable. Positive biHeight is the standard CF_DIB bottom-up row order the sink writes
+                // back and DibImage expects, so the synthesized blob matches a real CF_DIB exactly.
                 var header = new Win32.BITMAPINFOHEADER
                 {
                     biSize = (uint)Marshal.SizeOf<Win32.BITMAPINFOHEADER>(),

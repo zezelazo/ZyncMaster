@@ -96,7 +96,11 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
         var text = Win32Clipboard.TryReadText();
         if (!string.IsNullOrEmpty(text))
         {
-            _logger.Log(LogLevel.Info, $"Clipboard capture: text ({text.Length} chars).");
+            // Logged at Warning, not Info, on purpose: the device logger ships at minLevel Warning by
+            // default (only --verbose / ZYNCMASTER_VERBOSE=1 lowers it), and the whole point of this
+            // line is to answer "was a copy actually captured?" from the daily log without enabling
+            // verbose. It rides the same default-visible level as the "item dropped" warning below.
+            _logger.Log(LogLevel.Warning, $"Clipboard capture: text ({text.Length} chars).");
             return new ClipboardEntry
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -119,7 +123,9 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
             // leaves Thumbnail null (typed tile only). DibThumbnailEncoder is best-effort and never
             // throws, so capture is never blocked by a bad image.
             var thumb = DibThumbnailEncoder.TryCreatePngThumbnail(dib);
-            _logger.Log(LogLevel.Info,
+            // Warning, not Info — same reason as the text path: stay visible in the default-level daily
+            // log so a successful image capture is distinguishable from a drop without verbose logging.
+            _logger.Log(LogLevel.Warning,
                 $"Clipboard capture: image (CF_DIB, {dib.Length} bytes, thumbnail={(thumb is { Length: > 0 } ? $"{thumb.Length} bytes" : "none")}).");
             return new ClipboardEntry
             {
