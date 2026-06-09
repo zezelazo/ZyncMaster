@@ -189,7 +189,20 @@ public sealed class UnconfiguredEngineActions : IEngineActions
         => Task.FromResult<IReadOnlyList<ClipboardHistoryItem>>(new List<ClipboardHistoryItem>());
 
     public Task<ClipboardDevicesView> GetClipboardDevicesAsync(CancellationToken ct = default)
-        => Task.FromResult(new ClipboardDevicesView());
+    {
+        // Surface the persisted paste-panel opacity even before the engine is configured so the
+        // settings slider initialises correctly. Best-effort: an unreadable file falls back to 70.
+        var opacity = 70;
+        try
+        {
+            var current = _settingsRepo.TryLoad(_settingsPath);
+            if (current != null)
+                opacity = Math.Clamp(current.PastePanelOpacity, 0, 100);
+        }
+        catch { /* unreadable settings: keep the default */ }
+
+        return Task.FromResult(new ClipboardDevicesView { PastePanelOpacity = opacity });
+    }
 
     public Task UpdateClipboardSettingsAsync(string payloadJson, CancellationToken ct = default)
         => Task.CompletedTask;
@@ -202,6 +215,17 @@ public sealed class UnconfiguredEngineActions : IEngineActions
 
     public Task CloseClipboardViewerAsync(CancellationToken ct = default)
         => Task.CompletedTask;
+
+    // Paste-panel opacity is an App-local UI setting persisted in settings.json — no engine needed,
+    // so it works even before the server URL is configured (mirrors SaveConfigAsync writing to disk).
+    public Task SetPastePanelOpacityAsync(int opacity, CancellationToken ct = default)
+    {
+        var clamped = Math.Clamp(opacity, 0, 100);
+        var current = _settingsRepo.TryLoad(_settingsPath) ?? new AppSettings();
+        current.PastePanelOpacity = clamped;
+        _settingsRepo.Save(current, _settingsPath);
+        return Task.CompletedTask;
+    }
 
     private static InvalidOperationException NotConfigured()
         => new("Set the server URL in Settings first.");

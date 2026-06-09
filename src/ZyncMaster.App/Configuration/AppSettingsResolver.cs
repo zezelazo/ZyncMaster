@@ -48,6 +48,10 @@ public sealed class AppSettingsResolver
         var intervalMinutes = Math.Max(1, settings.IntervalMinutes);
         var calExportTimeoutMinutes = Math.Max(1, settings.CalExportTimeoutMinutes);
 
+        // Clamp the paste-panel opacity into the valid 0..100 range. The POCO default (70) covers the
+        // "field absent" case; an explicit out-of-range value is pinned to the nearest bound.
+        var pastePanelOpacity = Math.Clamp(settings.PastePanelOpacity, 0, 100);
+
         var calExportPath = string.IsNullOrWhiteSpace(settings.CalExportPath)
             ? DefaultCalExportPath
             : settings.CalExportPath!;
@@ -67,6 +71,7 @@ public sealed class AppSettingsResolver
             CalExportPath = calExportPath,
             CalExportTimeoutMinutes = calExportTimeoutMinutes,
             CalendarNames = calendars is { Length: > 0 } ? calendars : null,
+            PastePanelOpacity = pastePanelOpacity,
         };
     }
 }

@@ -32,6 +32,11 @@ public sealed record ClipboardDevicesView
 {
     public string ThisDeviceId { get; init; } = "";
     public IReadOnlyList<ClipboardDeviceView> Devices { get; init; } = new List<ClipboardDeviceView>();
+
+    // App-local opacity (0..100) of the floating hotkey paste panel. Surfaced here so the clipboard
+    // settings screen can initialise its slider to the persisted value. NOT a per-device/server
+    // setting — it is read from this device's settings.json. Defaults to 70.
+    public int PastePanelOpacity { get; init; } = 70;
 }
 
 public sealed record ClipboardDeviceView

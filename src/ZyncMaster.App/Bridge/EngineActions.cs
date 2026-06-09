@@ -1122,8 +1122,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
             }
         }
 
+        var pastePanelOpacity = LoadPastePanelOpacity();
+
         if (_clipboardDevices is null || _clipboardTransport is null)
-            return new ClipboardDevicesView { ThisDeviceId = thisId };
+            return new ClipboardDevicesView { ThisDeviceId = thisId, PastePanelOpacity = pastePanelOpacity };
 
         var rows = await WithDeviceKeyAsync((key, c) => _clipboardDevices.ListDevicesAsync(key, c), ct)
             .ConfigureAwait(false);
@@ -1170,7 +1172,40 @@ public sealed class EngineActions : IEngineActions, IDisposable
             });
         }
 
-        return new ClipboardDevicesView { ThisDeviceId = thisId, Devices = views };
+        return new ClipboardDevicesView { ThisDeviceId = thisId, Devices = views, PastePanelOpacity = pastePanelOpacity };
+    }
+
+    // Reads the App-local paste-panel opacity (0..100) from the current settings.json, clamped. Falls
+    // back to the resolved engine value, then the POCO default (70), so a missing/unreadable file never
+    // surfaces a wild value to the settings slider.
+    private int LoadPastePanelOpacity()
+    {
+        try
+        {
+            var current = _settingsRepo.TryLoad(_settingsPath);
+            if (current != null)
+                return Math.Clamp(current.PastePanelOpacity, 0, 100);
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Warning, "Clipboard devices: could not read paste-panel opacity from settings.", ex);
+        }
+
+        return Math.Clamp(_engineSettings.PastePanelOpacity, 0, 100);
+    }
+
+    // Persists a new App-local paste-panel opacity (0..100, clamped) into settings.json without
+    // disturbing the rest of the config — a partial save mirroring RenameDeviceAsync's config mirror,
+    // so the clipboard settings slider can save independently of the wholesale saveConfig path. The new
+    // value takes effect on the NEXT time the viewer window is created (its WebView2 injects the CSS
+    // variable at construction); an already-open viewer keeps its current opacity until reopened.
+    public Task SetPastePanelOpacityAsync(int opacity, CancellationToken ct = default)
+    {
+        var clamped = Math.Clamp(opacity, 0, 100);
+        var current = _settingsRepo.TryLoad(_settingsPath) ?? new AppSettings();
+        current.PastePanelOpacity = clamped;
+        _settingsRepo.Save(current, _settingsPath);
+        return Task.CompletedTask;
     }
 
     // internal (not private) so UiBridge can reuse the exact Engine→wire mapping when it pushes a live

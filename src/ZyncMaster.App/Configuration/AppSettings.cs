@@ -46,4 +46,12 @@ public sealed class AppSettings
     // null/empty = all calendars; otherwise the named calendars to export.
     [JsonProperty("calendars")]
     public string[]? Calendars { get; set; }
+
+    // Opacity (0-100) of the floating clipboard paste panel the global hotkey pops up. The panel's
+    // card is drawn as a dark fill at this opacity over the live desktop, so 70 shows it 70% opaque
+    // (30% transparent). App-local (not a per-device/server setting); applies ONLY to the hotkey
+    // viewer, never the in-dashboard clipboard view or the settings screen. Defaults to 70, clamped
+    // to 0..100 in AppSettingsResolver.
+    [JsonProperty("pastePanelOpacity")]
+    public int PastePanelOpacity { get; set; } = 70;
 }

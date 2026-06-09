@@ -391,6 +391,7 @@ public class UiBridgeTests
         public bool PasteClipboardEntryToReturn = true;
         public string? SetClipboardHotkeyArg;
         public int CloseClipboardViewerCalls;
+        public int? SetPastePanelOpacityArg;
 
         public IReadOnlyList<ClipboardHistoryItem> ClipboardHistoryToReturn = new List<ClipboardHistoryItem>
         {
@@ -442,6 +443,12 @@ public class UiBridgeTests
         {
             if (Throw != null) await Throw();
             CloseClipboardViewerCalls++;
+        }
+
+        public async Task SetPastePanelOpacityAsync(int opacity, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            SetPastePanelOpacityArg = opacity;
         }
     }
 
@@ -601,6 +608,37 @@ public class UiBridgeTests
         var reply = LastReply(transport);
         reply.GetProperty("ok").GetBoolean().Should().BeFalse();
         reply.GetProperty("error").GetString().Should().Contain("boom");
+    }
+
+    [Theory]
+    [InlineData("70", 70)]
+    [InlineData("0", 0)]
+    [InlineData("100", 100)]
+    public void SetPastePanelOpacity_parses_payload_and_calls_engine(string payload, int expected)
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("setPastePanelOpacity", "co", payload));
+
+        engine.SetPastePanelOpacityArg.Should().Be(expected);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        reply.GetProperty("correlationId").GetString().Should().Be("co");
+    }
+
+    [Fact]
+    public void SetPastePanelOpacity_non_numeric_payload_passes_zero_to_engine()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("setPastePanelOpacity", "co2", "abc"));
+
+        // ParseInt falls back to 0 on an unparseable value; the engine then clamps into range.
+        engine.SetPastePanelOpacityArg.Should().Be(0);
     }
 
     [Fact]

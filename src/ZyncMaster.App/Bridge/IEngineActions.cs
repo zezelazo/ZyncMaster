@@ -168,4 +168,10 @@ public interface IEngineActions
 
     // Closes the clipboard viewer window (Esc / after a paste). A no-op when no viewer is open.
     Task CloseClipboardViewerAsync(CancellationToken ct = default);
+
+    // Persists the App-local opacity (0..100, clamped) of the floating hotkey paste panel into
+    // settings.json without disturbing the rest of the config. Takes effect the next time the viewer
+    // window is created. Surfaced in GetClipboardDevicesAsync so the settings slider shows the
+    // persisted value.
+    Task SetPastePanelOpacityAsync(int opacity, CancellationToken ct = default);
 }

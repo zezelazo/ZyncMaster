@@ -387,6 +387,12 @@ public sealed class UiBridge
                 await _engine.CloseClipboardViewerAsync(ct);
                 return null;
             }
+            case "setPastePanelOpacity":
+            {
+                // Payload is the opacity as a bare/quoted number (0..100); the engine clamps it.
+                await _engine.SetPastePanelOpacityAsync(ParseInt(message.Payload), ct);
+                return JsonSerializer.Serialize(new { ok = true }, JsonOptions);
+            }
             // Frameless window controls driven by the custom web title bar (fire-and-forget).
             case "windowMinimize":
                 _windowProvider?.Invoke()?.Minimize();
@@ -563,6 +569,15 @@ public sealed class UiBridge
             return false;
         var trimmed = payload.Trim().Trim('"');
         return bool.TryParse(trimmed, out var b) && b;
+    }
+
+    // A scalar integer payload (e.g. the paste-panel opacity). Tolerates a bare or JSON-quoted
+    // number; a missing/unparseable value falls back to 0 (the engine then clamps into range).
+    private static int ParseInt(string? payload)
+    {
+        var trimmed = UnwrapString(payload);
+        return int.TryParse(trimmed, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0;
     }
 
     // A scalar string payload (id / accountRef). The web side stringifies the value, so a

@@ -46,6 +46,7 @@ public class ClipboardBridgeTests
         public bool PasteToReturn = true;
         public string? HotkeyArg;
         public int CloseViewerCalls;
+        public int? PastePanelOpacityArg;
 
         public IReadOnlyList<ClipboardHistoryItem> HistoryToReturn = new List<ClipboardHistoryItem>
         {
@@ -73,6 +74,8 @@ public class ClipboardBridgeTests
         { HotkeyArg = hotkey; return Task.CompletedTask; }
         public Task CloseClipboardViewerAsync(CancellationToken ct = default)
         { CloseViewerCalls++; return Task.CompletedTask; }
+        public Task SetPastePanelOpacityAsync(int opacity, CancellationToken ct = default)
+        { PastePanelOpacityArg = opacity; return Task.CompletedTask; }
 
         // ---- everything else is out of scope for these tests ----
         public Task<ServerHealth> CheckServerHealthAsync(CancellationToken ct = default) => throw new NotImplementedException();
@@ -337,7 +340,9 @@ public class ClipboardBridgeTests
         Mock<IClipboardHotkey>? hotkey = null,
         IDeviceKeyStore? deviceKeyStore = null,
         IClock? clock = null,
-        Mock<IPairsClient>? pairs = null)
+        Mock<IPairsClient>? pairs = null,
+        ISettingsRepository<AppSettings>? settingsRepo = null,
+        string settingsPath = "settings.json")
     {
         var settings = new EngineSettings { ServerBaseUrl = "https://server.test" };
         var deviceKeys = deviceKeyStore ?? KeyStore("device-key").Object;
@@ -356,7 +361,7 @@ public class ClipboardBridgeTests
 
         return new EngineActions(
             deviceKeys, pairing, sync,
-            new Mock<ISettingsRepository<AppSettings>>().Object, new AppSettingsResolver(), "settings.json",
+            settingsRepo ?? new Mock<ISettingsRepository<AppSettings>>().Object, new AppSettingsResolver(), settingsPath,
             (pairs ?? new Mock<IPairsClient>()).Object, new Mock<IIdentityTokenCache>().Object,
             new BasicTxtExporter(new Mock<ICalExportRunner>().Object), new Mock<IAutoStartManager>().Object,
             settings, _ => Task.FromResult<string?>(null), "host.exe",
@@ -486,6 +491,39 @@ public class ClipboardBridgeTests
         d2.Online.Should().BeFalse();   // last seen 2h ago is outside the online window
         d2.IsThis.Should().BeFalse();
         d2.Settings.Density.Should().Be("rich");
+    }
+
+    [Theory]
+    [InlineData(30, 30)]
+    [InlineData(-5, 0)]
+    [InlineData(140, 100)]
+    public async Task GetClipboardDevices_surfaces_clamped_paste_panel_opacity_from_settings(int onDisk, int expected)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var clock = new Mock<IClock>();
+        clock.SetupGet(c => c.UtcNow).Returns(now);
+
+        var devices = new Mock<IClipboardDevicesSource>();
+        devices.Setup(d => d.ListDevicesAsync("device-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardDeviceRow>)new[]
+            {
+                new ClipboardDeviceRow { Id = "dev-1", Name = "Studio PC", LastSeenUtc = now.AddMinutes(-1) },
+            });
+
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetSettingsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ClipboardSettings());
+
+        var repo = new Mock<ISettingsRepository<AppSettings>>();
+        repo.Setup(r => r.TryLoad("settings.json"))
+            .Returns(new AppSettings { ServerBaseUrl = "https://x", PastePanelOpacity = onDisk });
+
+        var actions = BuildEngine(transport, devices: devices, clock: clock.Object, settingsRepo: repo.Object);
+        actions.InitializeClipboard(new ClipboardSettings(), "dev-1", "Studio PC");
+
+        var view = await actions.GetClipboardDevicesAsync(CancellationToken.None);
+
+        view.PastePanelOpacity.Should().Be(expected);
     }
 
     [Fact]
@@ -835,6 +873,52 @@ public class ClipboardBridgeTests
         await actions.CloseClipboardViewerAsync(CancellationToken.None);
 
         closed.Should().Be(1);
+    }
+
+    // ---------- paste-panel opacity (App-local) ----------
+
+    [Theory]
+    [InlineData(-10, 0)]
+    [InlineData(0, 0)]
+    [InlineData(70, 70)]
+    [InlineData(100, 100)]
+    [InlineData(250, 100)]
+    public async Task SetPastePanelOpacity_clamps_and_persists_without_clobbering_other_fields(int input, int expected)
+    {
+        // The partial save loads the current settings, sets ONLY the opacity, and writes back — so an
+        // existing serverBaseUrl/deviceName survive (mirrors RenameDeviceAsync's config mirror).
+        var repo = new Mock<ISettingsRepository<AppSettings>>();
+        var onDisk = new AppSettings { ServerBaseUrl = "https://keep.me", DeviceName = "KeepName", PastePanelOpacity = 12 };
+        repo.Setup(r => r.TryLoad("settings.json")).Returns(onDisk);
+        AppSettings? saved = null;
+        repo.Setup(r => r.Save(It.IsAny<AppSettings>(), "settings.json"))
+            .Callback<AppSettings, string>((s, _) => saved = s);
+
+        var actions = BuildEngine(settingsRepo: repo.Object);
+
+        await actions.SetPastePanelOpacityAsync(input, CancellationToken.None);
+
+        saved.Should().NotBeNull();
+        saved!.PastePanelOpacity.Should().Be(expected);
+        saved.ServerBaseUrl.Should().Be("https://keep.me");
+        saved.DeviceName.Should().Be("KeepName");
+    }
+
+    [Fact]
+    public async Task SetPastePanelOpacity_creates_settings_when_none_on_disk()
+    {
+        var repo = new Mock<ISettingsRepository<AppSettings>>();
+        repo.Setup(r => r.TryLoad("settings.json")).Returns((AppSettings?)null);
+        AppSettings? saved = null;
+        repo.Setup(r => r.Save(It.IsAny<AppSettings>(), "settings.json"))
+            .Callback<AppSettings, string>((s, _) => saved = s);
+
+        var actions = BuildEngine(settingsRepo: repo.Object);
+
+        await actions.SetPastePanelOpacityAsync(45, CancellationToken.None);
+
+        saved.Should().NotBeNull();
+        saved!.PastePanelOpacity.Should().Be(45);
     }
 
     // ---------- BUG B: settings broadcast subscription ----------

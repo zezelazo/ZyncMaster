@@ -19,4 +19,10 @@ public sealed record EngineSettings
     public int CalExportTimeoutMinutes { get; init; } = 5;
 
     public IReadOnlyList<string>? CalendarNames { get; init; }
+
+    // Opacity (0-100) of the floating clipboard paste panel popped up by the global hotkey. The App
+    // injects this into the viewer document as the --cb-paste-opacity CSS variable so the card is
+    // drawn as a dark fill at this opacity over the desktop (70 = 70% opaque / 30% transparent).
+    // App-local and clamped to 0..100 by AppSettingsResolver.
+    public int PastePanelOpacity { get; init; } = 70;
 }

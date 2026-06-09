@@ -56,4 +56,38 @@ public class UnconfiguredEngineActionsTests
 
         await act.Should().NotThrowAsync();
     }
+
+    [Theory]
+    [InlineData(45, 45)]
+    [InlineData(-1, 0)]
+    [InlineData(200, 100)]
+    public async Task SetPastePanelOpacity_persists_clamped_even_when_unconfigured(int input, int expected)
+    {
+        // Paste-panel opacity is an App-local UI setting, so it must persist to disk even before the
+        // server URL is configured (the user can set it from the Settings screen pre-config).
+        var repo = new Mock<ISettingsRepository<AppSettings>>();
+        repo.Setup(r => r.TryLoad("unused.json")).Returns((AppSettings?)null);
+        AppSettings? saved = null;
+        repo.Setup(r => r.Save(It.IsAny<AppSettings>(), "unused.json"))
+            .Callback<AppSettings, string>((s, _) => saved = s);
+        var engine = new UnconfiguredEngineActions(repo.Object, "unused.json");
+
+        await engine.SetPastePanelOpacityAsync(input, CancellationToken.None);
+
+        saved.Should().NotBeNull();
+        saved!.PastePanelOpacity.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task GetClipboardDevices_surfaces_persisted_opacity_when_unconfigured()
+    {
+        var repo = new Mock<ISettingsRepository<AppSettings>>();
+        repo.Setup(r => r.TryLoad("unused.json"))
+            .Returns(new AppSettings { PastePanelOpacity = 40 });
+        var engine = new UnconfiguredEngineActions(repo.Object, "unused.json");
+
+        var view = await engine.GetClipboardDevicesAsync(CancellationToken.None);
+
+        view.PastePanelOpacity.Should().Be(40);
+    }
 }
