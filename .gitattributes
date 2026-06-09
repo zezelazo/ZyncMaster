@@ -1,0 +1,5 @@
+# Shell scripts, systemd units and nginx configs MUST stay LF — CRLF breaks them on Linux.
+*.sh            text eol=lf
+*.service       text eol=lf
+*.conf          text eol=lf
+deploy/vps/**   text eol=lf
