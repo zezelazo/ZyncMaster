@@ -48,6 +48,8 @@ public sealed class ClipboardKeyExchangeTests
         public Task<ClipboardSettings> GetSettingsAsync(string deviceId, CancellationToken ct = default) =>
             Task.FromResult(new ClipboardSettings());
         public Task UpdateSettingsAsync(string deviceId, ClipboardSettings s, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<ClipboardDeviceKeyInfo>> GetDevicesAsync(CancellationToken ct = default) =>
+            Task.FromResult((IReadOnlyList<ClipboardDeviceKeyInfo>)Array.Empty<ClipboardDeviceKeyInfo>());
 
         public Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default)
         {

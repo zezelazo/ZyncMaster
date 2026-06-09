@@ -218,6 +218,9 @@ public partial class App : Application
         bootEngine.Actions.ClipboardPresenceChanged += OnClipboardPresenceChanged;
         bootEngine.Actions.ClipboardSettingsChanged += OnClipboardSettingsChanged;
         bootEngine.Actions.ClipboardDeleted += OnClipboardDeleted;
+        // The E2E text key landed (a peer relayed it): previously undecryptable history rows just
+        // became readable, so push a refresh signal to any open history list.
+        bootEngine.ClipboardKeyExchange.TextKeyChanged += OnClipboardTextKeyChanged;
         _clipboardTask = Task.Run(() => StartClipboardAsync(bootEngine, _shutdown.Token));
 
         // FIX C — the device-lease heartbeat runs independently of the scheduler's startup delay so
@@ -326,12 +329,31 @@ public partial class App : Application
             // 3) Text-key bootstrap: empty history => this is the first device, generate + keep the key;
             //    otherwise wait for a peer to relay it (OnKeyReceivedAsync, wired in ClipboardService).
             var history = await engine.ClipboardTransport.GetHistoryAsync(ct);
-            await engine.ClipboardKeyExchange.EnsureTextKeyAsync(history.Count == 0, ct);
+            var textKey = await engine.ClipboardKeyExchange.EnsureTextKeyAsync(history.Count == 0, ct);
 
             // 4) Go live.
             await engine.ClipboardTransport.ConnectAsync(ct);
             engine.ClipboardService.Start();
             engine.ClipboardHotkey.Register(settings.ViewerHotkey);
+
+            // 5) Zero-touch key admission. No key -> advertise our need (needsTextKey + our public
+            //    key via the settings upsert) so a key-holder relays it; key in hand -> sweep the
+            //    roster for peers already waiting. Best-effort: the same flows re-run automatically
+            //    on the settings/presence triggers inside ClipboardKeyExchange, so a failure here
+            //    only delays admission, never loses it — and must not take the started pipeline down.
+            try
+            {
+                if (textKey is null)
+                    await engine.ClipboardKeyExchange.RequestKeyAsync(ct);
+                else
+                    await engine.ClipboardKeyExchange.AdmitPendingPeersAsync(ct);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                engine.Logger.Log(LogLevel.Warning,
+                    "Clipboard key admission bootstrap failed; it will retry on the live triggers.", ex);
+            }
 
             engine.Logger.Log(LogLevel.Info,
                 $"Clipboard module started (device={device.DeviceId}, hotkey={settings.ViewerHotkey}).");
@@ -356,6 +378,7 @@ public partial class App : Application
             try { engine.Actions.ClipboardPresenceChanged -= OnClipboardPresenceChanged; } catch { }
             try { engine.Actions.ClipboardSettingsChanged -= OnClipboardSettingsChanged; } catch { }
             try { engine.Actions.ClipboardDeleted -= OnClipboardDeleted; } catch { }
+            try { engine.ClipboardKeyExchange.TextKeyChanged -= OnClipboardTextKeyChanged; } catch { }
             try { engine.ClipboardService.Stop(); } catch { }
             try { (engine.ClipboardHotkey as IDisposable)?.Dispose(); } catch { }
             try { (engine.ClipboardCapture as IDisposable)?.Dispose(); } catch { }
@@ -426,6 +449,18 @@ public partial class App : Application
     {
         try { _bridge?.PushClipboardSettings(deviceId, settings); }
         catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard settings push failed.", ex); }
+    }
+
+    // The E2E text key was just received/replaced (a peer relayed it after our request): push a
+    // "clipboard:key" refresh signal to BOTH the main-window bridge (the dashboard clipboard screen)
+    // and the floating viewer bridge so open history lists re-fetch — rows that showed the
+    // cannot-decrypt placeholder become readable. Best-effort, mirroring the other clipboard pushes.
+    private void OnClipboardTextKeyChanged()
+    {
+        try { _bridge?.PushClipboardKeyChanged(); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard key push failed.", ex); }
+        try { _clipboardViewerBridge?.PushClipboardKeyChanged(); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard key viewer push failed.", ex); }
     }
 
     // Another device (or the human panel) deleted a history entry and the server broadcast it: push the

@@ -228,7 +228,15 @@ public sealed class EngineHost : IDisposable
             http, engineSettings.ServerBaseUrl);
         var clipboardSink = new Platform.Clipboard.WindowsClipboardSink();
         var clipboardHotkey = new Platform.Clipboard.WindowsGlobalHotkey(logger);
-        var clipboardKeyExchange = new ClipboardKeyExchange(clipboardKeyStore, clipboardTransport);
+
+        // The key exchange resolves THIS device's id lazily through the engine's live clipboard
+        // origin (set by InitializeClipboard after registration) — the id is unknown at composition
+        // time, and the exchange no-ops until it lands. actionsRef closes the construction cycle:
+        // the exchange needs the actions for the id, the actions need the exchange to report
+        // history-decrypt failures (wrong-key recovery).
+        EngineActions? actionsRef = null;
+        var clipboardKeyExchange = new ClipboardKeyExchange(
+            clipboardKeyStore, clipboardTransport, () => actionsRef?.ClipboardOrigin.id, logger);
 
         var actions = new EngineActions(
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
@@ -246,7 +254,9 @@ public sealed class EngineHost : IDisposable
             clipboardSink: clipboardSink,
             clipboardKeys: clipboardKeyStore,
             clipboardHotkey: clipboardHotkey,
-            clipboardDevices: clipboardDevices);
+            clipboardDevices: clipboardDevices,
+            clipboardKeyExchange: clipboardKeyExchange);
+        actionsRef = actions;
 
         // The capture source stamps each local copy with THIS device's identity. The id/name come from
         // the engine's live clipboard state (set by InitializeClipboard after registration); until then

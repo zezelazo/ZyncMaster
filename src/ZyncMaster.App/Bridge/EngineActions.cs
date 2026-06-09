@@ -59,6 +59,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly IClipboardKeyStore? _clipboardKeys;
     private readonly IClipboardHotkey? _clipboardHotkey;
     private readonly IClipboardDevicesSource? _clipboardDevices;
+    private readonly ClipboardKeyExchange? _clipboardKeyExchange;
 
     // The live, in-process clipboard settings for THIS device. The capture/apply pipeline reads this
     // through the Func<ClipboardSettings> the ClipboardService was given (App passes () =>
@@ -148,7 +149,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
         IClipboardSink? clipboardSink = null,
         IClipboardKeyStore? clipboardKeys = null,
         IClipboardHotkey? clipboardHotkey = null,
-        IClipboardDevicesSource? clipboardDevices = null)
+        IClipboardDevicesSource? clipboardDevices = null,
+        ClipboardKeyExchange? clipboardKeyExchange = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
         _pairing = pairing ?? throw new ArgumentNullException(nameof(pairing));
@@ -180,6 +182,7 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _clipboardKeys = clipboardKeys;
         _clipboardHotkey = clipboardHotkey;
         _clipboardDevices = clipboardDevices;
+        _clipboardKeyExchange = clipboardKeyExchange;
 
         // Track the live online roster the server pushes over the connection. Once any presence frame
         // has been seen it becomes the authoritative online set for the devices view (the last-seen
@@ -1073,8 +1076,19 @@ public sealed class EngineActions : IEngineActions, IDisposable
             }
             else if (textKey is not null && entry.CipherText is { Length: > 0 })
             {
-                try { text = TextCrypto.Decrypt(textKey, entry.CipherText); }
-                catch (System.Security.Cryptography.CryptographicException) { text = null; }
+                try
+                {
+                    text = TextCrypto.Decrypt(textKey, entry.CipherText);
+                    _clipboardKeyExchange?.ReportDecryptSuccess();
+                }
+                catch (System.Security.Cryptography.CryptographicException)
+                {
+                    text = null;
+                    // Wrong key: feed the suspect-key counter (fire-and-forget — this mapper is sync
+                    // and best-effort). After enough consecutive failures the key exchange
+                    // re-advertises our need and a peer's relayed key overwrites ours.
+                    _ = _clipboardKeyExchange?.ReportDecryptFailureAsync();
+                }
             }
         }
         else

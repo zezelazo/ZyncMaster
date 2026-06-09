@@ -18,6 +18,11 @@ public interface IClipboardTransport
     Task DeleteEntryAsync(string id, CancellationToken ct = default);
     Task<ClipboardSettings> GetSettingsAsync(string deviceId, CancellationToken ct = default);
     Task UpdateSettingsAsync(string deviceId, ClipboardSettings s, CancellationToken ct = default);
+
+    // The user's device roster as the clipboard module sees it (GET /api/clipboard/devices): id +
+    // name, the live online flag, and the key-admission fields (needsTextKey + publicKeyBase64). A
+    // key-holder reads this to find which peers are waiting for the E2E text key.
+    Task<IReadOnlyList<ClipboardDeviceKeyInfo>> GetDevicesAsync(CancellationToken ct = default);
     Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default);
     Task ConnectAsync(CancellationToken ct = default);
     event Action<ClipboardEntry> ItemReceived;

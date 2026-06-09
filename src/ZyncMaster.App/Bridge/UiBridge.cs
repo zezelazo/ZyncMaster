@@ -110,6 +110,20 @@ public sealed class UiBridge
         _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
     }
 
+    // Sends an unsolicited "clipboard:key" event when the E2E text key was received/replaced (a peer
+    // relayed it). The UI treats it as a "re-fetch the history" signal: rows that showed the
+    // cannot-decrypt placeholder become readable now. No payload — the key itself never crosses the
+    // bridge.
+    public void PushClipboardKeyChanged()
+    {
+        var envelope = new
+        {
+            @event = "clipboard:key",
+            payload = new { },
+        };
+        _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
     private void OnReceived(string json)
     {
         // Fire-and-forget: inbound dispatch is async but the transport callback is sync.

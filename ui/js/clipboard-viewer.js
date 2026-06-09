@@ -449,6 +449,15 @@ async function boot() {
     render();
   });
 
+  // The E2E text key just arrived ("clipboard:key"): items that decrypted to the placeholder are
+  // readable now, so re-hydrate the whole list (the per-item text was resolved host-side).
+  Bridge.onEvent('clipboard:key', () => {
+    if (!Bridge.available) return;
+    Bridge.call('getClipboardHistory')
+      .then((items) => { state.items = Array.isArray(items) ? items : []; render(); })
+      .catch(() => {});
+  });
+
   // First paint immediately (empty/loading), then hydrate from the bridge.
   render();
 

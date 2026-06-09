@@ -363,6 +363,22 @@ public class ClipboardBridgeTests
         act.Should().Throw<ArgumentNullException>();
     }
 
+    [Fact]
+    public void PushClipboardKeyChanged_sends_a_clipboard_key_event()
+    {
+        // The E2E text key just landed: the UI gets a payload-less "clipboard:key" refresh signal —
+        // the key itself must never cross the bridge.
+        var transport = new FakeTransport();
+        var bridge = new UiBridge(transport, new ClipboardSpyActions());
+
+        bridge.PushClipboardKeyChanged();
+
+        transport.Sent.Should().ContainSingle();
+        var msg = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]);
+        msg.GetProperty("event").GetString().Should().Be("clipboard:key");
+        msg.GetProperty("payload").EnumerateObject().Should().BeEmpty();
+    }
+
     // ---------- EngineActions behaviour over fakes ----------
 
     private static EngineActions BuildEngine(
@@ -375,7 +391,8 @@ public class ClipboardBridgeTests
         IClock? clock = null,
         Mock<IPairsClient>? pairs = null,
         ISettingsRepository<AppSettings>? settingsRepo = null,
-        string settingsPath = "settings.json")
+        string settingsPath = "settings.json",
+        ClipboardKeyExchange? clipboardKeyExchange = null)
     {
         var settings = new EngineSettings { ServerBaseUrl = "https://server.test" };
         var deviceKeys = deviceKeyStore ?? KeyStore("device-key").Object;
@@ -407,7 +424,8 @@ public class ClipboardBridgeTests
             clipboardSink: (sink ?? new Mock<IClipboardSink>()).Object,
             clipboardKeys: (keys ?? new Mock<IClipboardKeyStore>()).Object,
             clipboardHotkey: (hotkey ?? new Mock<IClipboardHotkey>()).Object,
-            clipboardDevices: (devices ?? new Mock<IClipboardDevicesSource>()).Object);
+            clipboardDevices: (devices ?? new Mock<IClipboardDevicesSource>()).Object,
+            clipboardKeyExchange: clipboardKeyExchange);
     }
 
     private static Mock<IDeviceKeyStore> KeyStore(string? key)
@@ -463,6 +481,57 @@ public class ClipboardBridgeTests
         var history = await actions.GetClipboardHistoryAsync(CancellationToken.None);
 
         history[0].Text.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetHistory_wrong_key_reports_failures_and_re_requests_the_key_after_threshold()
+    {
+        // The history was encrypted with a key we do NOT hold (both sides self-generated). Each row
+        // must degrade to Text=null AND feed the key exchange's suspect-key counter; at three
+        // consecutive failures the exchange re-advertises our need (settings upsert with
+        // needsTextKey=true + our public key) so a peer relays the right key over ours.
+        var senderKey = TextCrypto.NewKey();
+        var ourWrongKey = TextCrypto.NewKey();
+
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "i1", Type = ClipboardEntryType.Text, CipherText = TextCrypto.Encrypt(senderKey, "a"), OriginDeviceId = "dev-2" },
+                new ClipboardEntry { Id = "i2", Type = ClipboardEntryType.Text, CipherText = TextCrypto.Encrypt(senderKey, "b"), OriginDeviceId = "dev-2" },
+                new ClipboardEntry { Id = "i3", Type = ClipboardEntryType.Text, CipherText = TextCrypto.Encrypt(senderKey, "c"), OriginDeviceId = "dev-2" },
+            });
+        transport.Setup(t => t.GetSettingsAsync("dev-1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ClipboardSettings());
+        var upserts = new List<ClipboardSettings>();
+        transport.Setup(t => t.UpdateSettingsAsync("dev-1", It.IsAny<ClipboardSettings>(), It.IsAny<CancellationToken>()))
+            .Callback<string, ClipboardSettings, CancellationToken>((_, s, _) => { lock (upserts) upserts.Add(s); })
+            .Returns(Task.CompletedTask);
+
+        var keys = new Mock<IClipboardKeyStore>();
+        keys.Setup(k => k.LoadTextKeyAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ourWrongKey);
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        keys.Setup(k => k.EnsureDeviceKeypairAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((KeyWrap.ExportPublicKey(rsa), rsa));
+
+        var keyExchange = new ClipboardKeyExchange(keys.Object, transport.Object, () => "dev-1");
+        var actions = BuildEngine(transport, keys: keys, clipboardKeyExchange: keyExchange);
+
+        var history = await actions.GetClipboardHistoryAsync(CancellationToken.None);
+
+        history.Should().HaveCount(3);
+        history.Should().OnlyContain(i => i.Text == null); // degraded, never leaked
+
+        // The re-request is fire-and-forget from the sync mapper: poll for the upsert.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 5000) { lock (upserts) { if (upserts.Count > 0) break; } await Task.Delay(20); }
+
+        lock (upserts)
+        {
+            upserts.Should().ContainSingle();
+            upserts[0].NeedsTextKey.Should().BeTrue();
+            upserts[0].PublicKeyBase64.Should().Be(Convert.ToBase64String(KeyWrap.ExportPublicKey(rsa)));
+        }
     }
 
     [Fact]

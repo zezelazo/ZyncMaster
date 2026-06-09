@@ -24,6 +24,7 @@ public sealed class ClipboardServiceTests
     private sealed class FakeTransport : IClipboardTransport
     {
         public readonly List<ClipboardEntry> Published = new();
+        public readonly List<ClipboardSettings> UpdatedSettings = new();
 
         public Task PublishAsync(ClipboardEntry encrypted, CancellationToken ct = default)
         {
@@ -36,7 +37,13 @@ public sealed class ClipboardServiceTests
         public Task DeleteEntryAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
         public Task<ClipboardSettings> GetSettingsAsync(string deviceId, CancellationToken ct = default) =>
             Task.FromResult(new ClipboardSettings());
-        public Task UpdateSettingsAsync(string deviceId, ClipboardSettings s, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateSettingsAsync(string deviceId, ClipboardSettings s, CancellationToken ct = default)
+        {
+            UpdatedSettings.Add(s);
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyList<ClipboardDeviceKeyInfo>> GetDevicesAsync(CancellationToken ct = default) =>
+            Task.FromResult((IReadOnlyList<ClipboardDeviceKeyInfo>)Array.Empty<ClipboardDeviceKeyInfo>());
         public Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default) =>
             Task.FromResult(true);
         public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -97,10 +104,10 @@ public sealed class ClipboardServiceTests
         public ClipboardSettings Settings = new();
         public ClipboardService Service;
 
-        public Harness(byte[]? textKey, long hardMax = 1_000_000)
+        public Harness(byte[]? textKey, long hardMax = 1_000_000, string? deviceId = "this-dev")
         {
             Keys = new FakeKeyStore(textKey);
-            var keyExchange = new ClipboardKeyExchange(Keys, Transport);
+            var keyExchange = new ClipboardKeyExchange(Keys, Transport, () => deviceId);
             var dedupe = new ClipboardDedupe();
             Service = new ClipboardService(
                 Capture, Transport, Sink, Keys, keyExchange, dedupe,
@@ -348,6 +355,68 @@ public sealed class ClipboardServiceTests
         await SettleAsync();
 
         (await h.Keys.LoadTextKeyAsync()).Should().BeEquivalentTo(shared);
+    }
+
+    [Fact]
+    public async Task Received_WrongKey_ThreeConsecutiveFailures_ReAdvertisesNeedForTheKey()
+    {
+        // Our key is NOT the one the sender used (the classic both-sides-self-generated split brain).
+        var h = new Harness(TextCrypto.NewKey());
+        var senderKey = TextCrypto.NewKey();
+
+        for (var i = 0; i < 3; i++)
+            h.Transport.RaiseItem(new ClipboardEntry
+            {
+                Id = $"r{i}",
+                Type = ClipboardEntryType.Text,
+                CipherText = TextCrypto.Encrypt(senderKey, $"unreadable {i}"),
+                OriginDeviceId = "dev-b",
+            });
+
+        // The third failure marks the key suspect -> RequestKeyAsync upserts needsTextKey=true. The
+        // receive handler is fire-and-forget, so poll instead of a fixed delay.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (h.Transport.UpdatedSettings.Count == 0 && sw.ElapsedMilliseconds < 5000)
+            await Task.Delay(20);
+
+        h.Transport.UpdatedSettings.Should().ContainSingle();
+        h.Transport.UpdatedSettings[0].NeedsTextKey.Should().BeTrue();
+        h.Transport.UpdatedSettings[0].PublicKeyBase64.Should().NotBeNullOrEmpty();
+        h.Sink.Set.Should().BeEmpty(); // nothing undecryptable ever reaches the OS clipboard
+    }
+
+    [Fact]
+    public async Task Received_DecryptSuccessBetweenFailures_ResetsTheSuspectStreak()
+    {
+        var key = TextCrypto.NewKey();
+        var h = new Harness(key);
+        var wrongKey = TextCrypto.NewKey();
+
+        ClipboardEntry Bad(int i) => new()
+        {
+            Id = $"bad{i}",
+            Type = ClipboardEntryType.Text,
+            CipherText = TextCrypto.Encrypt(wrongKey, "nope"),
+            OriginDeviceId = "dev-b",
+        };
+
+        h.Transport.RaiseItem(Bad(0));
+        h.Transport.RaiseItem(Bad(1));
+        await SettleAsync();
+        h.Transport.RaiseItem(new ClipboardEntry
+        {
+            Id = "good",
+            Type = ClipboardEntryType.Text,
+            CipherText = TextCrypto.Encrypt(key, "readable"),
+            OriginDeviceId = "dev-b",
+        });
+        await SettleAsync();
+        h.Transport.RaiseItem(Bad(2));
+        h.Transport.RaiseItem(Bad(3));
+        await SettleAsync();
+
+        // Never 3 consecutive failures -> the key is never marked suspect, no re-request.
+        h.Transport.UpdatedSettings.Should().BeEmpty();
     }
 
     [Fact]

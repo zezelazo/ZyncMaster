@@ -4666,6 +4666,11 @@ async function boot() {
     Bridge.onEvent('clipboard:item', () => refreshClipboardHistory());
     Bridge.onEvent('clipboard:deleted', (p) => { if (p && p.id) dropClipboardHistoryItem(p.id); });
 
+    // The E2E text key just arrived on this device ("clipboard:key"): rows that were rendered with
+    // the cannot-decrypt placeholder are readable now, so force a history re-fetch. Cheap no-op
+    // unless the clipboard view is open.
+    Bridge.onEvent('clipboard:key', () => refreshClipboardHistory());
+
     // Load device capabilities once. The web panel maps this to {outlookCom:false}; the desktop
     // App probes Outlook Classic. A failure leaves the safe default (COM disabled). Repaint so
     // tiles/buttons that gate on COM reflect the real value once it lands.

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -116,7 +117,21 @@ public sealed class ClipboardService
             if (key is null)
                 return; // cannot decrypt yet — usable after key admission.
 
-            var plain = TextCrypto.Decrypt(key, entry.CipherText!);
+            string plain;
+            try
+            {
+                plain = TextCrypto.Decrypt(key, entry.CipherText!);
+            }
+            catch (CryptographicException)
+            {
+                // Wrong key (e.g. both sides self-generated): report it. After enough consecutive
+                // failures the key exchange marks our key suspect and re-requests a fresh copy from
+                // the peers; the relayed key overwrites ours and both sides converge.
+                await _keyExchange.ReportDecryptFailureAsync(ct).ConfigureAwait(false);
+                return;
+            }
+
+            _keyExchange.ReportDecryptSuccess();
             entry = entry with { Text = plain };
         }
 

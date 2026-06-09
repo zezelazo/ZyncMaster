@@ -142,6 +142,39 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
         await SendAsync(HttpMethod.Patch, path, SettingsToJson(s), ct).ConfigureAwait(false);
     }
 
+    // The clipboard view of the user's device roster (GET /api/clipboard/devices): id + name, the
+    // live online flag from the server's WS registry, and the key-admission advertisement
+    // (needsTextKey + publicKeyBase64). A key-holder sweeps this list to find peers waiting for the
+    // E2E text key. Rows without a device id are malformed and skipped.
+    public async Task<IReadOnlyList<ClipboardDeviceKeyInfo>> GetDevicesAsync(CancellationToken ct = default)
+    {
+        var token = await SendAsync(HttpMethod.Get, "/api/clipboard/devices", null, ct).ConfigureAwait(false);
+
+        // Tolerate both a bare array and an envelope { devices: [...] }.
+        var arr = token as JArray
+                  ?? (token as JObject)?["devices"] as JArray
+                  ?? new JArray();
+
+        var list = new List<ClipboardDeviceKeyInfo>(arr.Count);
+        foreach (var item in arr)
+            if (item is JObject obj)
+            {
+                var id = obj["deviceId"]?.Value<string>();
+                if (string.IsNullOrEmpty(id))
+                    continue;
+
+                list.Add(new ClipboardDeviceKeyInfo
+                {
+                    DeviceId = id,
+                    Name = obj["name"]?.Value<string>(),
+                    Online = obj["online"]?.Value<bool?>() ?? false,
+                    NeedsTextKey = obj["needsTextKey"]?.Value<bool?>() ?? false,
+                    PublicKeyBase64 = obj["publicKeyBase64"]?.Value<string>(),
+                });
+            }
+        return list;
+    }
+
     public async Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default)
     {
         if (fromDeviceId == null) throw new ArgumentNullException(nameof(fromDeviceId));
@@ -361,17 +394,31 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
         ViewerHotkey = obj["viewerHotkey"]?.Value<string>() ?? "Ctrl+Win+Q",
         Density = obj["density"]?.Value<string>() ?? "rich",
         ShowHints = obj["showHints"]?.Value<bool>() ?? true,
+        PublicKeyBase64 = obj["publicKeyBase64"]?.Value<string>(),
+        NeedsTextKey = obj["needsTextKey"]?.Value<bool?>(),
     };
 
-    private static JObject SettingsToJson(ClipboardSettings s) => new()
+    private static JObject SettingsToJson(ClipboardSettings s)
     {
-        ["autoSync"] = s.AutoSync,
-        ["send"] = s.Send,
-        ["receive"] = s.Receive,
-        ["viewerHotkey"] = s.ViewerHotkey,
-        ["density"] = s.Density,
-        ["showHints"] = s.ShowHints,
-    };
+        var json = new JObject
+        {
+            ["autoSync"] = s.AutoSync,
+            ["send"] = s.Send,
+            ["receive"] = s.Receive,
+            ["viewerHotkey"] = s.ViewerHotkey,
+            ["density"] = s.Density,
+            ["showHints"] = s.ShowHints,
+        };
+
+        // The key-admission fields are MERGE semantics server-side: send them only when set, so a
+        // plain preferences save (both null) leaves the stored public key / needs-key flag alone.
+        if (s.PublicKeyBase64 is not null)
+            json["publicKeyBase64"] = s.PublicKeyBase64;
+        if (s.NeedsTextKey is { } needsTextKey)
+            json["needsTextKey"] = needsTextKey;
+
+        return json;
+    }
 
     // Reads the onlineDeviceIds array of a presence frame into a string list, skipping null/blank
     // entries. A null array (field absent) yields an empty list — "nobody online".
