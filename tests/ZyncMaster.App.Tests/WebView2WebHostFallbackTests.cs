@@ -26,5 +26,21 @@ public class WebView2WebHostFallbackTests
         // The window only shell-opens http/https URLs; the download link must qualify.
         WebView2WebHost.RuntimeDownloadUrl.Should().StartWith("https://");
     }
+
+    [Theory]
+    [InlineData(70, 70)]
+    [InlineData(0, 0)]
+    [InlineData(100, 100)]
+    [InlineData(-5, 0)]
+    [InlineData(250, 100)]
+    public void BuildPasteOpacityScript_sets_the_css_variable_clamped(int input, int expected)
+    {
+        // The script the clipboard viewer's WebView2 runs on document creation sets --cb-paste-opacity
+        // to the clamped value so the card renders at the configured opacity before its own CSS runs.
+        var script = WebView2WebHost.BuildPasteOpacityScript(input);
+
+        script.Should().Be(
+            $"document.documentElement.style.setProperty('--cb-paste-opacity', '{expected}');");
+    }
 }
 #endif

@@ -35,6 +35,8 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     // window reuses the SAME bundled site through this seam by passing "clipboard-viewer.html".
     private readonly string _startUrl;
     private readonly string _uiRoot;
+    private readonly string? _documentCreatedScript;
+    private readonly bool _transparentBackground;
     private readonly Queue<string> _pending = new();
     private CoreWebView2Controller? _controller;
     private bool _ready;
@@ -55,11 +57,37 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     // startPage: the file under the bundled site to navigate to (default "index.html"). The clipboard
     // viewer passes "clipboard-viewer.html" so its window renders the viewer page through the SAME
     // virtual-host mapping + bridge channel as the main window.
-    public WebView2WebHost(string? uiRoot = null, string startPage = "index.html")
+    //
+    // documentCreatedScript: optional JavaScript run on EVERY document BEFORE its own scripts (via
+    // CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync). The clipboard viewer uses it to set the
+    // --cb-paste-opacity CSS variable from the App-local PastePanelOpacity setting, so the paste
+    // panel's card is drawn at the configured opacity from the very first paint.
+    //
+    // transparentBackground: when true the embedded WebView2's DefaultBackgroundColor is set to a
+    // transparent color so areas the page does not paint show the desktop behind the (frameless,
+    // transparent) window instead of an opaque rectangle. The clipboard paste viewer turns this on so
+    // only its glass card is visible; the main dashboard leaves it false (it paints a full background).
+    public WebView2WebHost(
+        string? uiRoot = null,
+        string startPage = "index.html",
+        string? documentCreatedScript = null,
+        bool transparentBackground = false)
     {
         _uiRoot = uiRoot ?? DefaultUiRoot();
         var page = string.IsNullOrWhiteSpace(startPage) ? "index.html" : startPage.TrimStart('/');
         _startUrl = $"https://{VirtualHost}/{page}";
+        _documentCreatedScript = string.IsNullOrWhiteSpace(documentCreatedScript) ? null : documentCreatedScript;
+        _transparentBackground = transparentBackground;
+    }
+
+    // Builds the document-created script that injects --cb-paste-opacity onto :root so the clipboard
+    // viewer's card renders at the App-local opacity (0..100, clamped) before its own CSS/JS run. The
+    // value is an int from a clamped setting, so it is embedded directly (no string interpolation of
+    // user-controlled text).
+    public static string BuildPasteOpacityScript(int opacity)
+    {
+        var clamped = Math.Max(0, Math.Min(100, opacity));
+        return "document.documentElement.style.setProperty('--cb-paste-opacity', '" + clamped + "');";
     }
 
     // Navigation is driven by the controller becoming ready (see InitAsync) once the
@@ -130,6 +158,16 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
 
             UpdateBounds();
 
+            // Transparent surface for the clipboard paste viewer: with a transparent default background
+            // the WebView2 no longer paints an opaque rectangle, so areas the page leaves unpainted show
+            // the desktop through the frameless, transparent window — only the glass card remains. Set on
+            // the controller before navigation. Best-effort: an older runtime may not support it.
+            if (_transparentBackground)
+            {
+                try { _controller.DefaultBackgroundColor = System.Drawing.Color.Transparent; }
+                catch { /* older WebView2 runtime: the viewer simply keeps an opaque background */ }
+            }
+
             var core = _controller.CoreWebView2;
 
             // Let the web title bar mark draggable regions with CSS `app-region: drag`
@@ -169,6 +207,16 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
             // scheme (file:, javascript:, etc.) is dropped so a hostile/odd link can't shell out.
             try { core.NewWindowRequested += OnNewWindowRequested; }
             catch { /* older WebView2 runtime: external links just won't open, no crash */ }
+
+            // Inject any document-created script (e.g. the clipboard viewer's --cb-paste-opacity CSS
+            // variable) BEFORE navigating, so it runs on the start page's document creation and the
+            // viewer card paints at the configured opacity from the first frame. Best-effort: a runtime
+            // that rejects the call must not block the navigation.
+            if (_documentCreatedScript != null)
+            {
+                try { await core.AddScriptToExecuteOnDocumentCreatedAsync(_documentCreatedScript); }
+                catch { /* older WebView2 runtime: the CSS var falls back to its default in clipboard.css */ }
+            }
 
             core.Navigate(_startUrl);
 

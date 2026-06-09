@@ -439,7 +439,14 @@ public partial class App : Application
 #if WIN_WEBVIEW2
         if (OperatingSystem.IsWindows())
         {
-            var host = new WebView2WebHost(startPage: "clipboard-viewer.html");
+            // App-local paste-panel opacity (0..100, clamped in AppSettingsResolver). Injected into the
+            // viewer document as the --cb-paste-opacity CSS variable, and paired with a transparent
+            // WebView2/window background so only the (semi-transparent) glass card shows over the desktop.
+            var opacity = _engineHost?.Settings.PastePanelOpacity ?? 70;
+            var host = new WebView2WebHost(
+                startPage: "clipboard-viewer.html",
+                documentCreatedScript: WebView2WebHost.BuildPasteOpacityScript(opacity),
+                transparentBackground: true);
             _clipboardViewerHost = host;
             if (_engineHost != null)
                 _clipboardViewerBridge = new UiBridge(
