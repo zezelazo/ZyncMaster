@@ -442,6 +442,11 @@ const live = {
   // first time the Clipboard settings screen (or the hub summary) needs it.
   clipboardDevices: null,
   clipboardDevicesLoading: false,
+  // Clipboard dashboard VIEW (the shared history with copy/delete), distinct from the devices roster
+  // above. Lazy-loaded the first time the in-app clipboard screen opens; the live "clipboard:item" /
+  // "clipboard:deleted" pushes keep it fresh while the screen is open.
+  clipboardHistory: null,
+  clipboardHistoryLoading: false,
 };
 
 // Cap on per-pair retained client events (newest kept). Keeps memory bounded over a long session.
@@ -972,7 +977,14 @@ function liveModules(activePairCount) {
   // App; in the web panel it stays "coming soon" like the not-yet-shipped modules.
   const rest = MODULES.filter((m) => m.id !== 'calendar').map((m) => {
     if (m.id === 'clipboard' && Bridge.desktopApp) {
-      return { ...m, opens: true, route: 'clipboard-settings', stat: '' };
+      // The tile opens the in-app clipboard VIEW (the shared history with copy/delete), not the
+      // settings screen. It reads "Active" when this device is registered AND sending or receiving;
+      // otherwise "Set up". The device roster is lazy-loaded by renderHome so the state is honest.
+      const active = clipboardActive();
+      return {
+        ...m, opens: true, route: 'clipboard', active, stat: '',
+        sub: active ? 'Mirroring your clipboard' : 'Mirror your clipboard across devices',
+      };
     }
     return { ...m, opens: false };
   });
@@ -1036,6 +1048,11 @@ function renderHome(root) {
     live.pairsAttempted = true;  // fire once; rerenderInPlace below must not re-trigger this on a 401
     loadPairs().then(() => { if (state.view === 'home') rerenderInPlace(); });
   }
+
+  // Desktop App: load the clipboard roster once so the Clipboard tile can show the right "Active" /
+  // "Set up" chip (registered AND send-or-receive). loadClipboardDevices is once-only and repaints
+  // home when it lands. Web panel has no clipboard module, so this is App-only.
+  if (Bridge.desktopApp) loadClipboardDevices('home');
 
   // In a real transport the module tiles must reflect the real state: with no active pairs the
   // Calendar module is "not configured" (inactive, no fake "2 calendars / 2 min ago" line),
@@ -2540,6 +2557,8 @@ function resetSessionState() {
   live.me = null;
   live.clipboardDevices = null;
   live.clipboardDevicesLoading = false;
+  live.clipboardHistory = null;
+  live.clipboardHistoryLoading = false;
   clipboardDevicesOpen = false;
 }
 
@@ -2756,6 +2775,16 @@ function thisClipboardDevice() {
   return d.devices.find((x) => x.isThis) || d.devices.find((x) => x.id === d.thisDeviceId) || null;
 }
 
+// clipboardActive — true when THIS device is registered (present in the roster) AND has send OR
+// receive enabled. Drives the home tile's "Active" vs "Set up" chip. Returns false until the roster
+// loads or when this device is not yet registered / has both directions off.
+function clipboardActive() {
+  const me = thisClipboardDevice();
+  if (!me) return false;
+  const s = me.settings || {};
+  return !!(s.send || s.receive);
+}
+
 // persistClipboardSettings(dev) — push one device's full settings block to the host. Sends every
 // field the contract expects so a partial update never resets the others to defaults server-side.
 function persistClipboardSettings(dev) {
@@ -2904,6 +2933,216 @@ function deviceRow(dev, thisId) {
     el('div', { class: 'cb-dev__tg' }, el('small', { text: 'send' }), clipToggle(dev, 'send', { sm: true, label: `Send from ${dev.name}` })),
     el('div', { class: 'cb-dev__tg' }, el('small', { text: 'receive' }), clipToggle(dev, 'receive', { sm: true, label: `Receive on ${dev.name}` })));
   return el('div', { class: 'cb-dev' }, dot, info, toggles);
+}
+
+// ---------------- Screen: Clipboard view (shared history with copy/delete) ----------------
+// Desktop App only. The home "Clipboard" tile opens THIS screen (route 'clipboard'), not the settings
+// screen. It lists the shared clipboard history (getClipboardHistory) reusing the floating viewer's
+// item-row style (.cb-row / .cb-av / .cb-title / .cb-meta). Tapping an item reveals a full overlay over
+// it with two icon-only actions: COPY (pasteClipboardEntry → sets the OS clipboard) and a TRASH that
+// deletes WITHOUT confirmation (optimistic: the row leaves the list at once, then deleteClipboardEntry
+// propagates it to the server + the user's other devices). The live "clipboard:item" / "clipboard:
+// deleted" pushes keep the list fresh while this screen is open. Config stays in Settings → Clipboard.
+
+// The id of the item whose action overlay is currently open (only one at a time), or null.
+let clipboardOpenItemId = null;
+
+// loadClipboardHistory — fetch the shared history once and cache it on live.clipboardHistory, then
+// softRepaint the clipboard screen. Once-only until reset (a forced refresh uses refreshClipboardHistory).
+function loadClipboardHistory(repaintView) {
+  if (!Bridge.available || live.clipboardHistory !== null || live.clipboardHistoryLoading) return;
+  live.clipboardHistoryLoading = true;
+  Bridge.call('getClipboardHistory')
+    .then((h) => { live.clipboardHistory = Array.isArray(h) ? h : []; })
+    .catch(() => { live.clipboardHistory = []; })
+    .finally(() => {
+      live.clipboardHistoryLoading = false;
+      if (repaintView && state.view === repaintView) softRepaint();
+    });
+}
+
+// refreshClipboardHistory — FORCED re-fetch of the shared history, bypassing the once-only guard. Used
+// by the live "clipboard:item" push so a new entry on another device appears here without a refresh.
+// Cheap: only runs while the clipboard view is visible and skips while a fetch is already in flight.
+function refreshClipboardHistory() {
+  if (!Bridge.available || live.clipboardHistoryLoading) return;
+  if (state.view !== 'clipboard') return;
+  live.clipboardHistoryLoading = true;
+  Bridge.call('getClipboardHistory')
+    .then((h) => { live.clipboardHistory = Array.isArray(h) ? h : []; })
+    .catch(() => { /* keep the last good history on a transient failure */ })
+    .finally(() => {
+      live.clipboardHistoryLoading = false;
+      if (state.view === 'clipboard') softRepaint();
+    });
+}
+
+// dropClipboardHistoryItem — remove the item with the given id from the cached list and repaint, if the
+// clipboard view is open. Shared by the trash action (optimistic) and the live "clipboard:deleted" push.
+function dropClipboardHistoryItem(id) {
+  if (!id || !Array.isArray(live.clipboardHistory)) return;
+  const before = live.clipboardHistory.length;
+  live.clipboardHistory = live.clipboardHistory.filter((x) => x && x.id !== id);
+  if (clipboardOpenItemId === id) clipboardOpenItemId = null;
+  if (live.clipboardHistory.length !== before && state.view === 'clipboard') softRepaint();
+}
+
+// clipNormalizeType — 'text' | 'image' | 'file' from the history item (mirrors the viewer's itemType).
+function clipNormalizeType(item) {
+  const t = (item && item.type ? String(item.type) : '').toLowerCase();
+  if (t === 'image') return 'image';
+  if (t === 'file') return 'file';
+  return 'text';
+}
+
+// clipTitleOf — the one-line row title (mirrors the viewer's titleOf).
+function clipTitleOf(item) {
+  const type = clipNormalizeType(item);
+  if (type === 'text') return (item.text || '').replace(/\s+/g, ' ').trim() || '(empty)';
+  if (item.text) return item.text;
+  return type === 'image' ? 'Image' : 'File';
+}
+
+// clipFormatSize — short byte size (mirrors the viewer's formatSize).
+function clipFormatSize(bytes) {
+  if (bytes == null || isNaN(bytes)) return '';
+  const b = Number(bytes);
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(b < 10 * 1024 ? 1 : 0)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+// clipRelTime — short relative time (mirrors the viewer's relTime).
+function clipRelTime(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} h`;
+  return `${Math.floor(h / 24)} d`;
+}
+
+// clipRowEl(item) — one history row reusing the floating viewer's .cb-row markup. Tapping the row opens
+// the action overlay (copy + trash) over THIS row. The overlay is shown only for the open item.
+function clipRowEl(item) {
+  const type = clipNormalizeType(item);
+  const isImg = type === 'image';
+  const cls = ['cb-row'];
+  if (isImg) cls.push('cb-row--img');
+
+  const av = el('div', {
+    class: 'cb-av' + (type === 'file' ? ' cb-av--file' : type === 'image' ? ' cb-av--img' : ''),
+    'aria-hidden': 'true',
+  }, type === 'text' ? 'T' : type === 'file' ? 'F' : '');
+
+  const title = el('div', { class: 'cb-title', text: clipTitleOf(item) });
+  const body = el('div', { class: 'cb-body' }, title);
+
+  const metaParts = [];
+  const time = clipRelTime(item.createdUtc);
+  if (time) metaParts.push(el('span', { text: time }));
+  if (type === 'image' || type === 'file') {
+    const sz = clipFormatSize(item.sizeBytes);
+    if (sz) { metaParts.push(el('span', { class: 'cb-meta__sep', text: '·' })); metaParts.push(el('span', { text: sz })); }
+  }
+  if (item.originDeviceName) {
+    if (metaParts.length) metaParts.push(el('span', { class: 'cb-meta__sep', text: '·' }));
+    metaParts.push(el('span', { class: 'cb-meta__from', text: item.originDeviceName }));
+  }
+  if (metaParts.length) body.append(el('div', { class: 'cb-meta' }, ...metaParts));
+
+  const head = el('div', { class: 'cb-row__head' }, av, body);
+  const open = clipboardOpenItemId === item.id;
+  const row = el('div', {
+    class: cls.join(' ') + (open ? ' cb-row--acting' : ''),
+    role: 'button', tabindex: '0', 'aria-label': clipTitleOf(item),
+  }, head);
+
+  const toggle = () => { clipboardOpenItemId = open ? null : item.id; softRepaint(); };
+  row.addEventListener('click', toggle);
+  row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+
+  if (open) row.append(clipActionOverlay(item));
+  return row;
+}
+
+// clipActionOverlay(item) — the full overlay over an open row carrying two icon-only buttons: copy
+// (sets the OS clipboard via pasteClipboardEntry) and trash (deletes WITHOUT confirmation). Tapping
+// either stops propagation so it does not re-toggle the row.
+function clipActionOverlay(item) {
+  const overlay = el('div', { class: 'cb-actions' });
+
+  const copyBtn = el('button', {
+    class: 'cb-action cb-action--copy', type: 'button', 'aria-label': 'Copy to clipboard', title: 'Copy',
+    onclick: (e) => {
+      e.stopPropagation();
+      clipboardOpenItemId = null;
+      if (Bridge.available) {
+        Bridge.call('pasteClipboardEntry', item.id)
+          .then((r) => { announce(r && r.status === 'ok' ? 'Copied' : 'Could not copy this item.'); })
+          .catch(() => { announce('Could not copy this item.'); });
+      }
+      softRepaint();
+    },
+  }, iconEl('copy', 18, 1.7));
+
+  const trashBtn = el('button', {
+    class: 'cb-action cb-action--del', type: 'button', 'aria-label': 'Delete', title: 'Delete',
+    onclick: (e) => {
+      e.stopPropagation();
+      // Optimistic, NO confirm: drop the row immediately, then propagate the delete to the server and
+      // the user's other devices. A transport failure is swallowed (a stale id is a server no-op).
+      const id = item.id;
+      dropClipboardHistoryItem(id);
+      announce('Deleted');
+      if (Bridge.available) Bridge.call('deleteClipboardEntry', id).catch(() => {});
+    },
+  }, iconEl('trash', 18, 1.7));
+
+  overlay.append(copyBtn, trashBtn);
+  // A tap on the overlay backdrop (not a button) closes it without acting.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) { e.stopPropagation(); clipboardOpenItemId = null; softRepaint(); } });
+  return overlay;
+}
+
+function renderClipboard(root) {
+  root.append(viewHeader('Clipboard', { onBack: () => navigate('home') }));
+
+  if (!Bridge.desktopApp) {
+    // Defensive: the in-app clipboard view is a desktop concern. Other transports bounce to the hub.
+    navigate('home');
+    return;
+  }
+
+  loadClipboardHistory('clipboard');
+  const items = live.clipboardHistory;
+
+  const card = el('div', { class: 'glass glass--card cb-screen' });
+
+  if (items === null) {
+    card.append(el('div', { class: 'cb-screen__empty' },
+      el('span', { class: 'spinner' }), el('span', { text: 'Loading your clipboard…' })));
+    root.append(card);
+    return;
+  }
+
+  if (!items.length) {
+    card.append(el('div', { class: 'cb-screen__empty' },
+      el('div', { class: 'cb-screen__empty-title', text: 'Nothing copied yet' }),
+      el('div', { class: 'cb-screen__empty-sub', text: 'Copy something on any of your devices to see it here.' })));
+    root.append(card);
+    return;
+  }
+
+  const list = el('div', { class: 'cb-list cb-list--screen' });
+  items.forEach((item) => list.append(clipRowEl(item)));
+  card.append(list);
+  root.append(card);
 }
 
 function renderClipboardSettings(root) {
@@ -4034,7 +4273,7 @@ const NAV = [
   { id: 'pairing', label: 'Pair',     icon: 'link' },
 ];
 // Map sub-routes back to a parent tab so the indicator follows the user.
-const TAB_MAP = { home: 'home', calendar: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', 'calendar-settings': 'config', 'clipboard-settings': 'config', about: 'config', pairing: 'pairing' };
+const TAB_MAP = { home: 'home', calendar: 'home', clipboard: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', 'calendar-settings': 'config', 'clipboard-settings': 'config', about: 'config', pairing: 'pairing' };
 
 // The visible tabs. "Pair" is the legacy manual pairing-by-key walkthrough; a device now
 // registers as part of the identity sign-in, so the tab is meaningless in every REAL transport
@@ -4114,6 +4353,7 @@ function rerender() {
     case 'add-calendar': renderAddCalendar(root); break;
     case 'config': renderConfig(root); break;
     case 'calendar-settings': renderCalendarSettings(root); break;
+    case 'clipboard': renderClipboard(root); break;
     case 'clipboard-settings': renderClipboardSettings(root); break;
     case 'about': renderAbout(root); break;
     case 'pairing': renderPairing(root); break;
@@ -4129,7 +4369,7 @@ function rerender() {
 // flicker the whole screen. Covers the dashboard views (home/calendar) used during the syncing
 // tick AND the settings views (config/calendar-settings) so toggling interval/theme/select on
 // those screens is a smooth repaint instead of a full re-entrance via rerender().
-const SOFT_REPAINT_VIEWS = { home: renderHome, calendar: renderCalendar, config: renderConfig, 'calendar-settings': renderCalendarSettings, 'clipboard-settings': renderClipboardSettings };
+const SOFT_REPAINT_VIEWS = { home: renderHome, calendar: renderCalendar, config: renderConfig, 'calendar-settings': renderCalendarSettings, clipboard: renderClipboard, 'clipboard-settings': renderClipboardSettings };
 function rerenderInPlace() {
   const render = SOFT_REPAINT_VIEWS[state.view];
   if (!render) return;
@@ -4418,6 +4658,13 @@ async function boot() {
     // without a manual refresh. Registered once; the payloads are not trusted as the whole view.
     Bridge.onEvent('clipboard:presence', () => refreshClipboardDevices());
     Bridge.onEvent('clipboard:settings', () => refreshClipboardDevices());
+
+    // Live clipboard history (the in-app clipboard VIEW): a new entry on another device arrives as
+    // "clipboard:item" (re-fetch the list so it shows up), and a deletion from another device / the
+    // human panel arrives as "clipboard:deleted" (drop that row from the open list at once). Both are
+    // cheap no-ops unless the clipboard view is open with a loaded history.
+    Bridge.onEvent('clipboard:item', () => refreshClipboardHistory());
+    Bridge.onEvent('clipboard:deleted', (p) => { if (p && p.id) dropClipboardHistoryItem(p.id); });
 
     // Load device capabilities once. The web panel maps this to {outlookCom:false}; the desktop
     // App probes Outlook Classic. A failure leaves the safe default (COM disabled). Repaint so
