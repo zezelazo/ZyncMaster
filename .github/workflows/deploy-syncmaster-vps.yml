@@ -1,0 +1,79 @@
+name: Deploy SyncMaster (VPS)
+
+# Manual only. No artifacts are uploaded or stored: the server is published and the EF
+# migration bundle is generated into temporary folders, transferred over SSH, applied and
+# restarted within this single job (in-process), matching the project's CI policy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialise deployments to the VPS: a newer dispatch queues behind the running one.
+  group: deploy-syncmaster-vps
+  cancel-in-progress: false
+
+env:
+  VPS_HOST: 167.114.98.148
+  VPS_PORT: "2222"
+  VPS_USER: devlab
+  PUBLISH_DIR: ${{ github.workspace }}/_publish
+  BUNDLE: ${{ github.workspace }}/_efbundle
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Publish server (framework-dependent)
+        # Server graph only (Server -> Graph -> Core), all net10.0. The VPS provides /usr/bin/dotnet.
+        run: dotnet publish src/ZyncMaster.Server/ZyncMaster.Server.csproj -c Release -o "$PUBLISH_DIR"
+
+      - name: Generate EF migration bundle (linux-x64)
+        # Self-contained native executable for the VPS; run as postgres at deploy time. No artifact store.
+        run: |
+          dotnet tool install --global dotnet-ef
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations bundle --self-contained -r linux-x64 \
+            --project src/ZyncMaster.Server/ZyncMaster.Server.csproj \
+            --output "$BUNDLE"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload publish + efbundle to VPS staging
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'rm -rf ~/syncmaster-staging && mkdir -p ~/syncmaster-staging/publish'
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -p $VPS_PORT" \
+            "$PUBLISH_DIR/" "$VPS_USER@$VPS_HOST:~/syncmaster-staging/publish/"
+          scp -i ~/.ssh/deploy_key -P "$VPS_PORT" "$BUNDLE" \
+            "$VPS_USER@$VPS_HOST:~/syncmaster-staging/efbundle"
+
+      - name: Deploy (swap, migrate, restart) on VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'sudo /var/www/devlabperu.com/api/.scripts/deploy-syncmaster.sh'
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://api.devlabperu.com/zync/health || true)
+            echo "attempt $i -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "health check failed after deploy"; exit 1

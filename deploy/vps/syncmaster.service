@@ -1,0 +1,37 @@
+# SyncMaster (Zync) API — systemd unit
+# Install: sudo cp deploy/vps/syncmaster.service /etc/systemd/system/  &&  sudo systemctl daemon-reload
+# Secrets live in /etc/default/syncmaster (root:root 0600) — see deploy/vps/README.md.
+[Unit]
+Description=SyncMaster API (Zync) - puerto 5007
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+WorkingDirectory=/var/www/devlabperu.com/api/syncmaster
+ExecStart=/usr/bin/dotnet /var/www/devlabperu.com/api/syncmaster/ZyncMaster.Server.dll
+Restart=always
+RestartSec=10
+TimeoutStopSec=60s
+KillSignal=SIGINT
+SyslogIdentifier=syncmaster
+User=www-data
+Group=www-data
+EnvironmentFile=/etc/default/syncmaster
+
+# Security hardening (mirrors the nexo-* units)
+ReadWritePaths=/var/www/devlabperu.com/api/syncmaster
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallFilter=@system-service
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
