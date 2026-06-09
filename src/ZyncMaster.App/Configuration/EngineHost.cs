@@ -106,6 +106,25 @@ public sealed class EngineHost : IDisposable
         catch (UnauthorizedAccessException) { /* best-effort migration */ }
     }
 
+    // The retired Azure host the app used before the VPS cutover. An existing install can still have
+    // this value persisted in settings.json, which now resolves to nothing — rewrite it to prod.
+    private const string RetiredAzureServerBaseUrl = "https://zyncmaster.azurewebsites.net";
+
+    // If the loaded settings still point at the retired Azure host (trimmed, case-insensitive, with
+    // or without a trailing slash), rewrite serverBaseUrl to the production URL. Returns true when a
+    // change was made so the caller can persist it.
+    internal static bool MigrateRetiredServerUrl(AppSettings settings)
+    {
+        var current = settings.ServerBaseUrl?.Trim().TrimEnd('/');
+        if (string.Equals(current, RetiredAzureServerBaseUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            settings.ServerBaseUrl = AppSettings.ProductionServerBaseUrl;
+            return true;
+        }
+
+        return false;
+    }
+
     // Builds the engine from settings.json under %LOCALAPPDATA%\ZyncMaster\App\ (created with
     // defaults if absent, migrated once from the legacy location next to the exe). Throws
     // SettingsValidationException if the resolved settings are invalid and SettingsLoadException if
@@ -124,6 +143,13 @@ public sealed class EngineHost : IDisposable
         var resolver = new AppSettingsResolver();
 
         var appSettings = settingsRepo.LoadOrCreateDefault(settingsPath);
+
+        // Auto-heal installs that still point at the retired Azure host. The serverBaseUrl was
+        // persisted into settings.json before the VPS cutover; on load we rewrite it to the
+        // production URL and persist so the fix sticks across restarts.
+        if (MigrateRetiredServerUrl(appSettings))
+            settingsRepo.Save(appSettings, settingsPath);
+
         var engineSettings = resolver.Resolve(appSettings);
 
         var clock = new SystemClock();
