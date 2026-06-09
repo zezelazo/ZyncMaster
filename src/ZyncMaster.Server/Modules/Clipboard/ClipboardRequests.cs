@@ -22,9 +22,12 @@ public sealed class PublishItemRequestValidator : AbstractValidator<PublishItemR
 }
 
 // Body for updating a device's clipboard settings (PUT). DeviceId comes from the route, not
-// the body.
+// the body. PublicKeyBase64/NeedsTextKey are the key-admission advertisement and are MERGE
+// fields: when omitted (null) the stored values are kept, so a plain preferences save from an
+// older caller never wipes a device's published key or its pending-key flag.
 public sealed record UpdateClipboardSettingsRequest(
-    bool AutoSync, bool Send, bool Receive, string ViewerHotkey, string Density, bool ShowHints);
+    bool AutoSync, bool Send, bool Receive, string ViewerHotkey, string Density, bool ShowHints,
+    string? PublicKeyBase64 = null, bool? NeedsTextKey = null);
 
 public sealed class UpdateClipboardSettingsRequestValidator : AbstractValidator<UpdateClipboardSettingsRequest>
 {
@@ -32,6 +35,18 @@ public sealed class UpdateClipboardSettingsRequestValidator : AbstractValidator<
     {
         RuleFor(x => x.Density).Must(d => d is "rich" or "mini");
         RuleFor(x => x.ViewerHotkey).NotEmpty().MaximumLength(40);
+        // SPKI public key as base64; matches the column cap and rejects junk early.
+        RuleFor(x => x.PublicKeyBase64)
+            .MaximumLength(4096)
+            .Must(BeValidBase64).WithMessage("Public key must be valid base64.")
+            .When(x => x.PublicKeyBase64 is not null);
+    }
+
+    private static bool BeValidBase64(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return false;
+        var buffer = new byte[(value.Length / 4 + 1) * 3];
+        return Convert.TryFromBase64String(value, buffer, out _);
     }
 }
 

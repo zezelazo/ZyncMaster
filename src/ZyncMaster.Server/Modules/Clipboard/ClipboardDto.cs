@@ -36,6 +36,8 @@ public static class ClipboardDto
             viewerHotkey = s.ViewerHotkey,
             density = s.Density,
             showHints = s.ShowHints,
+            publicKeyBase64 = s.PublicKeyBase64,
+            needsTextKey = s.NeedsTextKey,
         };
     }
 

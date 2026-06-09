@@ -31,6 +31,12 @@ public sealed record ClipboardDeviceSettings
     public string ViewerHotkey { get; init; } = "Ctrl+Win+Q";
     public string Density { get; init; } = "rich"; // "rich" | "mini"
     public bool ShowHints { get; init; } = true;
+
+    // Key-admission advertisement: the device's RSA public key (SPKI, base64) and whether it is
+    // still waiting for the E2E text key. A key-holder reads these off the device list, wraps
+    // the text key against PublicKeyBase64 and relays it; the server never sees the plain key.
+    public string? PublicKeyBase64 { get; init; }
+    public bool NeedsTextKey { get; init; }
 }
 
 // A wrapped (per-target-device encrypted) copy of the E2E text key, relayed between

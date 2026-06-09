@@ -338,6 +338,274 @@ public class ClipboardEndpointsTests
     }
 
     [Fact]
+    public async Task Settings_patch_upserts_key_admission_fields_and_roundtrips()
+    {
+        // A device that cannot decrypt the E2E text key advertises its RSA public key and raises
+        // needsTextKey through the regular settings PATCH; both GET shapes echo the fields back so
+        // a key-holder can read them off the wire.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var publicKey = B64("spki-public-key-bytes");
+        var patch = await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = true,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Win+Q",
+            density = "rich",
+            showHints = true,
+            publicKeyBase64 = publicKey,
+            needsTextKey = true,
+        });
+        patch.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var single = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/settings/dev-a");
+        single.GetProperty("publicKeyBase64").GetString().Should().Be(publicKey);
+        single.GetProperty("needsTextKey").GetBoolean().Should().BeTrue();
+
+        var list = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/settings");
+        list.GetArrayLength().Should().Be(1);
+        list[0].GetProperty("publicKeyBase64").GetString().Should().Be(publicKey);
+        list[0].GetProperty("needsTextKey").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Settings_patch_without_key_fields_keeps_stored_key_and_flag()
+    {
+        // The key-admission fields MERGE: a plain preferences save (older caller, no
+        // publicKeyBase64/needsTextKey in the body) must not wipe the stored advertisement.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var publicKey = B64("spki-public-key-bytes");
+        (await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = true,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Win+Q",
+            density = "rich",
+            showHints = true,
+            publicKeyBase64 = publicKey,
+            needsTextKey = true,
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Second PATCH omits both fields entirely — only preferences change.
+        (await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = false,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Alt+V",
+            density = "mini",
+            showHints = false,
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var dto = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/settings/dev-a");
+        dto.GetProperty("autoSync").GetBoolean().Should().BeFalse();
+        dto.GetProperty("density").GetString().Should().Be("mini");
+        dto.GetProperty("publicKeyBase64").GetString().Should().Be(publicKey);
+        dto.GetProperty("needsTextKey").GetBoolean().Should().BeTrue();
+
+        // And an explicit needsTextKey=false (admission done) clears the flag but keeps the key.
+        (await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = false,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Alt+V",
+            density = "mini",
+            showHints = false,
+            needsTextKey = false,
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var done = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/settings/dev-a");
+        done.GetProperty("needsTextKey").GetBoolean().Should().BeFalse();
+        done.GetProperty("publicKeyBase64").GetString().Should().Be(publicKey);
+    }
+
+    [Fact]
+    public async Task Settings_patch_invalid_base64_public_key_returns_400()
+    {
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var resp = await device.PatchAsJsonAsync("/api/clipboard/settings/dev-a", new
+        {
+            autoSync = true,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Win+Q",
+            density = "rich",
+            showHints = true,
+            publicKeyBase64 = "%%% not base64 %%%",
+            needsTextKey = true,
+        });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Settings_patch_with_key_fields_broadcasts_them_to_other_devices()
+    {
+        // Holders must react LIVE to a new admission request: the settings frame fanned out on
+        // PATCH carries needsTextKey + publicKeyBase64.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var registry = h.Factory.Services.GetRequiredService<ClipboardConnectionRegistry>();
+        var holderSocket = new CapturingWebSocket();
+        registry.Add(new ClipboardConnection { UserId = userId, DeviceId = "dev-holder", Socket = holderSocket });
+
+        var publicKey = B64("spki-public-key-bytes");
+        (await device.PatchAsJsonAsync("/api/clipboard/settings/dev-new", new
+        {
+            autoSync = true,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Win+Q",
+            density = "rich",
+            showHints = true,
+            publicKeyBase64 = publicKey,
+            needsTextKey = true,
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        holderSocket.Sent.Should().HaveCount(1);
+        using var frame = JsonDocument.Parse(holderSocket.Sent[0]);
+        frame.RootElement.GetProperty("type").GetString().Should().Be("settings");
+        frame.RootElement.GetProperty("deviceId").GetString().Should().Be("dev-new");
+        var s = frame.RootElement.GetProperty("settings");
+        s.GetProperty("needsTextKey").GetBoolean().Should().BeTrue();
+        s.GetProperty("publicKeyBase64").GetString().Should().Be(publicKey);
+    }
+
+    [Fact]
+    public async Task Clipboard_devices_lists_roster_with_online_and_key_admission_fields()
+    {
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+
+        // Two devices with KNOWN ids so the list rows can be matched deterministically.
+        var devices = h.Factory.Services.GetRequiredService<IDeviceStore>();
+        var keyA = ApiKeyGenerator.Generate();
+        await devices.AddAsync(new Device
+        {
+            Id = "dev-a",
+            UserId = userId,
+            Name = "Laptop",
+            ApiKeyHash = ApiKeyHasher.Hash(keyA),
+            CreatedUtc = DateTimeOffset.UtcNow,
+        });
+        await devices.AddAsync(new Device
+        {
+            Id = "dev-b",
+            UserId = userId,
+            Name = "Desktop",
+            ApiKeyHash = ApiKeyHasher.Hash(ApiKeyGenerator.Generate()),
+            CreatedUtc = DateTimeOffset.UtcNow,
+        });
+        var device = h.DeviceClient(keyA);
+
+        // dev-b advertises it needs the text key; dev-a never stored a settings row at all.
+        var publicKey = B64("dev-b-public-key");
+        (await device.PatchAsJsonAsync("/api/clipboard/settings/dev-b", new
+        {
+            autoSync = true,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Win+Q",
+            density = "rich",
+            showHints = true,
+            publicKeyBase64 = publicKey,
+            needsTextKey = true,
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Only dev-b is connected over the WS.
+        var registry = h.Factory.Services.GetRequiredService<ClipboardConnectionRegistry>();
+        registry.Add(new ClipboardConnection { UserId = userId, DeviceId = "dev-b", Socket = new CapturingWebSocket() });
+
+        var list = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/devices");
+        list.GetArrayLength().Should().Be(2);
+
+        JsonElement Row(string id)
+        {
+            foreach (var row in list.EnumerateArray())
+                if (row.GetProperty("deviceId").GetString() == id) return row;
+            throw new InvalidOperationException($"device {id} not in list");
+        }
+
+        var a = Row("dev-a");
+        a.GetProperty("name").GetString().Should().Be("Laptop");
+        a.GetProperty("online").GetBoolean().Should().BeFalse();
+        a.GetProperty("needsTextKey").GetBoolean().Should().BeFalse();
+        a.GetProperty("publicKeyBase64").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var b = Row("dev-b");
+        b.GetProperty("name").GetString().Should().Be("Desktop");
+        b.GetProperty("online").GetBoolean().Should().BeTrue();
+        b.GetProperty("needsTextKey").GetBoolean().Should().BeTrue();
+        b.GetProperty("publicKeyBase64").GetString().Should().Be(publicKey);
+    }
+
+    [Fact]
+    public async Task Clipboard_devices_is_user_scoped()
+    {
+        using var h = new Harness();
+
+        // User B owns a device that is waiting for the text key.
+        var bUserId = await h.SignInAndUserIdAsync("oid-b", "bob@test", "Bob");
+        var devices = h.Factory.Services.GetRequiredService<IDeviceStore>();
+        var bKey = ApiKeyGenerator.Generate();
+        await devices.AddAsync(new Device
+        {
+            Id = "dev-b",
+            UserId = bUserId,
+            Name = "Bobs PC",
+            ApiKeyHash = ApiKeyHasher.Hash(bKey),
+            CreatedUtc = DateTimeOffset.UtcNow,
+        });
+        var bDevice = h.DeviceClient(bKey);
+        (await bDevice.PatchAsJsonAsync("/api/clipboard/settings/dev-b", new
+        {
+            autoSync = true,
+            send = true,
+            receive = true,
+            viewerHotkey = "Ctrl+Win+Q",
+            density = "rich",
+            showHints = true,
+            publicKeyBase64 = B64("bob-public-key"),
+            needsTextKey = true,
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // User A's device list contains only A's device — B's roster, key and flag never leak.
+        var aUserId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var aDevice = h.DeviceClient(await h.AddDeviceForUserAsync(aUserId, name: "Alices PC"));
+        var aList = await aDevice.GetFromJsonAsync<JsonElement>("/api/clipboard/devices");
+        aList.GetArrayLength().Should().Be(1);
+        aList[0].GetProperty("name").GetString().Should().Be("Alices PC");
+        aList[0].GetProperty("needsTextKey").GetBoolean().Should().BeFalse();
+
+        // B still sees its own advertised state.
+        var bList = await bDevice.GetFromJsonAsync<JsonElement>("/api/clipboard/devices");
+        bList.GetArrayLength().Should().Be(1);
+        bList[0].GetProperty("deviceId").GetString().Should().Be("dev-b");
+        bList[0].GetProperty("needsTextKey").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Clipboard_devices_without_auth_returns_401()
+    {
+        using var h = new Harness();
+        var resp = await h.Anonymous().GetAsync("/api/clipboard/devices");
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
     public async Task KeyRelay_to_offline_target_returns_delivered_false_and_persists_nothing()
     {
         using var h = new Harness();

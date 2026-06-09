@@ -58,6 +58,8 @@ public sealed class EfClipboardSettingsStore : IClipboardSettingsStore
             row.ViewerHotkey = s.ViewerHotkey;
             row.Density = s.Density;
             row.ShowHints = s.ShowHints;
+            row.PublicKeyBase64 = s.PublicKeyBase64;
+            row.NeedsTextKey = s.NeedsTextKey;
         }
         await db.SaveChangesAsync(ct);
     }
@@ -72,6 +74,8 @@ public sealed class EfClipboardSettingsStore : IClipboardSettingsStore
         ViewerHotkey = s.ViewerHotkey,
         Density = s.Density,
         ShowHints = s.ShowHints,
+        PublicKeyBase64 = s.PublicKeyBase64,
+        NeedsTextKey = s.NeedsTextKey,
     };
 
     private static ClipboardDeviceSettings ToDomain(ClipboardDeviceSettingsRow r) => new()
@@ -83,5 +87,7 @@ public sealed class EfClipboardSettingsStore : IClipboardSettingsStore
         ViewerHotkey = r.ViewerHotkey,
         Density = r.Density,
         ShowHints = r.ShowHints,
+        PublicKeyBase64 = r.PublicKeyBase64,
+        NeedsTextKey = r.NeedsTextKey,
     };
 }

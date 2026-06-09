@@ -118,7 +118,9 @@ public static class ClipboardEndpoints
 
         // PATCH settings for a specific device id (any of the user's devices, even offline). The
         // store stamps the ambient user, so a deviceId belonging to another user is created under the
-        // CALLER's scope and never overwrites the other user's row.
+        // CALLER's scope and never overwrites the other user's row. The key-admission fields
+        // (publicKeyBase64 / needsTextKey) MERGE: when the body omits them the stored values are
+        // kept, so a plain preferences save never wipes a device's published key or pending flag.
         app.MapPatch("/api/clipboard/settings/{deviceId}", async (
             string deviceId,
             UpdateClipboardSettingsRequest req,
@@ -131,6 +133,10 @@ public static class ClipboardEndpoints
             if (!validation.IsValid)
                 return Results.ValidationProblem(validation.ToDictionary());
 
+            // GetAsync returns defaults (null key, needsTextKey=false) for a never-stored device,
+            // so the merge below is well-defined on first write too.
+            var current = await settings.GetAsync(deviceId, ct);
+
             var updated = new ClipboardDeviceSettings
             {
                 DeviceId = deviceId,
@@ -140,6 +146,8 @@ public static class ClipboardEndpoints
                 ViewerHotkey = req.ViewerHotkey,
                 Density = req.Density,
                 ShowHints = req.ShowHints,
+                PublicKeyBase64 = req.PublicKeyBase64 ?? current.PublicKeyBase64,
+                NeedsTextKey = req.NeedsTextKey ?? current.NeedsTextKey,
             };
 
             await settings.UpsertAsync(updated, ct);
@@ -150,6 +158,36 @@ public static class ClipboardEndpoints
             await broadcaster.BroadcastSettingsAsync(currentUser.UserId, deviceId, updated, ct);
 
             return Results.Ok();
+        }).RequireCookieOrApiKeyOrIdentityBearer();
+
+        // GET devices — the clipboard view of the user's device roster: id + name from the device
+        // store (user-scoped), live online flag from the WS registry, and the key-admission fields
+        // (needsTextKey + publicKeyBase64) from the per-device clipboard settings. A key-holder
+        // polls/reads this to find which peer is waiting for the E2E text key and which public key
+        // to wrap it against before calling /key/relay.
+        app.MapGet("/api/clipboard/devices", async (
+            IDeviceStore devices,
+            IClipboardSettingsStore settings,
+            ClipboardConnectionRegistry registry,
+            ICurrentUserAccessor currentUser,
+            CancellationToken ct) =>
+        {
+            var roster = await devices.ListAsync(ct);
+            var settingsByDevice = (await settings.ListAsync(ct)).ToDictionary(s => s.DeviceId);
+            var online = registry.OnlineDeviceIds(currentUser.UserId).ToHashSet(StringComparer.Ordinal);
+
+            return Results.Ok(roster.Select(d =>
+            {
+                var s = settingsByDevice.GetValueOrDefault(d.Id);
+                return new
+                {
+                    deviceId = d.Id,
+                    name = d.Name,
+                    online = online.Contains(d.Id),
+                    needsTextKey = s?.NeedsTextKey ?? false,
+                    publicKeyBase64 = s?.PublicKeyBase64,
+                };
+            }));
         }).RequireCookieOrApiKeyOrIdentityBearer();
 
         // POST key relay — forward a wrapped E2E key to one of the user's other devices, if online.

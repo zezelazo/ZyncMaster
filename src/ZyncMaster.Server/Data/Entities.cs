@@ -195,6 +195,13 @@ public sealed class ClipboardDeviceSettingsRow
     public string ViewerHotkey { get; set; } = "Ctrl+Win+Q";
     public string Density { get; set; } = "rich";
     public bool ShowHints { get; set; } = true;
+
+    // Key-admission advertisement. A device that cannot decrypt the E2E text key publishes its
+    // RSA public key (SPKI, base64) and raises NeedsTextKey so a key-holder can wrap the text
+    // key against it and relay it. Only the PUBLIC key is ever stored — the wrapped key itself
+    // is relayed transiently and never persisted (see ClipboardEndpoints /key/relay).
+    public string? PublicKeyBase64 { get; set; }
+    public bool NeedsTextKey { get; set; }
 }
 
 public sealed class SyncStateRow

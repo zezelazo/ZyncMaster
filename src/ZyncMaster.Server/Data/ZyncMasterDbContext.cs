@@ -304,6 +304,9 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
             e.Property(x => x.ViewerHotkey).HasMaxLength(64).IsRequired();
             e.Property(x => x.Density).HasMaxLength(16).IsRequired();
+            // SPKI public key, base64: ~400 chars for RSA-2048; 4096 leaves headroom for
+            // larger key sizes without going unbounded.
+            e.Property(x => x.PublicKeyBase64).HasMaxLength(4096);
             e.HasIndex(x => x.UserId);
         });
     }
