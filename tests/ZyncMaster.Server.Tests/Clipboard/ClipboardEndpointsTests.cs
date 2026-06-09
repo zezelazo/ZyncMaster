@@ -396,6 +396,104 @@ public class ClipboardEndpointsTests
     }
 
     [Fact]
+    public async Task Delete_removes_the_item_from_history()
+    {
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-1", "Text", "dev-a", B64("hello"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-2", "Text", "dev-a", B64("world"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var del = await device.DeleteAsync("/api/clipboard/items/item-1");
+        del.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        history.GetArrayLength().Should().Be(1);
+        history[0].GetProperty("id").GetString().Should().Be("item-2");
+    }
+
+    [Fact]
+    public async Task Delete_without_auth_returns_401()
+    {
+        using var h = new Harness();
+        var resp = await h.Anonymous().DeleteAsync("/api/clipboard/items/whatever");
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Delete_is_user_scoped_and_cannot_remove_another_users_item()
+    {
+        using var h = new Harness();
+
+        // User B owns item-b.
+        var bUserId = await h.SignInAndUserIdAsync("oid-b", "bob@test", "Bob");
+        var bDevice = h.DeviceClient(await h.AddDeviceForUserAsync(bUserId));
+        (await bDevice.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-b", "Text", "dev-b", B64("bob secret"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // User A deletes by the same id: the store is user-scoped, so it is a no-op for B's row.
+        var aUserId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var aDevice = h.DeviceClient(await h.AddDeviceForUserAsync(aUserId));
+        (await aDevice.DeleteAsync("/api/clipboard/items/item-b"))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // B still has its item.
+        var bHistory = await bDevice.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        bHistory.GetArrayLength().Should().Be(1);
+        bHistory[0].GetProperty("id").GetString().Should().Be("item-b");
+    }
+
+    [Fact]
+    public async Task Delete_broadcasts_to_users_other_connected_device_not_origin()
+    {
+        // Deleting an item fans a {type:"deleted", id} frame out to the user's OTHER connected devices
+        // so an open clipboard screen / floating viewer drops the row live. The origin (the api-key
+        // principal's device) is excluded — the caller already removed it locally. We register a
+        // capturing socket for "dev-other" plus one for the deleting device, delete, and assert only
+        // dev-other received the frame.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+
+        // Bind the device under a known device id so we can register its socket as the origin.
+        var devices = h.Factory.Services.GetRequiredService<IDeviceStore>();
+        var key = ApiKeyGenerator.Generate();
+        await devices.AddAsync(new Device
+        {
+            Id = "dev-a",
+            UserId = userId,
+            Name = "Laptop",
+            ApiKeyHash = ApiKeyHasher.Hash(key),
+            CreatedUtc = DateTimeOffset.UtcNow,
+        });
+        var device = h.DeviceClient(key);
+
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-1", "Text", "dev-a", B64("hello"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var registry = h.Factory.Services.GetRequiredService<ClipboardConnectionRegistry>();
+        var originSocket = new CapturingWebSocket();
+        var otherSocket = new CapturingWebSocket();
+        registry.Add(new ClipboardConnection { UserId = userId, DeviceId = "dev-a", Socket = originSocket });
+        registry.Add(new ClipboardConnection { UserId = userId, DeviceId = "dev-other", Socket = otherSocket });
+
+        var del = await device.DeleteAsync("/api/clipboard/items/item-1");
+        del.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        originSocket.Sent.Should().BeEmpty();
+        otherSocket.Sent.Should().HaveCount(1);
+        using var frame = JsonDocument.Parse(otherSocket.Sent[0]);
+        frame.RootElement.GetProperty("type").GetString().Should().Be("deleted");
+        frame.RootElement.GetProperty("id").GetString().Should().Be("item-1");
+    }
+
+    [Fact]
     public async Task Publish_Image_over_hard_max_returns_413_even_when_client_understates_size()
     {
         // Hard ceiling is 8 bytes; the real decoded payload is 16 bytes but the client lies

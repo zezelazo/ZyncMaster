@@ -256,6 +256,80 @@ public class ClipboardBroadcasterTests
     }
 
     [Fact]
+    public async Task BroadcastDeleted_reaches_other_devices_not_origin()
+    {
+        var reg = new ClipboardConnectionRegistry();
+        var d1 = new CapturingWebSocket();
+        var d2 = new CapturingWebSocket();
+        var d3 = new CapturingWebSocket();
+        Conn(reg, "u1", "d1", d1);
+        Conn(reg, "u1", "d2", d2);
+        Conn(reg, "u1", "d3", d3);
+
+        var bc = new ClipboardBroadcaster(reg);
+        await bc.BroadcastDeletedAsync("u1", "d1", "item-42", CancellationToken.None);
+
+        // Origin device never gets its own deletion echoed back.
+        d1.Sent.Should().BeEmpty();
+        d2.Sent.Should().HaveCount(1);
+        d3.Sent.Should().HaveCount(1);
+
+        var frame = JObject.Parse(d2.Sent[0]);
+        frame["type"]!.Value<string>().Should().Be("deleted");
+        frame["id"]!.Value<string>().Should().Be("item-42");
+    }
+
+    [Fact]
+    public async Task BroadcastDeleted_does_not_leak_across_users()
+    {
+        var reg = new ClipboardConnectionRegistry();
+        var d2 = new CapturingWebSocket();
+        var other = new CapturingWebSocket();
+        Conn(reg, "u1", "d2", d2);
+        Conn(reg, "u2", "x1", other);
+
+        var bc = new ClipboardBroadcaster(reg);
+        await bc.BroadcastDeletedAsync("u1", "d1", "item-1", CancellationToken.None);
+
+        d2.Sent.Should().HaveCount(1);
+        other.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BroadcastDeleted_with_empty_origin_reaches_every_device()
+    {
+        // A cookie / identity-bearer caller (the human panel or the signed-in App) has no deviceId
+        // claim, so the origin is empty and the frame must reach ALL of the user's devices.
+        var reg = new ClipboardConnectionRegistry();
+        var d1 = new CapturingWebSocket();
+        var d2 = new CapturingWebSocket();
+        Conn(reg, "u1", "d1", d1);
+        Conn(reg, "u1", "d2", d2);
+
+        var bc = new ClipboardBroadcaster(reg);
+        await bc.BroadcastDeletedAsync("u1", string.Empty, "item-1", CancellationToken.None);
+
+        d1.Sent.Should().HaveCount(1);
+        d2.Sent.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task BroadcastDeleted_swallows_a_failing_socket()
+    {
+        var reg = new ClipboardConnectionRegistry();
+        var bad = new ThrowingWebSocket();
+        var good = new CapturingWebSocket();
+        Conn(reg, "u1", "d2", bad);
+        Conn(reg, "u1", "d3", good);
+
+        var bc = new ClipboardBroadcaster(reg);
+        Func<Task> act = () => bc.BroadcastDeletedAsync("u1", "d1", "item-1", CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+        good.Sent.Should().HaveCount(1);
+    }
+
+    [Fact]
     public async Task BroadcastItem_swallows_a_failing_socket()
     {
         var reg = new ClipboardConnectionRegistry();

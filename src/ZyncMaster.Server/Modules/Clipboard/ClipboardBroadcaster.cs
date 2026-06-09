@@ -73,6 +73,18 @@ public sealed class ClipboardBroadcaster
             await SendBestEffortAsync(conn, json, ct).ConfigureAwait(false);
     }
 
+    // Push a history deletion to the user's OTHER devices so an open clipboard screen (or floating
+    // viewer) drops the item live. The origin (which already removed it locally and issued the
+    // DELETE) is excluded. Best-effort, same as items/settings.
+    public async Task BroadcastDeletedAsync(string userId, string originDeviceId, string id, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+
+        var json = Serialize(new { type = "deleted", id });
+        foreach (var conn in _registry.ForUserExcept(userId, originDeviceId))
+            await SendBestEffortAsync(conn, json, ct).ConfigureAwait(false);
+    }
+
     public async Task<bool> RelayKeyAsync(string userId, WrappedKeyEnvelope env, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(env);

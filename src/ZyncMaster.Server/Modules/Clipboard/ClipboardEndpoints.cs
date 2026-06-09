@@ -73,6 +73,29 @@ public static class ClipboardEndpoints
             return Results.Ok(new { id = item.Id });
         }).RequireApiKey();
 
+        // DELETE one history entry — user-scoped removal, then fan out a {type:"deleted", id} frame to
+        // the user's OTHER devices so their clipboard screen / floating viewer drop the row live. Accepts
+        // the same three schemes as the reads: the human panel (cookie), the signed-in App (identity
+        // bearer) or a paired device (api key) may all delete from the user's own history. The store
+        // filters by the resolved userId, so a foreign id is a silent no-op rather than a cross-user
+        // delete. The origin device id (the api-key principal's "deviceId" claim, empty under cookie/
+        // identity) is excluded from the broadcast — the caller already removed it locally.
+        app.MapDelete("/api/clipboard/items/{id}", async (
+            string id,
+            IClipboardHistoryStore store,
+            ClipboardBroadcaster broadcaster,
+            ICurrentUserAccessor currentUser,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            await store.RemoveAsync(id, ct);
+
+            var originDeviceId = http.User.FindFirst("deviceId")?.Value ?? string.Empty;
+            await broadcaster.BroadcastDeletedAsync(currentUser.UserId, originDeviceId, id, ct);
+
+            return Results.Ok();
+        }).RequireCookieOrApiKeyOrIdentityBearer();
+
         // GET settings — every device row the current user owns (defaults are returned per device
         // only via GetAsync; the listing returns the stored rows).
         app.MapGet("/api/clipboard/settings", async (IClipboardSettingsStore settings, CancellationToken ct) =>
