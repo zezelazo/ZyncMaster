@@ -454,8 +454,9 @@ async function boot() {
   document.body.classList.add('cb-viewer-body');
   Bridge.start();
 
-  // Live updates: a new clipboard entry arriving over the server WebSocket is pushed App -> UI as
-  // "clipboard:item" (per the shared contract). Prepend it (selection-stable) and re-render.
+  // Live updates: a new clipboard entry — arriving over the server WebSocket, or this device's own
+  // just-published copy mirrored by the host — is pushed App -> UI as "clipboard:item" (per the
+  // shared contract). Prepend it (selection-stable, deduped by id in applyNewItem) and re-render.
   Bridge.onEvent('clipboard:item', (item) => {
     Object.assign(state, applyNewItem(state, item));
     render();

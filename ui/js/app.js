@@ -2970,9 +2970,10 @@ function loadClipboardHistory(repaintView) {
     });
 }
 
-// refreshClipboardHistory — FORCED re-fetch of the shared history, bypassing the once-only guard. Used
-// by the live "clipboard:item" push so a new entry on another device appears here without a refresh.
-// Cheap: only runs while the clipboard view is visible and skips while a fetch is already in flight.
+// refreshClipboardHistory — FORCED re-fetch of the shared history, bypassing the once-only guard.
+// The "clipboard:key" push uses it directly, and applyClipboardHistoryItem falls back to it when a
+// targeted insert is not possible. Cheap: only runs while the clipboard view is visible and skips
+// while a fetch is already in flight.
 function refreshClipboardHistory() {
   if (!Bridge.available || live.clipboardHistoryLoading) return;
   if (state.view !== 'clipboard') return;
@@ -2984,6 +2985,37 @@ function refreshClipboardHistory() {
       live.clipboardHistoryLoading = false;
       if (state.view === 'clipboard') softRepaint();
     });
+}
+
+// applyClipboardHistoryItem — live "clipboard:item" push: a new entry from another device, or this
+// device's own just-published copy (the host mirrors local publishes because the server broadcast
+// excludes the origin device). With the clipboard view open over a loaded history this is a
+// TARGETED insert: the new row lands at the top of the list (reusing clipRowEl) with no full
+// repaint, deduped by id (a re-pushed id moves up instead of producing a twin row) and respecting
+// the active type filter. Anything structurally off — no usable item, no loaded cache, no list in
+// the DOM — falls back to the forced re-fetch. The cache is patched even while the view is closed
+// so reopening shows the item without another fetch; the home Clipboard tile shows a state chip,
+// not a count, so it needs no repaint here.
+function applyClipboardHistoryItem(item) {
+  if (!item || item.id == null || !Array.isArray(live.clipboardHistory)) {
+    refreshClipboardHistory();
+    return;
+  }
+  live.clipboardHistory = [item, ...live.clipboardHistory.filter((x) => x && x.id !== item.id)];
+  if (state.view !== 'clipboard') return;
+  const list = clipScreenList();
+  if (!list) { softRepaint(); return; } // loading/empty state in the DOM: repaint composes the list
+  const dup = Array.from(list.querySelectorAll('.cb-row')).find((n) => n.dataset.id === String(item.id));
+  if (dup) dup.remove();
+  if (clipboardFilter !== 'all' && clipNormalizeType(item) !== clipboardFilter) {
+    // The new item is filtered out of view; if removing its older twin emptied the list, repaint so
+    // the "no match" state takes its place.
+    if (!list.querySelector('.cb-row')) softRepaint();
+    return;
+  }
+  const noMatch = list.querySelector('.cb-empty');
+  if (noMatch) noMatch.remove();
+  list.prepend(clipRowEl(item));
 }
 
 // dropClipboardHistoryItem — remove the item with the given id from the cached list and, if the
@@ -4743,11 +4775,11 @@ async function boot() {
     Bridge.onEvent('clipboard:presence', () => refreshClipboardDevices());
     Bridge.onEvent('clipboard:settings', () => refreshClipboardDevices());
 
-    // Live clipboard history (the in-app clipboard VIEW): a new entry on another device arrives as
-    // "clipboard:item" (re-fetch the list so it shows up), and a deletion from another device / the
-    // human panel arrives as "clipboard:deleted" (drop that row from the open list at once). Both are
-    // cheap no-ops unless the clipboard view is open with a loaded history.
-    Bridge.onEvent('clipboard:item', () => refreshClipboardHistory());
+    // Live clipboard history (the in-app clipboard VIEW): a new entry — from another device OR this
+    // device's own just-published copy — arrives as "clipboard:item" (targeted insert at the top of
+    // the open list, full re-fetch as the fallback), and a deletion from another device / the human
+    // panel arrives as "clipboard:deleted" (drop that row from the open list at once).
+    Bridge.onEvent('clipboard:item', (item) => applyClipboardHistoryItem(item));
     Bridge.onEvent('clipboard:deleted', (p) => { if (p && p.id) dropClipboardHistoryItem(p.id); });
 
     // The E2E text key just arrived on this device ("clipboard:key"): rows that were rendered with

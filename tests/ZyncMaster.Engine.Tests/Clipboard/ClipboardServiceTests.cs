@@ -763,6 +763,98 @@ public sealed class ClipboardServiceTests
         h.Transport.UpdatedSettings.Should().BeEmpty();
     }
 
+    // ---------- ItemPublished (the local-mirror event: the server echo excludes the origin, so the
+    // host relies on this to show the user's OWN copies in the open UI lists) ----------
+
+    [Fact]
+    public async Task Captured_Text_Published_RaisesItemPublished_WithPlaintextAndOrigin()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        var raised = new List<ClipboardEntry>();
+        h.Service.ItemPublished += raised.Add;
+
+        h.Capture.Raise(Text("my own copy"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().HaveCount(1);
+        var mirrored = raised.Should().ContainSingle().Which;
+        mirrored.Text.Should().Be("my own copy");   // the local mirror keeps the plaintext...
+        mirrored.CipherText.Should().BeNull();      // ...only the transport sees the ciphertext
+        mirrored.OriginDeviceId.Should().Be("dev-a");
+    }
+
+    [Fact]
+    public async Task Captured_Image_Published_RaisesItemPublished_WithResolvedSize()
+    {
+        var h = new Harness(TextCrypto.NewKey(), hardMax: 1000);
+        var raised = new List<ClipboardEntry>();
+        h.Service.ItemPublished += raised.Add;
+
+        h.Capture.Raise(Image(new byte[500]));
+        await SettleAsync();
+
+        raised.Should().ContainSingle().Which.SizeBytes.Should().Be(500);
+    }
+
+    [Fact]
+    public async Task Captured_DuplicateInsidePublishWindow_RaisesItemPublished_OnlyOnce()
+    {
+        // The dedupe drops the duplicate publishes, so the mirror event must not fire for them
+        // either — otherwise the UI would insert phantom twin rows the history does not contain.
+        var h = new Harness(TextCrypto.NewKey());
+        var raised = 0;
+        h.Service.ItemPublished += _ => raised++;
+
+        h.Capture.Raise(Text("same content"));
+        await SettleAsync();
+        h.Capture.Raise(Text("same content"));
+        h.Capture.Raise(Text("same content"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().HaveCount(1);
+        raised.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Captured_PublishThrows_DoesNotRaiseItemPublished()
+    {
+        // A failed publish never reached the shared history, so mirroring it into the local UI
+        // would show an item the user's other devices will never receive.
+        var h = new Harness(TextCrypto.NewKey());
+        h.Transport.PublishError = new InvalidOperationException("413 too large");
+        var raised = 0;
+        h.Service.ItemPublished += _ => raised++;
+
+        h.Capture.Raise(Text("doomed"));
+        await SettleAsync();
+
+        raised.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Echo_CaptureAfterAutoSet_DoesNotRaiseItemPublished()
+    {
+        // The OS echo of a just-applied peer item is dropped before publishing — the mirror event
+        // must stay silent too (the row already exists in every open list from the receive push).
+        var key = TextCrypto.NewKey();
+        var h = new Harness(key);
+        var raised = 0;
+        h.Service.ItemPublished += _ => raised++;
+
+        h.Transport.RaiseItem(new ClipboardEntry
+        {
+            Id = "r1",
+            Type = ClipboardEntryType.Text,
+            CipherText = TextCrypto.Encrypt(key, "round trip"),
+            OriginDeviceId = "dev-b",
+        });
+        await SettleAsync();
+        h.Capture.Raise(Text("round trip"));
+        await SettleAsync();
+
+        raised.Should().Be(0);
+    }
+
     [Fact]
     public void Constructor_NullLogger_Throws()
     {

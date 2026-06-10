@@ -56,6 +56,14 @@ public sealed class ClipboardService
         _transport.KeyReceived += OnKeyReceived;
     }
 
+    // Raised AFTER a locally captured item was successfully handed to the transport — never for a
+    // gated capture (send off), an echo, a dedupe-dropped duplicate, or a failed publish. The server
+    // broadcaster deliberately excludes the origin device from the echo, so this event is the ONLY
+    // signal that this machine's own copy now exists in the shared history; the host mirrors it into
+    // the open UI lists. The entry is the capture as the user produced it (plaintext Text — the
+    // encrypted copy went to the transport), already stamped with this device's id/name as origin.
+    public event Action<ClipboardEntry>? ItemPublished;
+
     public void Start() => _capture.Start();
     public void Stop() => _capture.Stop();
 
@@ -153,6 +161,7 @@ public sealed class ClipboardService
             }
 
             var cipher = TextCrypto.Encrypt(key, entry.Text!);
+            var textPublished = false;
             try
             {
                 // The clipboard now holds NEW content: echo windows still open for other hashes can
@@ -161,11 +170,18 @@ public sealed class ClipboardService
                 _dedupe.OnNewContentCaptured(hash);
                 await _transport.PublishAsync(entry with { Text = null, CipherText = cipher }, ct).ConfigureAwait(false);
                 _dedupe.MarkPublished(hash);
+                textPublished = true;
             }
             catch (Exception ex)
             {
                 _logger.Log(LogLevel.Warning, $"Clipboard text publish failed: {ex.Message}", ex);
             }
+
+            // Raised OUTSIDE the publish try/catch so a faulty subscriber is never misreported as a
+            // transport failure (the async-void boundary in OnCaptured still absorbs it). The local
+            // mirror keeps the plaintext entry — only the transport ever sees the ciphertext.
+            if (textPublished)
+                ItemPublished?.Invoke(entry);
             return;
         }
 
@@ -187,18 +203,24 @@ public sealed class ClipboardService
             return;
         }
 
+        var imagePublished = false;
+        var imageEntry = entry with { SizeBytes = size };
         try
         {
             // Same as the text path: new content on the clipboard ends every other echo window.
             _dedupe.OnNewContentCaptured(hash);
-            await _transport.PublishAsync(entry with { SizeBytes = size }, ct).ConfigureAwait(false);
+            await _transport.PublishAsync(imageEntry, ct).ConfigureAwait(false);
             _dedupe.MarkPublished(hash);
+            imagePublished = true;
         }
         catch (Exception ex)
         {
             // A 413 from a reverse proxy on a big image lands here, among others.
             _logger.Log(LogLevel.Warning, $"Clipboard image publish failed: {ex.Message}", ex);
         }
+
+        if (imagePublished)
+            ItemPublished?.Invoke(imageEntry);
     }
 
     // Mirror of the publish path: every dropped inbound item is logged with its reason so a device

@@ -217,6 +217,10 @@ public partial class App : Application
         bootEngine.Actions.PasteTargetWindowProvider = () => _clipboardViewer?.PriorForeground ?? IntPtr.Zero;
         bootEngine.ClipboardHotkey.Pressed += OnClipboardHotkeyPressed;
         bootEngine.ClipboardTransport.ItemReceived += OnClipboardItemReceived;
+        // The server broadcast excludes the origin device (no echo), so a successful LOCAL publish is
+        // the only signal that this machine's own copy exists: mirror it into the open UI lists
+        // through the same "clipboard:item" push the receive path uses.
+        bootEngine.ClipboardService.ItemPublished += OnClipboardItemPublished;
         // Live roster + per-device settings: push to the MAIN window bridge (the clipboard devices /
         // settings screen lives in the dashboard, not the viewer) so an open screen refreshes its online
         // dots, "(N online)" count and the per-device send/receive toggles across the user's windows.
@@ -380,6 +384,7 @@ public partial class App : Application
         {
             try { engine.ClipboardHotkey.Pressed -= OnClipboardHotkeyPressed; } catch { }
             try { engine.ClipboardTransport.ItemReceived -= OnClipboardItemReceived; } catch { }
+            try { engine.ClipboardService.ItemPublished -= OnClipboardItemPublished; } catch { }
             try { engine.Actions.ClipboardPresenceChanged -= OnClipboardPresenceChanged; } catch { }
             try { engine.Actions.ClipboardSettingsChanged -= OnClipboardSettingsChanged; } catch { }
             try { engine.Actions.ClipboardDeleted -= OnClipboardDeleted; } catch { }
@@ -411,9 +416,10 @@ public partial class App : Application
     }
 
     // A new item arrived over the WebSocket: decrypt Text (the UI never sees ciphertext), map to the
-    // history-item shape and push it as a "clipboard:item" event so the open viewer updates live. Sent
-    // to both the viewer's bridge (the live viewer) and the main bridge (any other listener). Best-
-    // effort: a push failure must not break the receive loop.
+    // history-item shape and push it as a "clipboard:item" event so the open lists update live. Sent
+    // to BOTH live consumers — the floating viewer and the main window, whose in-app clipboard view
+    // inserts the row at the top of its open list (without the main push it stayed frozen until a
+    // manual reload). Best-effort: a push failure must not break the receive loop.
     private async void OnClipboardItemReceived(ZyncMaster.Engine.ClipboardEntry entry)
     {
         var engine = _engineHost;
@@ -423,18 +429,47 @@ public partial class App : Application
         try
         {
             byte[]? textKey = await engine.ClipboardKeys.LoadTextKeyAsync(_shutdown.Token);
-            var item = engine.Actions.ToHistoryItem(entry, textKey);
-            // Push only to the live viewer bridge: the viewer page is the sole consumer of the
-            // "clipboard:item" event. Pushing the (decrypted) plaintext to the main-window bridge too
-            // serialized it onto a WebView IPC channel with no listener, needlessly widening the
-            // in-process plaintext surface.
-            _clipboardViewerBridge?.PushClipboardItem(item);
+            PushClipboardItemToUis(engine.Actions.ToHistoryItem(entry, textKey));
         }
         catch (OperationCanceledException) { /* shutdown */ }
         catch (Exception ex)
         {
             engine.Logger.Log(LogLevel.Warning, "Clipboard live push failed.", ex);
         }
+    }
+
+    // This device just published a capture of its OWN clipboard. The server broadcaster echoes the
+    // item to every device EXCEPT the origin, so no ItemReceived will ever follow for it here —
+    // without this push a machine never sees its own copies in the dashboard view or the floating
+    // viewer. The entry is the captured plaintext (the encrypted copy went to the transport) already
+    // stamped with this device's id/name as origin, and the service raises it only after a REAL
+    // publish: dedupe-dropped duplicates, echoes and failed publishes never reach this handler.
+    private void OnClipboardItemPublished(ZyncMaster.Engine.ClipboardEntry entry)
+    {
+        var engine = _engineHost;
+        if (engine == null)
+            return;
+
+        try
+        {
+            // textKey null is fine: a locally captured Text entry already carries its plaintext.
+            PushClipboardItemToUis(engine.Actions.ToHistoryItem(entry, textKey: null));
+        }
+        catch (Exception ex)
+        {
+            engine.Logger.Log(LogLevel.Warning, "Clipboard published-item push failed.", ex);
+        }
+    }
+
+    // Fans one history item out to both live "clipboard:item" consumers: the main window (the in-app
+    // clipboard view) and the floating viewer. Each push is independently best-effort, mirroring the
+    // other clipboard pushes — one stuck WebView must not silence the other.
+    private void PushClipboardItemToUis(ClipboardHistoryItem item)
+    {
+        try { _bridge?.PushClipboardItem(item); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard item push failed.", ex); }
+        try { _clipboardViewerBridge?.PushClipboardItem(item); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard item viewer push failed.", ex); }
     }
 
     // The live online roster changed (a server presence frame arrived, or the socket dropped and the
