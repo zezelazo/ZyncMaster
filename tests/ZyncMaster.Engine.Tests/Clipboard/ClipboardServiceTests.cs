@@ -436,6 +436,22 @@ public sealed class ClipboardServiceTests
     }
 
     [Fact]
+    public async Task KeyReceived_MalformedBlob_DoesNotCrash_LogsWarning_SavesNothing()
+    {
+        // A garbage wrapped blob makes KeyWrap.Unwrap throw CryptographicException inside the
+        // async-void KeyReceived handler. Unhandled, that terminates the whole process (the same
+        // failure mode as the 413-on-image crash) — the boundary catch must absorb it and log.
+        var h = new Harness(textKey: null);
+        await h.Keys.EnsureDeviceKeypairAsync();
+
+        h.Transport.RaiseKey("peer-dev", new byte[] { 0xDE, 0xAD, 0xBE, 0xEF });
+        await SettleAsync();
+
+        (await h.Keys.LoadTextKeyAsync()).Should().BeNull();
+        h.Logger.Warnings.Should().Contain(w => w.Message.Contains("could not be processed"));
+    }
+
+    [Fact]
     public async Task Received_WrongKey_ThreeConsecutiveFailures_ReAdvertisesNeedForTheKey()
     {
         // Our key is NOT the one the sender used (the classic both-sides-self-generated split brain).

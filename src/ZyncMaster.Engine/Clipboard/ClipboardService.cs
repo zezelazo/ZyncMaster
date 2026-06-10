@@ -69,14 +69,28 @@ public sealed class ClipboardService
         return _sink.PasteIntoFocusedAsync(entry, ct);
     }
 
-    private async void OnCaptured(ClipboardEntry entry) =>
-        await PublishCapturedAsync(entry, CancellationToken.None).ConfigureAwait(false);
+    // These three are the async-void event boundaries: ANY exception that escapes them terminates
+    // the whole process (that is how the nginx-413-on-image crash killed the App before the publish
+    // path caught transport errors). The inner methods log their own failures with precise reasons;
+    // the catch-alls here are the last line of defense for whatever they did not anticipate — e.g. a
+    // malformed relayed key blob making KeyWrap.Unwrap throw CryptographicException.
+    private async void OnCaptured(ClipboardEntry entry)
+    {
+        try { await PublishCapturedAsync(entry, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) { _logger.Log(LogLevel.Warning, "Clipboard capture handling failed; the item was not synced.", ex); }
+    }
 
-    private async void OnReceived(ClipboardEntry entry) =>
-        await ApplyReceivedAsync(entry, CancellationToken.None).ConfigureAwait(false);
+    private async void OnReceived(ClipboardEntry entry)
+    {
+        try { await ApplyReceivedAsync(entry, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) { _logger.Log(LogLevel.Warning, "Inbound clipboard item could not be applied.", ex); }
+    }
 
-    private async void OnKeyReceived(string fromDeviceId, byte[] wrapped) =>
-        await _keyExchange.OnKeyReceivedAsync(fromDeviceId, wrapped, CancellationToken.None).ConfigureAwait(false);
+    private async void OnKeyReceived(string fromDeviceId, byte[] wrapped)
+    {
+        try { await _keyExchange.OnKeyReceivedAsync(fromDeviceId, wrapped, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) { _logger.Log(LogLevel.Warning, $"Relayed clipboard key from device '{fromDeviceId}' could not be processed; waiting for the next relay.", ex); }
+    }
 
     // Every drop on this path is logged with its reason: a user watching the log must be able to
     // tell WHY a copy never reached the other devices. User-intended gates (send off) and echo
