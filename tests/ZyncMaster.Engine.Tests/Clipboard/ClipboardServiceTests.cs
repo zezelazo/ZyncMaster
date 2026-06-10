@@ -494,6 +494,59 @@ public sealed class ClipboardServiceTests
     }
 
     [Fact]
+    public async Task Captured_AlternatingContent_ABA_AllThreePublished()
+    {
+        // The interleaved re-copy regression: copy A, copy B, copy A again — all inside the
+        // recent-publish TTL. The old multi-entry publish map still flagged A as "recently
+        // published" and silently dropped the third copy, leaving the peers on B while the local
+        // clipboard held A. Every alternation is a deliberate user action and must be published.
+        var key = TextCrypto.NewKey();
+        var h = new Harness(key);
+
+        h.Capture.Raise(Text("content A"));
+        await SettleAsync();
+        h.Capture.Raise(Text("content B"));
+        await SettleAsync();
+        h.Capture.Raise(Text("content A"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().HaveCount(3);
+        TextCrypto.Decrypt(key, h.Transport.Published[2].CipherText!).Should().Be("content A");
+        h.Logger.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Echo_RecopyOfAppliedContent_AfterCopyingSomethingElse_IsPublished()
+    {
+        // Echo-window variant of the same regression: a peer item A is applied (opening A's echo
+        // window), the user copies B, then deliberately re-copies A while A's 15s window would
+        // still be open. Capturing B proves A's apply burst is over, so the re-copy of A must be
+        // published, not swallowed as an echo.
+        var key = TextCrypto.NewKey();
+        var h = new Harness(key);
+
+        h.Transport.RaiseItem(new ClipboardEntry
+        {
+            Id = "r1",
+            Type = ClipboardEntryType.Text,
+            CipherText = TextCrypto.Encrypt(key, "peer content A"),
+            OriginDeviceId = "dev-b",
+        });
+        await SettleAsync();
+        h.Sink.Set.Should().HaveCount(1);
+
+        h.Capture.Raise(Text("local content B"));
+        await SettleAsync();
+        h.Transport.Published.Should().HaveCount(1);
+
+        h.Capture.Raise(Text("peer content A"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().HaveCount(2);
+        TextCrypto.Decrypt(key, h.Transport.Published[1].CipherText!).Should().Be("peer content A");
+    }
+
+    [Fact]
     public async Task Echo_MultiFireCaptureAfterApply_AllSuppressed()
     {
         // One programmatic clipboard set fires WM_CLIPBOARDUPDATE several times (more under RDP

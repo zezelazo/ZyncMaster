@@ -56,10 +56,19 @@ public static class ClipboardEndpoints
             }
 
             // Defense-in-depth against client echo loops: a publish whose content is byte-identical
-            // to the user's NEWEST history item (same type, same payload — for text that is the
-            // ciphertext) is acknowledged idempotently with the EXISTING item's id, without
-            // appending a duplicate row and without re-broadcasting it back to the peers. Only the
-            // head is deduped; re-copying older content is a legitimate new item.
+            // to the user's NEWEST history item (same type, same payload) is acknowledged
+            // idempotently with the EXISTING item's id, without appending a duplicate row and
+            // without re-broadcasting it back to the peers. Only the head is deduped; re-copying
+            // older content is a legitimate new item.
+            //
+            // KNOWN LIMITATION — this guard is effectively images-only. Text payloads are E2E
+            // ciphertext and TextCrypto uses a fresh random GCM nonce per encryption, so two
+            // publishes of the SAME plaintext are never byte-identical here; only an exact
+            // retransmit of one blob can match. Do not rely on this check to break a text echo
+            // loop — the client-side ClipboardDedupe windows are the real (and only) defense for
+            // text. Deduping text server-side would need an opaque client-supplied equality token
+            // (e.g. an HMAC of the plaintext under the shared text key — never a plain hash, which
+            // would expose short clipboard texts to dictionary attacks).
             var newest = await store.GetNewestAsync(ct);
             if (newest is not null
                 && newest.Type == item.Type

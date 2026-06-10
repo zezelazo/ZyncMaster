@@ -192,20 +192,69 @@ public sealed class ClipboardDedupeTests
     }
 
     [Fact]
-    public void PublishedSet_IsBounded()
+    public void PublishedWindow_IsSingleSlot_NewContentEndsThePreviousWindow()
     {
-        var dedupe = new ClipboardDedupe(capacity: 2);
-        var h1 = dedupe.Hash(Text("one"));
-        var h2 = dedupe.Hash(Text("two"));
-        var h3 = dedupe.Hash(Text("three"));
+        // The A-B-A regression: with a multi-entry publish map, copying A, then B, then A again
+        // within the TTL left IsRecentlyPublished(A) true and the genuine re-copy of A was dropped
+        // — the peer kept B while the local clipboard held A. Only the LAST published hash may be
+        // treated as a recent duplicate (mirroring the server's head-only dedupe).
+        var dedupe = new ClipboardDedupe();
+        var a = dedupe.Hash(Text("A"));
+        var b = dedupe.Hash(Text("B"));
 
-        dedupe.MarkPublished(h1);
-        dedupe.MarkPublished(h2);
-        dedupe.MarkPublished(h3); // evicts the oldest (h1)
+        dedupe.MarkPublished(a);
+        dedupe.IsRecentlyPublished(a).Should().BeTrue();
 
-        dedupe.IsRecentlyPublished(h1).Should().BeFalse();
-        dedupe.IsRecentlyPublished(h2).Should().BeTrue();
-        dedupe.IsRecentlyPublished(h3).Should().BeTrue();
+        dedupe.MarkPublished(b);
+
+        dedupe.IsRecentlyPublished(a).Should().BeFalse(); // re-copying A is a fresh user action
+        dedupe.IsRecentlyPublished(b).Should().BeTrue();  // B's own multi-fire is still collapsed
+    }
+
+    [Fact]
+    public void PublishedWindow_StillCollapsesSameHashRepeats()
+    {
+        var time = new ManualTimeProvider();
+        var dedupe = new ClipboardDedupe(timeProvider: time);
+        var hash = dedupe.Hash(Text("mashed"));
+
+        dedupe.MarkPublished(hash);
+
+        dedupe.IsRecentlyPublished(hash).Should().BeTrue(); // second WM fire
+        time.Advance(TimeSpan.FromSeconds(10));
+        dedupe.IsRecentlyPublished(hash).Should().BeTrue(); // Ctrl+C mash, same content
+    }
+
+    [Fact]
+    public void OnNewContentCaptured_ClosesEchoWindowsForOtherContent()
+    {
+        // Echo variant of the A-B-A regression: peer-applied A opened a 15s echo window; the user
+        // then copies B. The WM fires for A's apply are contiguous, so once the clipboard holds B
+        // a later capture of A is a deliberate re-copy — its echo window must be gone.
+        var dedupe = new ClipboardDedupe();
+        var a = dedupe.Hash(Text("applied A"));
+        var c = dedupe.Hash(Text("applied C"));
+        var b = dedupe.Hash(Text("captured B"));
+
+        dedupe.MarkApplied(a);
+        dedupe.MarkApplied(c);
+
+        dedupe.OnNewContentCaptured(b);
+
+        dedupe.IsEcho(a).Should().BeFalse();
+        dedupe.IsEcho(c).Should().BeFalse();
+    }
+
+    [Fact]
+    public void OnNewContentCaptured_KeepsTheEchoWindowForItsOwnHash()
+    {
+        var dedupe = new ClipboardDedupe();
+        var a = dedupe.Hash(Text("racing apply"));
+
+        dedupe.MarkApplied(a);
+        dedupe.OnNewContentCaptured(a);
+
+        dedupe.IsEcho(a).Should().BeTrue();
     }
 
     [Fact]

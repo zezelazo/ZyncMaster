@@ -142,6 +142,10 @@ public sealed class ClipboardService
             var cipher = TextCrypto.Encrypt(key, entry.Text!);
             try
             {
+                // The clipboard now holds NEW content: echo windows still open for other hashes can
+                // no longer multi-fire, and leaving them up would swallow a later genuine re-copy
+                // of that earlier content (peer applies A, user copies B then re-copies A).
+                _dedupe.OnNewContentCaptured(hash);
                 await _transport.PublishAsync(entry with { Text = null, CipherText = cipher }, ct).ConfigureAwait(false);
                 _dedupe.MarkPublished(hash);
             }
@@ -172,6 +176,8 @@ public sealed class ClipboardService
 
         try
         {
+            // Same as the text path: new content on the clipboard ends every other echo window.
+            _dedupe.OnNewContentCaptured(hash);
             await _transport.PublishAsync(entry with { SizeBytes = size }, ct).ConfigureAwait(false);
             _dedupe.MarkPublished(hash);
         }
