@@ -2560,6 +2560,8 @@ function resetSessionState() {
   live.clipboardHistory = null;
   live.clipboardHistoryLoading = false;
   clipboardDevicesOpen = false;
+  clipboardOpenItemId = null;
+  clipboardFilter = 'all';
 }
 
 // ---------------- Screen: Settings hub ----------------
@@ -2943,9 +2945,16 @@ function deviceRow(dev, thisId) {
 // deletes WITHOUT confirmation (optimistic: the row leaves the list at once, then deleteClipboardEntry
 // propagates it to the server + the user's other devices). The live "clipboard:item" / "clipboard:
 // deleted" pushes keep the list fresh while this screen is open. Config stays in Settings → Clipboard.
+// Opening/closing a row's overlay and deleting a row are TARGETED DOM updates (no full repaint): a
+// repaint would rebuild the whole list just to toggle one overlay, visibly flashing on long histories.
 
 // The id of the item whose action overlay is currently open (only one at a time), or null.
 let clipboardOpenItemId = null;
+
+// Active type filter for the in-app clipboard view. Module-level so it survives repaints while the
+// App runs (same lifetime as clipboardDevicesOpen). Same values/labels as the floating viewer's.
+let clipboardFilter = 'all';
+const CLIPBOARD_FILTERS = [['all', 'All'], ['text', 'Text'], ['image', 'Img'], ['file', 'File']];
 
 // loadClipboardHistory — fetch the shared history once and cache it on live.clipboardHistory, then
 // softRepaint the clipboard screen. Once-only until reset (a forced refresh uses refreshClipboardHistory).
@@ -2977,14 +2986,49 @@ function refreshClipboardHistory() {
     });
 }
 
-// dropClipboardHistoryItem — remove the item with the given id from the cached list and repaint, if the
-// clipboard view is open. Shared by the trash action (optimistic) and the live "clipboard:deleted" push.
+// dropClipboardHistoryItem — remove the item with the given id from the cached list and, if the
+// clipboard view is open, remove JUST that row from the DOM (no full repaint). Shared by the trash
+// action (optimistic) and the live "clipboard:deleted" push. Falls back to a full render only when
+// the view structure is missing (e.g. the push raced a navigation), and repaints once the list runs
+// empty so the empty / "no match" state can take its place.
 function dropClipboardHistoryItem(id) {
   if (!id || !Array.isArray(live.clipboardHistory)) return;
   const before = live.clipboardHistory.length;
   live.clipboardHistory = live.clipboardHistory.filter((x) => x && x.id !== id);
   if (clipboardOpenItemId === id) clipboardOpenItemId = null;
-  if (live.clipboardHistory.length !== before && state.view === 'clipboard') softRepaint();
+  if (live.clipboardHistory.length === before || state.view !== 'clipboard') return;
+  const list = clipScreenList();
+  if (!list) { softRepaint(); return; }
+  const row = Array.from(list.querySelectorAll('.cb-row')).find((n) => n.dataset.id === String(id));
+  if (row) row.remove(); // not found = the row is filtered out of view; the DOM is already consistent
+  if (!list.querySelector('.cb-row')) softRepaint();
+}
+
+// clipScreenList — the in-app clipboard view's list element, or null when the view (or its list,
+// e.g. the loading/empty states) is not currently in the DOM.
+function clipScreenList() {
+  return document.querySelector('.cb-list--screen');
+}
+
+// clipCloseOpenOverlay — targeted close of the currently open row's action overlay: drop the acting
+// class and remove the overlay element in place, WITHOUT re-rendering the list. No-op when nothing
+// is open.
+function clipCloseOpenOverlay() {
+  clipboardOpenItemId = null;
+  const acting = document.querySelector('.cb-list--screen .cb-row--acting');
+  if (!acting) return;
+  acting.classList.remove('cb-row--acting');
+  const overlay = acting.querySelector('.cb-actions');
+  if (overlay) overlay.remove();
+}
+
+// clipOpenOverlayOn(row, item) — targeted open of the action overlay over THIS row (closing any other
+// open one first — only one at a time), WITHOUT re-rendering the list.
+function clipOpenOverlayOn(row, item) {
+  clipCloseOpenOverlay();
+  clipboardOpenItemId = item.id;
+  row.classList.add('cb-row--acting');
+  row.append(clipActionOverlay(item));
 }
 
 // clipNormalizeType — 'text' | 'image' | 'file' from the history item (mirrors the viewer's itemType).
@@ -2995,9 +3039,17 @@ function clipNormalizeType(item) {
   return 'text';
 }
 
-// clipTitleOf — the one-line row title (mirrors the viewer's titleOf).
+// clipIsLocked — a Text item whose plaintext is not available yet: the bridge surfaces rows it cannot
+// decrypt (the E2E text key has not been relayed to this device) with text=null, so the user still
+// sees the items exist. The "clipboard:key" push re-fetches once the key lands and unlocks them.
+function clipIsLocked(item) {
+  return clipNormalizeType(item) === 'text' && item.text == null;
+}
+
+// clipTitleOf — the one-line row title (mirrors the viewer's titleOf, plus the locked placeholder).
 function clipTitleOf(item) {
   const type = clipNormalizeType(item);
+  if (clipIsLocked(item)) return 'Waiting for key from your other device';
   if (type === 'text') return (item.text || '').replace(/\s+/g, ' ').trim() || '(empty)';
   if (item.text) return item.text;
   return type === 'image' ? 'Image' : 'File';
@@ -3028,7 +3080,8 @@ function clipRelTime(iso) {
 }
 
 // clipRowEl(item) — one history row reusing the floating viewer's .cb-row markup. Tapping the row opens
-// the action overlay (copy + trash) over THIS row. The overlay is shown only for the open item.
+// the action overlay (copy + trash) over THIS row — a targeted DOM toggle, never a list re-render.
+// The data-id is what dropClipboardHistoryItem uses to remove just this row on delete.
 function clipRowEl(item) {
   const type = clipNormalizeType(item);
   const isImg = type === 'image';
@@ -3040,7 +3093,10 @@ function clipRowEl(item) {
     'aria-hidden': 'true',
   }, type === 'text' ? 'T' : type === 'file' ? 'F' : '');
 
-  const title = el('div', { class: 'cb-title', text: clipTitleOf(item) });
+  const title = el('div', {
+    class: 'cb-title' + (clipIsLocked(item) ? ' cb-title--waiting' : ''),
+    text: clipTitleOf(item),
+  });
   const body = el('div', { class: 'cb-body' }, title);
 
   const metaParts = [];
@@ -3061,9 +3117,15 @@ function clipRowEl(item) {
   const row = el('div', {
     class: cls.join(' ') + (open ? ' cb-row--acting' : ''),
     role: 'button', tabindex: '0', 'aria-label': clipTitleOf(item),
+    dataset: { id: String(item.id) },
   }, head);
 
-  const toggle = () => { clipboardOpenItemId = open ? null : item.id; softRepaint(); };
+  // Toggle in place: compare against the LIVE open id (not the render-time `open`) so the row keeps
+  // working across targeted opens/closes without being rebuilt.
+  const toggle = () => {
+    if (clipboardOpenItemId === item.id) clipCloseOpenOverlay();
+    else clipOpenOverlayOn(row, item);
+  };
   row.addEventListener('click', toggle);
   row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
 
@@ -3081,13 +3143,12 @@ function clipActionOverlay(item) {
     class: 'cb-action cb-action--copy', type: 'button', 'aria-label': 'Copy to clipboard', title: 'Copy',
     onclick: (e) => {
       e.stopPropagation();
-      clipboardOpenItemId = null;
+      clipCloseOpenOverlay();
       if (Bridge.available) {
         Bridge.call('pasteClipboardEntry', item.id)
           .then((r) => { announce(r && r.status === 'ok' ? 'Copied' : 'Could not copy this item.'); })
           .catch(() => { announce('Could not copy this item.'); });
       }
-      softRepaint();
     },
   }, iconEl('copy', 18, 1.7));
 
@@ -3106,7 +3167,7 @@ function clipActionOverlay(item) {
 
   overlay.append(copyBtn, trashBtn);
   // A tap on the overlay backdrop (not a button) closes it without acting.
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) { e.stopPropagation(); clipboardOpenItemId = null; softRepaint(); } });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) { e.stopPropagation(); clipCloseOpenOverlay(); } });
   return overlay;
 }
 
@@ -3139,8 +3200,30 @@ function renderClipboard(root) {
     return;
   }
 
+  // Type filter chips — same segmented control (and labels) as the floating viewer. Switching the
+  // filter is a full repaint (the list composition changes anyway); any open overlay is dropped
+  // because its row may leave the view.
+  const seg = el('div', { class: 'cb-filter' });
+  CLIPBOARD_FILTERS.forEach(([val, label]) => {
+    seg.append(el('button', {
+      class: 'cb-filter__item', type: 'button', 'aria-pressed': String(clipboardFilter === val), text: label,
+      onclick: () => {
+        if (clipboardFilter === val) return;
+        clipboardFilter = val;
+        clipboardOpenItemId = null;
+        softRepaint();
+      },
+    }));
+  });
+  card.append(seg);
+
+  const visible = items.filter((it) => clipboardFilter === 'all' || clipNormalizeType(it) === clipboardFilter);
   const list = el('div', { class: 'cb-list cb-list--screen' });
-  items.forEach((item) => list.append(clipRowEl(item)));
+  if (!visible.length) {
+    list.append(el('div', { class: 'cb-empty', text: 'No items match this filter' }));
+  } else {
+    visible.forEach((item) => list.append(clipRowEl(item)));
+  }
   card.append(list);
   root.append(card);
 }
