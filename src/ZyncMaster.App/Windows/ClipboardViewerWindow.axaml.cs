@@ -28,8 +28,14 @@ public partial class ClipboardViewerWindow : Window
 
     // The foreground window that was active when the viewer was opened (the user's real paste target).
     // Captured on Open BEFORE the viewer steals focus; re-asserted on close so focus returns there and
-    // the sink's GetForegroundWindow reads the right window when it synthesizes Ctrl+V.
+    // the sink targets the right window when it synthesizes Ctrl+V.
     private IntPtr _priorForeground;
+
+    // The captured paste target, surfaced for the engine's paste path. The viewer itself is the
+    // foreground window while it is open, so a paste that captured the foreground at paste time would
+    // target the viewer (and the Ctrl+V would vanish); this is the HWND the user actually wants the
+    // paste to land in. IntPtr.Zero when nothing was captured.
+    public IntPtr PriorForeground => _priorForeground;
 
     public ClipboardViewerWindow()
     {
@@ -100,6 +106,13 @@ public partial class ClipboardViewerWindow : Window
         _suppressDeactivate = true;
         Show();
         Activate();
+
+        // Activate() focuses the WINDOW, not the embedded WebView2 content — without an explicit
+        // hand-off the page's key handlers (Arrow/Enter/Esc) stay dead until the user clicks inside
+        // the card. Move keyboard focus into the web content so the hotkey → arrows → Enter flow
+        // works immediately.
+        _webHost?.FocusContent();
+
         Dispatcher.UIThread.Post(() => _suppressDeactivate = false, DispatcherPriority.Background);
     }
 

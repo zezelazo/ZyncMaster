@@ -102,6 +102,33 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
         if (_ready) _controller!.CoreWebView2.Reload();
     }
 
+    // Moves keyboard focus INTO the WebView2 content. The clipboard viewer calls this right after
+    // Show()+Activate(): without it the Avalonia window holds focus and the page's key handlers
+    // (Arrow/Enter/Esc) are dead until the user clicks inside the card. When the controller is not
+    // created yet (first hotkey press races InitAsync) the request is remembered and applied as soon
+    // as init completes, so the very first open is keyboard-ready too.
+    public void FocusContent()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_controller is null)
+            {
+                _focusPending = true;
+                return;
+            }
+            TryMoveFocusIntoWebView();
+        });
+    }
+
+    private bool _focusPending;
+
+    private void TryMoveFocusIntoWebView()
+    {
+        // Best-effort: an old runtime / a disposed controller must never crash the viewer open path.
+        try { _controller?.MoveFocus(CoreWebView2MoveFocusReason.Programmatic); }
+        catch { /* the user can still click into the card */ }
+    }
+
     public void PostToWeb(string json)
     {
         if (json == null) throw new ArgumentNullException(nameof(json));
@@ -223,6 +250,13 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
             _ready = true;
             while (_pending.Count > 0)
                 core.PostWebMessageAsString(_pending.Dequeue());
+
+            // A FocusContent() that raced controller creation (first viewer open) lands now.
+            if (_focusPending)
+            {
+                _focusPending = false;
+                TryMoveFocusIntoWebView();
+            }
         }
         catch
         {

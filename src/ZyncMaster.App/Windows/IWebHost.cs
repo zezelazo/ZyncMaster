@@ -15,4 +15,10 @@ public interface IWebHost
 
     // Pushes a JSON message from native code into the web layer (status events, etc.).
     void PostToWeb(string json);
+
+    // Moves keyboard focus INTO the hosted web content. Needed by the frameless clipboard viewer:
+    // after Show()+Activate() the Avalonia window has focus but the embedded browser does not, so
+    // page key handlers (Arrow/Enter/Esc) are dead until the user clicks. A host with no embedded
+    // surface (the loopback WebHost renders in an external browser) implements this as a no-op.
+    void FocusContent();
 }

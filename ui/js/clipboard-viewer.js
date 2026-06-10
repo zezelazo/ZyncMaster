@@ -412,6 +412,18 @@ function closeViewer() {
   if (Bridge.available) Bridge.call('closeClipboardViewer').catch(() => {});
 }
 
+// Focuses the card (it carries tabindex=0) so keyboard input lands in the page as soon as the
+// window is shown — belt-and-braces with the host's programmatic WebView2 focus hand-off. The key
+// handlers live on document, so once the WebView has keyboard focus they work even after a render
+// replaces the card element.
+function focusCard() {
+  const host = root();
+  const card = host && host.querySelector('.cb-viewer');
+  if (card && typeof card.focus === 'function') {
+    try { card.focus({ preventScroll: true }); } catch (_) { /* focus is best-effort */ }
+  }
+}
+
 function onKeyDown(e) {
   switch (e.key) {
     case 'ArrowDown': e.preventDefault(); moveSel(1); break;
@@ -460,6 +472,12 @@ async function boot() {
 
   // First paint immediately (empty/loading), then hydrate from the bridge.
   render();
+  focusCard();
+
+  // The window is HIDDEN (not destroyed) between hotkey presses: each re-open is a visibility/focus
+  // transition, not a fresh page load. Re-focus the card on every show so keys work immediately.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) focusCard(); });
+  window.addEventListener('focus', focusCard);
 
   if (Bridge.available) {
     // Density / showHints / thisDeviceId come from the THIS-device settings in getClipboardDevices.

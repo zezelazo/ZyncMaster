@@ -72,6 +72,10 @@ public sealed class WebHost : IWebHost, IBridgeTransport, IDisposable
             _toWeb.Add(json);
     }
 
+    // No embedded surface here — the UI renders in an external browser, so there is no in-process
+    // web content to move keyboard focus into.
+    public void FocusContent() { }
+
     // IBridgeTransport.Send is the same channel as PostToWeb: native -> web.
     public void Send(string json) => PostToWeb(json);
 
