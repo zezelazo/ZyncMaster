@@ -55,6 +55,19 @@ public static class ClipboardEndpoints
                 });
             }
 
+            // Defense-in-depth against client echo loops: a publish whose content is byte-identical
+            // to the user's NEWEST history item (same type, same payload — for text that is the
+            // ciphertext) is acknowledged idempotently with the EXISTING item's id, without
+            // appending a duplicate row and without re-broadcasting it back to the peers. Only the
+            // head is deduped; re-copying older content is a legitimate new item.
+            var newest = await store.GetNewestAsync(ct);
+            if (newest is not null
+                && newest.Type == item.Type
+                && newest.Payload.AsSpan().SequenceEqual(item.Payload))
+            {
+                return Results.Ok(new { id = newest.Id });
+            }
+
             try
             {
                 await store.AppendAsync(item, ct);

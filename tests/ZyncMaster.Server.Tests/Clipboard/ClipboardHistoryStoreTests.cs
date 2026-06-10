@@ -68,6 +68,37 @@ public class ClipboardHistoryStoreTests
     }
 
     [Fact]
+    public async Task GetNewest_returns_null_for_empty_history()
+    {
+        var store = ClipboardTestHarness.HistoryStore("u1");
+        (await store.GetNewestAsync()).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetNewest_returns_the_most_recent_item_with_its_payload()
+    {
+        var store = ClipboardTestHarness.HistoryStore("u1");
+        await store.AppendAsync(Text("old", DateTimeOffset.UtcNow.AddMinutes(-2)));
+        await store.AppendAsync(Text("new", DateTimeOffset.UtcNow.AddMinutes(-1)));
+
+        var newest = await store.GetNewestAsync();
+
+        newest.Should().NotBeNull();
+        newest!.Id.Should().Be("new");
+        newest.Payload.Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public async Task GetNewest_is_user_scoped()
+    {
+        var s1 = ClipboardTestHarness.HistoryStore("u1", shareDb: true);
+        var s2 = ClipboardTestHarness.HistoryStore("u2", shareDb: true);
+        await s1.AppendAsync(Text("u1-newest", DateTimeOffset.UtcNow));
+
+        (await s2.GetNewestAsync()).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Remove_deletes_only_the_targeted_item_for_the_user()
     {
         var store = ClipboardTestHarness.HistoryStore("u1");

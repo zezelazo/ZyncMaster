@@ -93,6 +93,26 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
         return rows.Select(ToDomain).ToList();
     }
 
+    public async Task<ClipboardItem?> GetNewestAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        // Two-step on purpose: resolve the newest id over a slim projection (ordered client-side
+        // for the DateTimeOffset/SQLite reason above), then load just that one row with its payload.
+        var newestId = (await db.ClipboardItems.AsNoTracking()
+                .Where(x => x.UserId == _user.UserId)
+                .Select(x => new { x.Id, x.CreatedUtc })
+                .ToListAsync(ct))
+            .OrderByDescending(x => x.CreatedUtc)
+            .Select(x => x.Id)
+            .FirstOrDefault();
+        if (newestId is null)
+            return null;
+
+        var row = await db.ClipboardItems.AsNoTracking()
+            .FirstAsync(x => x.UserId == _user.UserId && x.Id == newestId, ct);
+        return ToDomain(row);
+    }
+
     public async Task RemoveAsync(string id, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(id);

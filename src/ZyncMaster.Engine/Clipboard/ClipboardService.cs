@@ -15,6 +15,10 @@ namespace ZyncMaster.Engine;
 // Inbound, the transport delivers CipherText with Text null; we decrypt into Text before applying.
 public sealed class ClipboardService
 {
+    // Smallest image capture worth publishing. A bare CF_DIB header without pixel data is 40-124
+    // bytes; no real picture is under 256.
+    internal const int MinPublishImageBytes = 256;
+
     private readonly IClipboardCaptureSource _capture;
     private readonly IClipboardTransport _transport;
     private readonly IClipboardSink _sink;
@@ -114,6 +118,15 @@ public sealed class ClipboardService
             return;
         }
 
+        if (_dedupe.IsRecentlyPublished(hash))
+        {
+            // The same content was published moments ago: Windows fires WM_CLIPBOARDUPDATE 2-3
+            // times for a single copy (more under RDP clipboard redirection), and users re-copy the
+            // same content in bursts. Re-publishing would duplicate history and feed echo loops.
+            _logger.Log(LogLevel.Debug, "Clipboard capture dropped: identical content was already published moments ago.");
+            return;
+        }
+
         if (entry.Type == ClipboardEntryType.Text)
         {
             // Encrypt with the shared text key; if we don't have it yet we cannot publish text
@@ -130,6 +143,7 @@ public sealed class ClipboardService
             try
             {
                 await _transport.PublishAsync(entry with { Text = null, CipherText = cipher }, ct).ConfigureAwait(false);
+                _dedupe.MarkPublished(hash);
             }
             catch (Exception ex)
             {
@@ -138,8 +152,17 @@ public sealed class ClipboardService
             return;
         }
 
-        // Image: enforce the hard cap on the real bytes; never throw on oversize.
+        // Image: a capture below the minimum is a bare clipboard header, not a picture — e.g. a
+        // 76-byte CF_DIB with no pixel data — and would only spam the history with garbage.
         var size = entry.ImageBytes?.Length ?? 0;
+        if (size < MinPublishImageBytes)
+        {
+            _logger.Log(LogLevel.Debug,
+                $"Clipboard image dropped: {size} bytes is below the {MinPublishImageBytes}-byte minimum (bare header, not an image).");
+            return;
+        }
+
+        // Enforce the hard cap on the real bytes; never throw on oversize.
         if (size > _hardMaxImageBytes)
         {
             _logger.Log(LogLevel.Warning,
@@ -150,6 +173,7 @@ public sealed class ClipboardService
         try
         {
             await _transport.PublishAsync(entry with { SizeBytes = size }, ct).ConfigureAwait(false);
+            _dedupe.MarkPublished(hash);
         }
         catch (Exception ex)
         {

@@ -128,15 +128,26 @@ public sealed class ClipboardServiceTests
         public ClipboardSettings Settings = new();
         public ClipboardService Service;
 
-        public Harness(byte[]? textKey, long hardMax = 1_000_000, string? deviceId = "this-dev")
+        public Harness(
+            byte[]? textKey, long hardMax = 1_000_000, string? deviceId = "this-dev",
+            TimeProvider? timeProvider = null)
         {
             Keys = new FakeKeyStore(textKey);
             var keyExchange = new ClipboardKeyExchange(Keys, Transport, () => deviceId);
-            var dedupe = new ClipboardDedupe();
+            var dedupe = new ClipboardDedupe(timeProvider: timeProvider);
             Service = new ClipboardService(
                 Capture, Transport, Sink, Keys, keyExchange, dedupe,
                 () => Settings, hardMax, Logger);
         }
+    }
+
+    // Manual monotonic clock for the dedupe TTL windows; advanced explicitly by the test.
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => _timestamp;
+        public void Advance(TimeSpan by) => _timestamp += by.Ticks;
     }
 
     private static ClipboardEntry Text(string text) => new()
@@ -224,7 +235,7 @@ public sealed class ClipboardServiceTests
         h.Transport.PublishError = new InvalidOperationException(
             "Clipboard request POST https://x/api/clipboard/items failed with status 413: too large");
 
-        h.Capture.Raise(Image(new byte[100]));
+        h.Capture.Raise(Image(new byte[500]));
         await SettleAsync();
 
         var warning = h.Logger.Warnings.Should().ContainSingle().Which;
@@ -387,14 +398,14 @@ public sealed class ClipboardServiceTests
     [Fact]
     public async Task Captured_ImageOverHardMax_Skipped_AndWarnsWithSize()
     {
-        var h = new Harness(TextCrypto.NewKey(), hardMax: 10);
+        var h = new Harness(TextCrypto.NewKey(), hardMax: 1000);
 
-        h.Capture.Raise(Image(new byte[100]));
+        h.Capture.Raise(Image(new byte[2000]));
         await SettleAsync();
 
         h.Transport.Published.Should().BeEmpty();
         h.Logger.Warnings.Should().ContainSingle()
-            .Which.Message.Should().Contain("100 bytes").And.Contain("exceeds");
+            .Which.Message.Should().Contain("2000 bytes").And.Contain("exceeds");
     }
 
     [Fact]
@@ -402,11 +413,141 @@ public sealed class ClipboardServiceTests
     {
         var h = new Harness(TextCrypto.NewKey(), hardMax: 1000);
 
-        h.Capture.Raise(Image(new byte[100]));
+        h.Capture.Raise(Image(new byte[500]));
         await SettleAsync();
 
         h.Transport.Published.Should().HaveCount(1);
-        h.Transport.Published[0].SizeBytes.Should().Be(100);
+        h.Transport.Published[0].SizeBytes.Should().Be(500);
+    }
+
+    [Fact]
+    public async Task Captured_TinyImage_DroppedAsBareHeader_NoWarning()
+    {
+        // A 76-byte CF_DIB is a header with no pixel data — clipboard noise, not a picture. It must
+        // be dropped quietly (Debug), never published, never warned about.
+        var h = new Harness(TextCrypto.NewKey());
+
+        h.Capture.Raise(Image(new byte[76]));
+        await SettleAsync();
+
+        h.Transport.Published.Should().BeEmpty();
+        h.Logger.Warnings.Should().BeEmpty();
+        h.Logger.Entries.Should().Contain(e =>
+            e.Level == LogLevel.Debug && e.Message.Contains("below the") && e.Message.Contains("minimum"));
+    }
+
+    [Fact]
+    public async Task Captured_SameTextRepeatedQuickly_PublishedOnlyOnce()
+    {
+        // Windows fires WM_CLIPBOARDUPDATE 2-3 times for a single copy, and users mash Ctrl+C on
+        // the same content. All captures of identical content inside the recent-publish window
+        // must collapse into ONE publish — this is half of the cross-machine echo-loop fix.
+        var h = new Harness(TextCrypto.NewKey());
+
+        h.Capture.Raise(Text("same content"));
+        await SettleAsync();
+        h.Capture.Raise(Text("same content"));
+        h.Capture.Raise(Text("same content"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().HaveCount(1);
+        h.Logger.Warnings.Should().BeEmpty(); // duplicate drops are Debug noise, not failures
+    }
+
+    [Fact]
+    public async Task Captured_SameImageRepeatedQuickly_PublishedOnlyOnce()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        var bytes = new byte[5000];
+        bytes[0] = 42;
+
+        h.Capture.Raise(Image(bytes));
+        await SettleAsync();
+        h.Capture.Raise(Image((byte[])bytes.Clone()));
+        h.Capture.Raise(Image((byte[])bytes.Clone()));
+        await SettleAsync();
+
+        h.Transport.Published.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Captured_SameTextAgainAfterPublishWindow_PublishedAgain()
+    {
+        var time = new ManualTimeProvider();
+        var h = new Harness(TextCrypto.NewKey(), timeProvider: time);
+
+        h.Capture.Raise(Text("re-copied later"));
+        await SettleAsync();
+        h.Transport.Published.Should().HaveCount(1);
+
+        // Within the window: dropped.
+        time.Advance(TimeSpan.FromSeconds(5));
+        h.Capture.Raise(Text("re-copied later"));
+        await SettleAsync();
+        h.Transport.Published.Should().HaveCount(1);
+
+        // After the window: a genuine re-copy, published again.
+        time.Advance(ClipboardDedupe.RecentPublishTtl + TimeSpan.FromSeconds(1));
+        h.Capture.Raise(Text("re-copied later"));
+        await SettleAsync();
+        h.Transport.Published.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Echo_MultiFireCaptureAfterApply_AllSuppressed()
+    {
+        // One programmatic clipboard set fires WM_CLIPBOARDUPDATE several times (more under RDP
+        // clipboard redirection). Every one of those captures must be suppressed as the same echo —
+        // the old consume-once behaviour let the second fire re-publish and start the ping-pong loop.
+        var key = TextCrypto.NewKey();
+        var time = new ManualTimeProvider();
+        var h = new Harness(key, timeProvider: time);
+
+        h.Transport.RaiseItem(new ClipboardEntry
+        {
+            Id = "r1",
+            Type = ClipboardEntryType.Text,
+            CipherText = TextCrypto.Encrypt(key, "looping content"),
+            OriginDeviceId = "dev-b",
+        });
+        await SettleAsync();
+        h.Sink.Set.Should().HaveCount(1);
+
+        // Three OS fires for the single apply, spread over a couple of seconds.
+        h.Capture.Raise(Text("looping content"));
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        h.Capture.Raise(Text("looping content"));
+        time.Advance(TimeSpan.FromSeconds(2));
+        h.Capture.Raise(Text("looping content"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().BeEmpty();
+        h.Logger.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Echo_SuppressionExpires_UserRecopyAfterTtl_IsPublished()
+    {
+        var key = TextCrypto.NewKey();
+        var time = new ManualTimeProvider();
+        var h = new Harness(key, timeProvider: time);
+
+        h.Transport.RaiseItem(new ClipboardEntry
+        {
+            Id = "r1",
+            Type = ClipboardEntryType.Text,
+            CipherText = TextCrypto.Encrypt(key, "old content"),
+            OriginDeviceId = "dev-b",
+        });
+        await SettleAsync();
+
+        time.Advance(ClipboardDedupe.AppliedEchoTtl + TimeSpan.FromSeconds(1));
+
+        // Long after the apply, the user deliberately copies the same content: not an echo anymore.
+        h.Capture.Raise(Text("old content"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().HaveCount(1);
     }
 
     [Fact]

@@ -655,6 +655,86 @@ public class ClipboardEndpointsTests
     }
 
     [Fact]
+    public async Task Publish_duplicate_of_newest_item_returns_existing_id_and_does_not_append_or_broadcast()
+    {
+        // Defense-in-depth against client echo loops (RDP clipboard redirection re-announces a set
+        // and the OS multi-fires capture events): a publish byte-identical to the user's newest
+        // history item is acknowledged with the EXISTING id, appends nothing and broadcasts nothing.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var payload = B64("looping content");
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-1", "Text", "dev-a", payload)))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Register the peer socket AFTER the first publish so only the duplicate could reach it.
+        var registry = h.Factory.Services.GetRequiredService<ClipboardConnectionRegistry>();
+        var peerSocket = new CapturingWebSocket();
+        registry.Add(new ClipboardConnection { UserId = userId, DeviceId = "dev-peer", Socket = peerSocket });
+
+        var dup = await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-2", "Text", "dev-a", payload));
+        dup.StatusCode.Should().Be(HttpStatusCode.OK);
+        using (var doc = JsonDocument.Parse(await dup.Content.ReadAsStringAsync()))
+            doc.RootElement.GetProperty("id").GetString().Should().Be("item-1"); // the EXISTING row
+
+        peerSocket.Sent.Should().BeEmpty(); // never re-broadcast back into the loop
+
+        var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        history.GetArrayLength().Should().Be(1);
+        history[0].GetProperty("id").GetString().Should().Be("item-1");
+    }
+
+    [Fact]
+    public async Task Publish_same_content_as_an_older_non_head_item_still_appends()
+    {
+        // Only the HEAD is deduped: re-copying content that was published earlier (but is no longer
+        // the newest item) is a legitimate new clipboard event and must append normally.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-1", "Text", "dev-a", B64("first"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-2", "Text", "dev-a", B64("second"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var again = await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-3", "Text", "dev-a", B64("first")));
+        again.StatusCode.Should().Be(HttpStatusCode.OK);
+        using (var doc = JsonDocument.Parse(await again.Content.ReadAsStringAsync()))
+            doc.RootElement.GetProperty("id").GetString().Should().Be("item-3");
+
+        var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        history.GetArrayLength().Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Publish_same_payload_different_type_is_not_deduped()
+    {
+        // The head dedupe matches type + payload; identical bytes under a different type are a
+        // distinct item.
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var payload = B64("same-bytes-either-way");
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-text", "Text", "dev-a", payload)))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("item-img", "Image", "dev-a", payload, sizeBytes: 21)))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        history.GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
     public async Task Publish_without_auth_returns_401()
     {
         using var h = new Harness();
