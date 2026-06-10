@@ -11,30 +11,20 @@
 
 /* ---------------------------------------------------------
    VIEWER OVERLAY
-   The viewer is its own frameless window (ui/clipboard-viewer.html). The body
-   is transparent so the glass card floats over the OS / aurora behind it.
+   The viewer is its own frameless window (ui/clipboard-viewer.html). The host
+   window and the WebView2 surface are both transparent, so html + body MUST
+   paint nothing: any full-bleed background here would render as an opaque
+   rectangle around the card. The .cb-viewer glass card is the ONLY visible
+   surface on this page.
    --------------------------------------------------------- */
+html.cb-viewer-page,
+html.cb-viewer-page body,
+.cb-viewer-body {
+  background: transparent;
+}
 .cb-viewer-body {
   margin: 0;
-  background: transparent;
-  /* A faint aurora wash so the glass has something to refract even when the host
-     window is fully transparent. pointer-events none keeps the card clickable. */
   overflow: hidden;
-}
-.cb-viewer-body::before {
-  content: '';
-  position: fixed; inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(60% 50% at 18% 8%, rgba(30, 74, 122, 0.45), transparent 60%),
-    radial-gradient(55% 45% at 85% 18%, rgba(42, 58, 107, 0.42), transparent 60%),
-    radial-gradient(60% 55% at 70% 95%, rgba(107, 58, 42, 0.32), transparent 55%);
-  z-index: 0;
-}
-[data-theme="light"] .cb-viewer-body::before {
-  background:
-    radial-gradient(60% 50% at 18% 8%, rgba(120, 150, 190, 0.35), transparent 60%),
-    radial-gradient(55% 45% at 85% 18%, rgba(150, 140, 175, 0.30), transparent 60%);
 }
 
 .cb-stage {
@@ -59,7 +49,9 @@
   width: 316px;           /* rich default; mini overrides below */
   max-width: 100%;
   color: var(--ink-1);
-  border-radius: var(--r-lg);
+  /* 14px + overflow:hidden so the corners are genuinely rounded over the bare desktop
+     (nothing else on the page paints, so a clipped square would show as-is). */
+  border-radius: var(--r-md);
   padding: 8px;
   overflow: hidden;
   background: rgba(12, 14, 22, calc(var(--cb-paste-opacity, 70) / 100));
