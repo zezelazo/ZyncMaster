@@ -370,7 +370,14 @@ public partial class App : Application
         catch (OperationCanceledException) { /* shutdown */ }
         catch (Exception ex)
         {
-            engine.Logger.Log(LogLevel.Warning, "Clipboard module failed to start; it will be unavailable this session.", ex);
+            // A transient network failure at boot (DNS still down after resume, server mid-deploy)
+            // logs one concise line; anything else keeps the full exception for diagnosis.
+            var transient = ZyncMaster.Core.TransientNetworkError.Describe(ex);
+            if (transient is not null)
+                engine.Logger.Log(LogLevel.Warning,
+                    $"Clipboard module failed to start ({transient}); it will be unavailable this session.");
+            else
+                engine.Logger.Log(LogLevel.Warning, "Clipboard module failed to start; it will be unavailable this session.", ex);
         }
     }
 

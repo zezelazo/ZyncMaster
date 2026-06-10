@@ -314,7 +314,13 @@ public sealed class EngineActions : IEngineActions, IDisposable
         }
         catch (HttpRequestException ex)
         {
-            _logger.Log(LogLevel.Warning, $"Server health check: unreachable ({_healthUrl}).", ex);
+            // The health probe re-polls every few seconds: a transient (DNS after sleep/resume,
+            // reset during a deploy) logs one concise line, not a stack trace per attempt.
+            var transient = TransientNetworkError.Describe(ex);
+            if (transient is not null)
+                _logger.Log(LogLevel.Warning, $"Server health check: unreachable ({transient}) — {_healthUrl}.");
+            else
+                _logger.Log(LogLevel.Warning, $"Server health check: unreachable ({_healthUrl}).", ex);
             return ServerHealth.Unreachable(ex.Message);
         }
     }

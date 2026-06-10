@@ -110,8 +110,14 @@ public sealed class PairScheduler
         }
         catch (Exception ex)
         {
-            // Server unreachable this tick — keep the existing schedule and retry next tick.
-            _logger.Log(LogLevel.Warning, "Scheduler tick: could not list pairs (server unreachable?).", ex);
+            // Server unreachable this tick — keep the existing schedule and retry next tick. A
+            // transient (DNS after sleep/resume, reset during a deploy, timeout) logs one concise
+            // line; only an unexpected failure earns the full exception.
+            var transient = TransientNetworkError.Describe(ex);
+            if (transient is not null)
+                _logger.Log(LogLevel.Warning, $"Scheduler tick: server unreachable ({transient}); retrying next tick.");
+            else
+                _logger.Log(LogLevel.Warning, "Scheduler tick: could not list pairs (server unreachable?).", ex);
             return;
         }
 
