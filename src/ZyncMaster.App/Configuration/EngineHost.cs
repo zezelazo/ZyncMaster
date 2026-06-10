@@ -226,7 +226,7 @@ public sealed class EngineHost : IDisposable
             http, engineSettings.ServerBaseUrl, clipboardApiKeyProvider);
         var clipboardDevices = new Infrastructure.Clipboard.HttpClipboardDevicesSource(
             http, engineSettings.ServerBaseUrl);
-        var clipboardSink = new Platform.Clipboard.WindowsClipboardSink();
+        var clipboardSink = new Platform.Clipboard.WindowsClipboardSink(logger);
         var clipboardHotkey = new Platform.Clipboard.WindowsGlobalHotkey(logger);
 
         // The key exchange resolves THIS device's id lazily through the engine's live clipboard
@@ -279,9 +279,11 @@ public sealed class EngineHost : IDisposable
             ClipboardHardMaxImageBytes,
             logger);
 
-        // Route paste through the ClipboardService so it marks the dedupe before the OS write and the
-        // resulting clipboard capture is suppressed as an echo (no spurious re-publish on every paste).
+        // Route paste AND copy through the ClipboardService so each marks the dedupe before the OS
+        // write and the resulting clipboard capture is suppressed as an echo (no spurious re-publish
+        // on every paste/copy).
         actions.PasteThroughClipboardService = clipboardService.PasteAsync;
+        actions.CopyThroughClipboardService = clipboardService.CopyAsync;
 
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
         // pairs are read locally and pushed; the rest are mirrored server-side. It lists the pairs

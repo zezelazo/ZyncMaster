@@ -405,6 +405,14 @@ public sealed class UiBridge
                 var found = await _engine.PasteClipboardEntryAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(new { status = found ? "ok" : "notfound" }, JsonOptions);
             }
+            case "copyClipboardEntry":
+            {
+                // Payload is the item id (a bare/quoted string). Copy-only: writes the OS clipboard
+                // without closing the viewer, stealing focus or synthesizing Ctrl+V. Returns
+                // {ok|notfound} so the UI can distinguish a successful copy from a stale id.
+                var copied = await _engine.CopyClipboardEntryAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(new { status = copied ? "ok" : "notfound" }, JsonOptions);
+            }
             case "deleteClipboardEntry":
             {
                 // Payload is the item id (a bare/quoted string). The UI already removed the row

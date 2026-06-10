@@ -44,6 +44,8 @@ public class ClipboardBridgeTests
         public string? UpdateSettingsArg;
         public string? PasteArg;
         public bool PasteToReturn = true;
+        public string? CopyArg;
+        public bool CopyToReturn = true;
         public string? DeleteArg;
         public string? HotkeyArg;
         public int CloseViewerCalls;
@@ -71,6 +73,8 @@ public class ClipboardBridgeTests
         { UpdateSettingsArg = payloadJson; return Task.CompletedTask; }
         public Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default)
         { PasteArg = id; return Task.FromResult(PasteToReturn); }
+        public Task<bool> CopyClipboardEntryAsync(string id, CancellationToken ct = default)
+        { CopyArg = id; return Task.FromResult(CopyToReturn); }
         public Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
         { DeleteArg = id; return Task.CompletedTask; }
         public Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)
@@ -218,6 +222,34 @@ public class ClipboardBridgeTests
         transport.PushInbound(Message("pasteClipboardEntry", "p2", "missing"));
 
         engine.PasteArg.Should().Be("missing");
+        var payload = JsonSerializer.Deserialize<JsonElement>(LastReply(transport).GetProperty("payload").GetString()!);
+        payload.GetProperty("status").GetString().Should().Be("notfound");
+    }
+
+    [Fact]
+    public void CopyClipboardEntry_passes_id_and_replies_status_ok()
+    {
+        var transport = new FakeTransport();
+        var engine = new ClipboardSpyActions { CopyToReturn = true };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("copyClipboardEntry", "c1", "i1"));
+
+        engine.CopyArg.Should().Be("i1");
+        var payload = JsonSerializer.Deserialize<JsonElement>(LastReply(transport).GetProperty("payload").GetString()!);
+        payload.GetProperty("status").GetString().Should().Be("ok");
+    }
+
+    [Fact]
+    public void CopyClipboardEntry_unknown_id_replies_status_notfound()
+    {
+        var transport = new FakeTransport();
+        var engine = new ClipboardSpyActions { CopyToReturn = false };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("copyClipboardEntry", "c2", "missing"));
+
+        engine.CopyArg.Should().Be("missing");
         var payload = JsonSerializer.Deserialize<JsonElement>(LastReply(transport).GetProperty("payload").GetString()!);
         payload.GetProperty("status").GetString().Should().Be("notfound");
     }
@@ -846,7 +878,7 @@ public class ClipboardBridgeTests
         var found = await actions.PasteClipboardEntryAsync("nope", CancellationToken.None);
 
         found.Should().BeFalse();
-        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
+        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<nint>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -867,8 +899,8 @@ public class ClipboardBridgeTests
 
         ClipboardEntry? pasted = null;
         var sink = new Mock<IClipboardSink>();
-        sink.Setup(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()))
-            .Callback<ClipboardEntry, CancellationToken>((e, _) => pasted = e)
+        sink.Setup(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<nint>(), It.IsAny<CancellationToken>()))
+            .Callback<ClipboardEntry, nint, CancellationToken>((e, _, _) => pasted = e)
             .ReturnsAsync(true);
 
         var actions = BuildEngine(transport, sink: sink, keys: keys);
@@ -907,7 +939,7 @@ public class ClipboardBridgeTests
 
         found.Should().BeFalse();
         viewerClosed.Should().Be(0);
-        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
+        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<nint>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -924,7 +956,7 @@ public class ClipboardBridgeTests
         var actions = BuildEngine(transport, sink: sink);
 
         ClipboardEntry? seamEntry = null;
-        actions.PasteThroughClipboardService = (e, _) => { seamEntry = e; return Task.FromResult(true); };
+        actions.PasteThroughClipboardService = (e, _, _) => { seamEntry = e; return Task.FromResult(true); };
 
         var found = await actions.PasteClipboardEntryAsync("i1", CancellationToken.None);
 
@@ -932,7 +964,179 @@ public class ClipboardBridgeTests
         seamEntry.Should().NotBeNull();
         seamEntry!.Text.Should().Be("ready");
         // The seam was used; the raw sink must NOT be called directly.
-        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
+        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<nint>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PasteClipboardEntry_passes_the_captured_target_window_to_the_sink()
+    {
+        // The viewer captures the user's real foreground window BEFORE it opens; the paste must aim
+        // the synthetic Ctrl+V at THAT handle. At paste time the viewer itself is the foreground
+        // window, so a sink that captured the live foreground would paste into the viewer (= nowhere).
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "i1", Type = ClipboardEntryType.Text, Text = "ready", OriginDeviceId = "dev-1" },
+            });
+
+        nint sinkTarget = -1;
+        var sink = new Mock<IClipboardSink>();
+        sink.Setup(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<nint>(), It.IsAny<CancellationToken>()))
+            .Callback<ClipboardEntry, nint, CancellationToken>((_, t, _) => sinkTarget = t)
+            .ReturnsAsync(true);
+
+        var actions = BuildEngine(transport, sink: sink);
+        actions.PasteTargetWindowProvider = () => 0x1234;
+
+        var found = await actions.PasteClipboardEntryAsync("i1", CancellationToken.None);
+
+        found.Should().BeTrue();
+        sinkTarget.Should().Be((nint)0x1234);
+    }
+
+    [Fact]
+    public async Task PasteClipboardEntry_passes_the_captured_target_window_through_the_seam()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "i1", Type = ClipboardEntryType.Text, Text = "ready", OriginDeviceId = "dev-1" },
+            });
+
+        var actions = BuildEngine(transport);
+        actions.PasteTargetWindowProvider = () => 0x5678;
+
+        nint seamTarget = -1;
+        actions.PasteThroughClipboardService = (_, t, _) => { seamTarget = t; return Task.FromResult(true); };
+
+        var found = await actions.PasteClipboardEntryAsync("i1", CancellationToken.None);
+
+        found.Should().BeTrue();
+        seamTarget.Should().Be((nint)0x5678);
+    }
+
+    [Fact]
+    public async Task CopyClipboardEntry_known_text_decrypts_then_sets_clipboard_without_pasting_or_closing_viewer()
+    {
+        var key = TextCrypto.NewKey();
+        var cipher = TextCrypto.Encrypt(key, "copy me");
+
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "i1", Type = ClipboardEntryType.Text, CipherText = cipher, OriginDeviceId = "dev-1" },
+            });
+
+        var keys = new Mock<IClipboardKeyStore>();
+        keys.Setup(k => k.LoadTextKeyAsync(It.IsAny<CancellationToken>())).ReturnsAsync(key);
+
+        ClipboardEntry? written = null;
+        var sink = new Mock<IClipboardSink>();
+        sink.Setup(s => s.SetAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()))
+            .Callback<ClipboardEntry, CancellationToken>((e, _) => written = e)
+            .Returns(Task.CompletedTask);
+
+        var actions = BuildEngine(transport, sink: sink, keys: keys);
+        var viewerClosed = 0;
+        actions.CloseClipboardViewer = () => viewerClosed++;
+
+        var found = await actions.CopyClipboardEntryAsync("i1", CancellationToken.None);
+
+        found.Should().BeTrue();
+        written.Should().NotBeNull();
+        written!.Text.Should().Be("copy me"); // the sink receives DECRYPTED plaintext
+        // Copy-only: no viewer close, no focus steal, no synthetic Ctrl+V.
+        viewerClosed.Should().Be(0);
+        sink.Verify(s => s.PasteIntoFocusedAsync(It.IsAny<ClipboardEntry>(), It.IsAny<nint>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CopyClipboardEntry_unknown_id_is_clean_no_op()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)Array.Empty<ClipboardEntry>());
+        var sink = new Mock<IClipboardSink>();
+
+        var actions = BuildEngine(transport, sink: sink);
+
+        var found = await actions.CopyClipboardEntryAsync("nope", CancellationToken.None);
+
+        found.Should().BeFalse();
+        sink.Verify(s => s.SetAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CopyClipboardEntry_routes_through_the_copy_seam_for_echo_suppression()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "i1", Type = ClipboardEntryType.Text, Text = "ready", OriginDeviceId = "dev-1" },
+            });
+
+        var sink = new Mock<IClipboardSink>();
+        var actions = BuildEngine(transport, sink: sink);
+
+        ClipboardEntry? seamEntry = null;
+        actions.CopyThroughClipboardService = (e, _) => { seamEntry = e; return Task.CompletedTask; };
+
+        var found = await actions.CopyClipboardEntryAsync("i1", CancellationToken.None);
+
+        found.Should().BeTrue();
+        seamEntry.Should().NotBeNull();
+        seamEntry!.Text.Should().Be("ready");
+        // The seam was used; the raw sink must NOT be called directly.
+        sink.Verify(s => s.SetAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CopyClipboardEntry_image_with_bytes_sets_clipboard()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "img1", Type = ClipboardEntryType.Image, ImageBytes = new byte[] { 1, 2, 3, 4 }, OriginDeviceId = "dev-1" },
+            });
+
+        ClipboardEntry? written = null;
+        var sink = new Mock<IClipboardSink>();
+        sink.Setup(s => s.SetAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()))
+            .Callback<ClipboardEntry, CancellationToken>((e, _) => written = e)
+            .Returns(Task.CompletedTask);
+
+        var actions = BuildEngine(transport, sink: sink);
+
+        var found = await actions.CopyClipboardEntryAsync("img1", CancellationToken.None);
+
+        found.Should().BeTrue();
+        written!.ImageBytes.Should().Equal(1, 2, 3, 4);
+    }
+
+    [Fact]
+    public async Task CopyClipboardEntry_image_without_bytes_is_a_no_op()
+    {
+        // History rows normally carry the full payload; a defensive guard for an image that somehow
+        // has none (nothing would land on the OS clipboard — report failure, not a false "Copied").
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)new[]
+            {
+                new ClipboardEntry { Id = "img1", Type = ClipboardEntryType.Image, ImageBytes = null, OriginDeviceId = "dev-1" },
+            });
+
+        var sink = new Mock<IClipboardSink>();
+        var actions = BuildEngine(transport, sink: sink);
+
+        var found = await actions.CopyClipboardEntryAsync("img1", CancellationToken.None);
+
+        found.Should().BeFalse();
+        sink.Verify(s => s.SetAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

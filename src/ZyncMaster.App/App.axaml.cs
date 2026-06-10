@@ -210,6 +210,11 @@ public partial class App : Application
         // start the capture/transport/hotkey pipeline once the device is registered. Kept in its own
         // task so it never blocks the scheduler/heartbeat startup. Tracked so Exit can drain it.
         bootEngine.Actions.CloseClipboardViewer = () => _clipboardViewer?.Dismiss();
+        // The paste target: the foreground window the viewer captured BEFORE it opened. At paste time
+        // the viewer itself is the foreground window, so the sink must aim the synthetic Ctrl+V at
+        // this captured handle — capturing the foreground when the paste runs would target the viewer
+        // and the keystroke would land nowhere.
+        bootEngine.Actions.PasteTargetWindowProvider = () => _clipboardViewer?.PriorForeground ?? IntPtr.Zero;
         bootEngine.ClipboardHotkey.Pressed += OnClipboardHotkeyPressed;
         bootEngine.ClipboardTransport.ItemReceived += OnClipboardItemReceived;
         // Live roster + per-device settings: push to the MAIN window bridge (the clipboard devices /

@@ -59,18 +59,31 @@ public sealed class ClipboardService
     public void Start() => _capture.Start();
     public void Stop() => _capture.Stop();
 
-    // Pastes a history item (already resolved to plaintext for Text) into the focused window. Marks the
-    // dedupe with the content hash BEFORE the OS write — mirroring ApplyReceivedAsync — so the
-    // WM_CLIPBOARDUPDATE the programmatic write triggers is recognized as our own echo in
-    // PublishCapturedAsync and dropped, rather than being re-encrypted and re-published as a new copy
-    // (the echo loop the dedupe exists to prevent). Returns whatever the sink reports: false when there
-    // was nothing to write (so the caller does not report a no-op as a successful paste).
-    public Task<bool> PasteAsync(ClipboardEntry entry, CancellationToken ct = default)
+    // Pastes a history item (already resolved to plaintext for Text) into the target window (zero =
+    // whatever is foreground when the sink runs). Marks the dedupe with the content hash BEFORE the
+    // OS write — mirroring ApplyReceivedAsync — so the WM_CLIPBOARDUPDATE the programmatic write
+    // triggers is recognized as our own echo in PublishCapturedAsync and dropped, rather than being
+    // re-encrypted and re-published as a new copy (the echo loop the dedupe exists to prevent).
+    // Returns whatever the sink reports: false when there was nothing to write (so the caller does
+    // not report a no-op as a successful paste).
+    public Task<bool> PasteAsync(ClipboardEntry entry, nint targetWindow = 0, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
         _dedupe.MarkApplied(_dedupe.Hash(entry));
-        return _sink.PasteIntoFocusedAsync(entry, ct);
+        return _sink.PasteIntoFocusedAsync(entry, targetWindow, ct);
+    }
+
+    // Copy-only variant: writes the item to the OS clipboard WITHOUT touching window focus and
+    // WITHOUT synthesizing Ctrl+V (the dashboard's per-item Copy action). Marks the dedupe first,
+    // exactly like PasteAsync, so the programmatic write's own WM_CLIPBOARDUPDATE echo is suppressed
+    // instead of being re-published as a new history item.
+    public Task CopyAsync(ClipboardEntry entry, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        _dedupe.MarkApplied(_dedupe.Hash(entry));
+        return _sink.SetAsync(entry, ct);
     }
 
     // These three are the async-void event boundaries: ANY exception that escapes them terminates

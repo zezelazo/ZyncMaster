@@ -210,6 +210,9 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default)
         => Task.FromResult(false);
 
+    public Task<bool> CopyClipboardEntryAsync(string id, CancellationToken ct = default)
+        => Task.FromResult(false);
+
     public Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
         => Task.CompletedTask;
 

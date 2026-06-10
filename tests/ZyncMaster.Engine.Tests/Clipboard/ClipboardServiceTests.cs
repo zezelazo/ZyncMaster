@@ -66,6 +66,7 @@ public sealed class ClipboardServiceTests
     {
         public readonly List<ClipboardEntry> Set = new();
         public readonly List<ClipboardEntry> Pasted = new();
+        public readonly List<nint> PasteTargets = new();
         public bool PasteResult = true;
         public Exception? SetError;
         public Task SetAsync(ClipboardEntry entry, CancellationToken ct = default)
@@ -75,9 +76,10 @@ public sealed class ClipboardServiceTests
             Set.Add(entry);
             return Task.CompletedTask;
         }
-        public Task<bool> PasteIntoFocusedAsync(ClipboardEntry entry, CancellationToken ct = default)
+        public Task<bool> PasteIntoFocusedAsync(ClipboardEntry entry, nint targetWindow, CancellationToken ct = default)
         {
             Pasted.Add(entry);
+            PasteTargets.Add(targetWindow);
             return Task.FromResult(PasteResult);
         }
     }
@@ -300,6 +302,58 @@ public sealed class ClipboardServiceTests
         var wrote = await h.Service.PasteAsync(Text("nothing"));
 
         wrote.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PasteAsync_ForwardsTargetWindow_ToSink()
+    {
+        // The viewer captures the user's real foreground window BEFORE it opens; the paste must aim
+        // the synthetic Ctrl+V at THAT handle (at paste time the viewer itself is foreground).
+        var h = new Harness(TextCrypto.NewKey());
+
+        var wrote = await h.Service.PasteAsync(Text("targeted"), targetWindow: 0x1234);
+
+        wrote.Should().BeTrue();
+        h.Sink.PasteTargets.Should().ContainSingle().Which.Should().Be((nint)0x1234);
+    }
+
+    [Fact]
+    public async Task PasteAsync_DefaultsTargetWindow_ToZero()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+
+        await h.Service.PasteAsync(Text("untargeted"));
+
+        h.Sink.PasteTargets.Should().ContainSingle().Which.Should().Be((nint)0);
+    }
+
+    [Fact]
+    public async Task CopyAsync_WritesClipboardOnly_NeverPastes()
+    {
+        // Copy-only (the dashboard Copy button): the OS clipboard is set, but no focus change and no
+        // synthetic Ctrl+V — the sink's paste path must never run.
+        var h = new Harness(TextCrypto.NewKey());
+
+        await h.Service.CopyAsync(Text("copy me"));
+
+        h.Sink.Set.Should().ContainSingle().Which.Text.Should().Be("copy me");
+        h.Sink.Pasted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CopyAsync_MarksDedupe_SoEchoCaptureNotPublished()
+    {
+        var key = TextCrypto.NewKey();
+        var h = new Harness(key);
+
+        // User copies a history item back to the OS clipboard. CopyAsync must mark the dedupe before
+        // the write so the WM_CLIPBOARDUPDATE the write triggers is suppressed as our own echo.
+        await h.Service.CopyAsync(Text("copied text"));
+
+        h.Capture.Raise(Text("copied text"));
+        await SettleAsync();
+
+        h.Transport.Published.Should().BeEmpty();
     }
 
     [Fact]

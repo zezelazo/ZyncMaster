@@ -83,9 +83,22 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // write, suppressing the echo capture (otherwise our own paste bounces back onto the wire as a new
     // copy). Set by the host once the ClipboardService is built (construction order means it can't be a
     // ctor arg). When unset (e.g. headless/tests that only wire a sink), PasteClipboardEntryAsync falls
-    // back to the raw sink — correct, just without echo suppression. Returns whether the OS write
-    // actually happened.
-    public Func<ClipboardEntry, CancellationToken, Task<bool>>? PasteThroughClipboardService { get; set; }
+    // back to the raw sink — correct, just without echo suppression. The nint is the target window the
+    // synthesized Ctrl+V must land in (zero = let the sink use the live foreground). Returns whether
+    // the OS write actually happened.
+    public Func<ClipboardEntry, nint, CancellationToken, Task<bool>>? PasteThroughClipboardService { get; set; }
+
+    // Copy seam: same echo-suppression routing for the copy-only action (dashboard Copy button) —
+    // the ClipboardService marks the dedupe, then writes the OS clipboard WITHOUT touching focus and
+    // WITHOUT a synthetic Ctrl+V. Falls back to the raw sink's SetAsync when unset.
+    public Func<ClipboardEntry, CancellationToken, Task>? CopyThroughClipboardService { get; set; }
+
+    // Supplies the window handle a paste must target: the viewer window captures the foreground HWND
+    // BEFORE it opens (the user's real paste target) and the App wires this to surface it. At paste
+    // time the foreground window is the viewer itself, so capturing the foreground then (the sink's
+    // fallback) would aim the Ctrl+V at the viewer — this provider is what makes paste actually land
+    // in the window the user was in. Zero / unset means "no captured target".
+    public Func<nint>? PasteTargetWindowProvider { get; set; }
 
     // Device is considered online when its last-seen lease is within this window. The server heartbeat
     // runs comfortably inside this, so a live App keeps its device "online" for the roster. Used as the
@@ -1296,16 +1309,78 @@ public sealed class EngineActions : IEngineActions, IDisposable
         }
     }
 
-    // Resolves the history item by id, sets the OS clipboard from it and pastes it into the
-    // previously-focused window, then closes the viewer. Returns false (clean no-op) for an unknown
-    // id. Text is decrypted before it is written to the OS clipboard (the sink writes Text/ImageBytes).
+    // Resolves the history item by id, sets the OS clipboard from it and pastes it into the window
+    // the viewer captured before it opened, then closes the viewer. Returns false (clean no-op) for
+    // an unknown id. Text is decrypted before it is written to the OS clipboard (the sink writes
+    // Text/ImageBytes).
     public async Task<bool> PasteClipboardEntryAsync(string id, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
         if (_clipboardTransport is null || _clipboardSink is null)
+        {
+            _logger.Log(LogLevel.Warning, "Paste clipboard: the clipboard module is not wired on this host.");
+            return false;
+        }
+
+        var match = await ResolveHistoryEntryAsync(id, "Paste clipboard", ct).ConfigureAwait(false);
+        if (match is null)
             return false;
 
-        var history = await _clipboardTransport.GetHistoryAsync(ct).ConfigureAwait(false);
+        // Resolve the paste target BEFORE closing the viewer: the viewer captured the user's real
+        // foreground window when it opened, and the sink must aim the synthetic Ctrl+V at THAT
+        // window. Capturing the foreground at paste time instead would target the viewer itself
+        // (it is still the foreground window here), and the paste would silently land nowhere.
+        var target = PasteTargetWindowProvider?.Invoke() ?? 0;
+        if (target == 0)
+            _logger.Log(LogLevel.Debug, "Paste clipboard: no captured target window; the sink will fall back to the live foreground window.");
+
+        // Close the viewer so it is out of the way (and focus returns) while the sink pastes into
+        // the explicit target.
+        CloseClipboardViewer?.Invoke();
+
+        // Route through the ClipboardService (when wired) so the dedupe is marked before the OS write
+        // and the resulting capture is recognized as an echo and dropped. Without the seam, fall back
+        // to the raw sink (no echo suppression).
+        var wrote = PasteThroughClipboardService is { } paste
+            ? await paste(match, target, ct).ConfigureAwait(false)
+            : await _clipboardSink.PasteIntoFocusedAsync(match, target, ct).ConfigureAwait(false);
+        if (!wrote)
+            _logger.Log(LogLevel.Warning, $"Paste clipboard: item '{id}' was not written to the OS clipboard (the write was refused).");
+        return wrote;
+    }
+
+    // Copy-only action (the dashboard's per-item Copy button): writes the resolved entry to the OS
+    // clipboard and nothing else — no viewer close, no focus change, no synthetic Ctrl+V. Echo
+    // suppression still applies through the copy seam (MarkApplied before the OS write). Returns
+    // false (clean no-op) for an unknown id or an entry with no usable content.
+    public async Task<bool> CopyClipboardEntryAsync(string id, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+        if (_clipboardTransport is null || _clipboardSink is null)
+        {
+            _logger.Log(LogLevel.Warning, "Copy clipboard: the clipboard module is not wired on this host.");
+            return false;
+        }
+
+        var match = await ResolveHistoryEntryAsync(id, "Copy clipboard", ct).ConfigureAwait(false);
+        if (match is null)
+            return false;
+
+        if (CopyThroughClipboardService is { } copy)
+            await copy(match, ct).ConfigureAwait(false);
+        else
+            await _clipboardSink.SetAsync(match, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    // Shared resolution for paste/copy: finds the entry by id in the transport history (the history
+    // carries the FULL payloads — the server returns payloadBase64 for every item, so images have
+    // their ImageBytes here, not just the thumbnail), decrypts Text, and guards against a no-content
+    // entry. EVERY early-out logs a Warning with the precise reason so "nothing happened" is always
+    // diagnosable from the log. Returns null when the entry cannot be applied.
+    private async Task<ClipboardEntry?> ResolveHistoryEntryAsync(string id, string operation, CancellationToken ct)
+    {
+        var history = await _clipboardTransport!.GetHistoryAsync(ct).ConfigureAwait(false);
         ClipboardEntry? match = null;
         foreach (var entry in history)
             if (string.Equals(entry.Id, id, StringComparison.Ordinal))
@@ -1316,51 +1391,55 @@ public sealed class EngineActions : IEngineActions, IDisposable
 
         if (match is null)
         {
-            _logger.Log(LogLevel.Warning, $"Paste clipboard: item '{id}' was not found in history.");
-            return false;
+            _logger.Log(LogLevel.Warning, $"{operation}: item '{id}' was not found in history ({history.Count} items).");
+            return null;
         }
 
         // Decrypt Text before handing it to the sink (the OS clipboard must get plaintext). An
         // image rides its bytes; nothing to decrypt.
-        if (match.Type == ClipboardEntryType.Text && match.Text is null && _clipboardKeys is not null)
+        if (match.Type == ClipboardEntryType.Text && match.Text is null)
         {
-            var key = await _clipboardKeys.LoadTextKeyAsync(ct).ConfigureAwait(false);
-            if (key is not null && match.CipherText is { Length: > 0 })
+            if (_clipboardKeys is null)
             {
-                try { match = match with { Text = TextCrypto.Decrypt(key, match.CipherText) }; }
-                catch (System.Security.Cryptography.CryptographicException)
-                {
-                    _logger.Log(LogLevel.Warning, $"Paste clipboard: item '{id}' could not be decrypted.");
-                    return false;
-                }
+                _logger.Log(LogLevel.Warning, $"{operation}: item '{id}' cannot be decrypted (no key store is wired on this host).");
+                return null;
+            }
+
+            var key = await _clipboardKeys.LoadTextKeyAsync(ct).ConfigureAwait(false);
+            if (key is null)
+            {
+                _logger.Log(LogLevel.Warning, $"{operation}: item '{id}' cannot be decrypted yet (the text key has not been admitted to this device).");
+                return null;
+            }
+
+            if (match.CipherText is not { Length: > 0 })
+            {
+                _logger.Log(LogLevel.Warning, $"{operation}: item '{id}' has no ciphertext payload to decrypt.");
+                return null;
+            }
+
+            try { match = match with { Text = TextCrypto.Decrypt(key, match.CipherText) }; }
+            catch (System.Security.Cryptography.CryptographicException)
+            {
+                _logger.Log(LogLevel.Warning, $"{operation}: item '{id}' could not be decrypted with the current text key.");
+                return null;
             }
         }
 
-        // Guard against a no-op paste: if a Text item still has no plaintext (key not admitted yet) or
-        // an image has no bytes, nothing would be written to the OS clipboard. Report failure and leave
-        // the viewer open rather than dismissing it with a false "ok" the user reads as a done paste.
+        // Guard against a no-op write: a Text item with no plaintext or an image with no bytes would
+        // put nothing on the OS clipboard. Report failure (and, for paste, leave the viewer open)
+        // rather than reporting a false "ok" the user reads as done.
         var hasContent = match.Type == ClipboardEntryType.Text
             ? !string.IsNullOrEmpty(match.Text)
             : match.ImageBytes is { Length: > 0 };
         if (!hasContent)
         {
-            _logger.Log(LogLevel.Warning, $"Paste clipboard: item '{id}' is not available yet (no content to paste).");
-            return false;
+            var detail = match.Type == ClipboardEntryType.Text ? "empty plaintext" : "no image bytes in the history payload";
+            _logger.Log(LogLevel.Warning, $"{operation}: item '{id}' has no content to put on the clipboard ({detail}).");
+            return null;
         }
 
-        // Close the viewer FIRST so the previously-focused window is restored as the foreground
-        // window before the sink reads it (the sink captures GetForegroundWindow at paste time and
-        // synthesizes Ctrl+V into it). The viewer's close handler re-asserts the window it captured
-        // on open, so by the time the sink pastes, focus is back where the user expects it.
-        CloseClipboardViewer?.Invoke();
-
-        // Route through the ClipboardService (when wired) so the dedupe is marked before the OS write
-        // and the resulting capture is recognized as an echo and dropped. Without the seam, fall back
-        // to the raw sink (no echo suppression).
-        var wrote = PasteThroughClipboardService is { } paste
-            ? await paste(match, ct).ConfigureAwait(false)
-            : await _clipboardSink.PasteIntoFocusedAsync(match, ct).ConfigureAwait(false);
-        return wrote;
+        return match;
     }
 
     // Deletes one history entry on the server (DELETE /api/clipboard/items/{id}). User-scoped server-

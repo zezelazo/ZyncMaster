@@ -2941,7 +2941,7 @@ function deviceRow(dev, thisId) {
 // Desktop App only. The home "Clipboard" tile opens THIS screen (route 'clipboard'), not the settings
 // screen. It lists the shared clipboard history (getClipboardHistory) reusing the floating viewer's
 // item-row style (.cb-row / .cb-av / .cb-title / .cb-meta). Tapping an item reveals a full overlay over
-// it with two icon-only actions: COPY (pasteClipboardEntry → sets the OS clipboard) and a TRASH that
+// it with two icon-only actions: COPY (copyClipboardEntry → sets the OS clipboard, nothing else) and a TRASH that
 // deletes WITHOUT confirmation (optimistic: the row leaves the list at once, then deleteClipboardEntry
 // propagates it to the server + the user's other devices). The live "clipboard:item" / "clipboard:
 // deleted" pushes keep the list fresh while this screen is open. Config stays in Settings → Clipboard.
@@ -3134,8 +3134,9 @@ function clipRowEl(item) {
 }
 
 // clipActionOverlay(item) — the full overlay over an open row carrying two icon-only buttons: copy
-// (sets the OS clipboard via pasteClipboardEntry) and trash (deletes WITHOUT confirmation). Tapping
-// either stops propagation so it does not re-toggle the row.
+// (sets the OS clipboard via copyClipboardEntry — copy ONLY, it never closes the floating viewer,
+// steals focus or synthesizes Ctrl+V the way the viewer's paste action does) and trash (deletes
+// WITHOUT confirmation). Tapping either stops propagation so it does not re-toggle the row.
 function clipActionOverlay(item) {
   const overlay = el('div', { class: 'cb-actions' });
 
@@ -3145,7 +3146,7 @@ function clipActionOverlay(item) {
       e.stopPropagation();
       clipCloseOpenOverlay();
       if (Bridge.available) {
-        Bridge.call('pasteClipboardEntry', item.id)
+        Bridge.call('copyClipboardEntry', item.id)
           .then((r) => { announce(r && r.status === 'ok' ? 'Copied' : 'Could not copy this item.'); })
           .catch(() => { announce('Could not copy this item.'); });
       }
