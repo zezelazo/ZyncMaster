@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using ZyncMaster.Core;
 
 namespace ZyncMaster.Engine;
 
@@ -22,6 +23,7 @@ public sealed class ClipboardService
     private readonly ClipboardDedupe _dedupe;
     private readonly Func<ClipboardSettings> _settings;
     private readonly long _hardMaxImageBytes;
+    private readonly IAppLogger _logger;
 
     public ClipboardService(
         IClipboardCaptureSource capture,
@@ -31,7 +33,8 @@ public sealed class ClipboardService
         ClipboardKeyExchange keyExchange,
         ClipboardDedupe dedupe,
         Func<ClipboardSettings> settings,
-        long hardMaxImageBytes)
+        long hardMaxImageBytes,
+        IAppLogger logger)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
@@ -42,6 +45,7 @@ public sealed class ClipboardService
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         if (hardMaxImageBytes < 0) throw new ArgumentOutOfRangeException(nameof(hardMaxImageBytes));
         _hardMaxImageBytes = hardMaxImageBytes;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _capture.Captured += OnCaptured;
         _transport.ItemReceived += OnReceived;
@@ -74,15 +78,27 @@ public sealed class ClipboardService
     private async void OnKeyReceived(string fromDeviceId, byte[] wrapped) =>
         await _keyExchange.OnKeyReceivedAsync(fromDeviceId, wrapped, CancellationToken.None).ConfigureAwait(false);
 
+    // Every drop on this path is logged with its reason: a user watching the log must be able to
+    // tell WHY a copy never reached the other devices. User-intended gates (send off) and echo
+    // suppression are Debug noise; everything else — missing key, oversize image, transport
+    // failure — is a Warning. Transport failures are caught here (the caller is async void, so a
+    // rethrow would vanish or crash the process — e.g. nginx 413 on a large image).
     private async Task PublishCapturedAsync(ClipboardEntry entry, CancellationToken ct)
     {
         var settings = _settings();
         if (!settings.Send)
+        {
+            _logger.Log(LogLevel.Debug, "Clipboard capture dropped: sending is turned off for this device.");
             return;
+        }
 
         var hash = _dedupe.Hash(entry);
         if (_dedupe.IsEcho(hash))
-            return; // our own just-applied content bouncing back from the OS — drop it.
+        {
+            // Our own just-applied content bouncing back from the OS — expected, not a failure.
+            _logger.Log(LogLevel.Debug, "Clipboard capture dropped: echo of our own just-applied content.");
+            return;
+        }
 
         if (entry.Type == ClipboardEntryType.Text)
         {
@@ -90,32 +106,64 @@ public sealed class ClipboardService
             // without leaking plaintext, so we stop and wait for key admission.
             var key = await _keys.LoadTextKeyAsync(ct).ConfigureAwait(false);
             if (key is null)
+            {
+                _logger.Log(LogLevel.Warning,
+                    "Clipboard text not synced: the text key has not been admitted to this device yet.");
                 return;
+            }
 
             var cipher = TextCrypto.Encrypt(key, entry.Text!);
-            await _transport.PublishAsync(entry with { Text = null, CipherText = cipher }, ct).ConfigureAwait(false);
+            try
+            {
+                await _transport.PublishAsync(entry with { Text = null, CipherText = cipher }, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Log(LogLevel.Warning, $"Clipboard text publish failed: {ex.Message}", ex);
+            }
             return;
         }
 
         // Image: enforce the hard cap on the real bytes; never throw on oversize.
         var size = entry.ImageBytes?.Length ?? 0;
         if (size > _hardMaxImageBytes)
+        {
+            _logger.Log(LogLevel.Warning,
+                $"Clipboard image dropped: {size} bytes exceeds the {_hardMaxImageBytes}-byte cap.");
             return;
+        }
 
-        await _transport.PublishAsync(entry with { SizeBytes = size }, ct).ConfigureAwait(false);
+        try
+        {
+            await _transport.PublishAsync(entry with { SizeBytes = size }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // A 413 from a reverse proxy on a big image lands here, among others.
+            _logger.Log(LogLevel.Warning, $"Clipboard image publish failed: {ex.Message}", ex);
+        }
     }
 
+    // Mirror of the publish path: every dropped inbound item is logged with its reason so a device
+    // that "never receives anything" can be diagnosed from its own log.
     private async Task ApplyReceivedAsync(ClipboardEntry entry, CancellationToken ct)
     {
         var settings = _settings();
         if (!settings.Receive)
+        {
+            _logger.Log(LogLevel.Debug, "Clipboard item dropped: receiving is turned off for this device.");
             return;
+        }
 
         if (entry.Type == ClipboardEntryType.Text)
         {
             var key = await _keys.LoadTextKeyAsync(ct).ConfigureAwait(false);
             if (key is null)
-                return; // cannot decrypt yet — usable after key admission.
+            {
+                _logger.Log(LogLevel.Warning,
+                    "Received clipboard text cannot be decrypted yet: waiting for the text key to be admitted.");
+                return;
+            }
 
             string plain;
             try
@@ -127,6 +175,8 @@ public sealed class ClipboardService
                 // Wrong key (e.g. both sides self-generated): report it. After enough consecutive
                 // failures the key exchange marks our key suspect and re-requests a fresh copy from
                 // the peers; the relayed key overwrites ours and both sides converge.
+                _logger.Log(LogLevel.Warning,
+                    "Received clipboard text could not be decrypted with the current text key.");
                 await _keyExchange.ReportDecryptFailureAsync(ct).ConfigureAwait(false);
                 return;
             }
@@ -136,10 +186,22 @@ public sealed class ClipboardService
         }
 
         if (!settings.AutoSync)
+        {
+            _logger.Log(LogLevel.Debug,
+                "Clipboard item not applied: auto-sync is off; it stays available in the viewer.");
             return;
+        }
 
         // Mark BEFORE applying so the OS echo capture is recognized and not re-published.
         _dedupe.MarkApplied(_dedupe.Hash(entry));
-        await _sink.SetAsync(entry, ct).ConfigureAwait(false);
+        try
+        {
+            await _sink.SetAsync(entry, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // The caller is async void; an OS clipboard write failure must surface in the log.
+            _logger.Log(LogLevel.Warning, $"Clipboard apply failed: {ex.Message}", ex);
+        }
     }
 }

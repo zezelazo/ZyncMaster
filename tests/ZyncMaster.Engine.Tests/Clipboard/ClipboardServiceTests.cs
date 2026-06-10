@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using ZyncMaster.Core;
 using ZyncMaster.Engine;
 using Xunit;
 
@@ -25,9 +26,12 @@ public sealed class ClipboardServiceTests
     {
         public readonly List<ClipboardEntry> Published = new();
         public readonly List<ClipboardSettings> UpdatedSettings = new();
+        public Exception? PublishError;
 
         public Task PublishAsync(ClipboardEntry encrypted, CancellationToken ct = default)
         {
+            if (PublishError is not null)
+                throw PublishError;
             Published.Add(encrypted);
             return Task.CompletedTask;
         }
@@ -63,8 +67,11 @@ public sealed class ClipboardServiceTests
         public readonly List<ClipboardEntry> Set = new();
         public readonly List<ClipboardEntry> Pasted = new();
         public bool PasteResult = true;
+        public Exception? SetError;
         public Task SetAsync(ClipboardEntry entry, CancellationToken ct = default)
         {
+            if (SetError is not null)
+                throw SetError;
             Set.Add(entry);
             return Task.CompletedTask;
         }
@@ -95,12 +102,29 @@ public sealed class ClipboardServiceTests
         }
     }
 
+    private sealed class FakeAppLogger : IAppLogger
+    {
+        public readonly List<(LogLevel Level, string Message, Exception? Ex)> Entries = new();
+        private readonly object _gate = new();
+        public void Log(LogLevel level, string message, Exception? ex = null)
+        {
+            lock (_gate) Entries.Add((level, message, ex));
+        }
+        public bool IsEnabled(LogLevel level) => true;
+
+        public List<(LogLevel Level, string Message, Exception? Ex)> Warnings
+        {
+            get { lock (_gate) return Entries.FindAll(e => e.Level == LogLevel.Warning); }
+        }
+    }
+
     private sealed class Harness
     {
         public FakeCapture Capture = new();
         public FakeTransport Transport = new();
         public FakeSink Sink = new();
         public FakeKeyStore Keys;
+        public FakeAppLogger Logger = new();
         public ClipboardSettings Settings = new();
         public ClipboardService Service;
 
@@ -111,7 +135,7 @@ public sealed class ClipboardServiceTests
             var dedupe = new ClipboardDedupe();
             Service = new ClipboardService(
                 Capture, Transport, Sink, Keys, keyExchange, dedupe,
-                () => Settings, hardMax);
+                () => Settings, hardMax, Logger);
         }
     }
 
@@ -161,10 +185,12 @@ public sealed class ClipboardServiceTests
         await SettleAsync();
 
         h.Transport.Published.Should().BeEmpty();
+        // Send-off is the user's own choice — never noisier than Debug.
+        h.Logger.Warnings.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Captured_NoTextKey_TextNotPublished()
+    public async Task Captured_NoTextKey_TextNotPublished_AndWarns()
     {
         var h = new Harness(textKey: null);
 
@@ -172,6 +198,38 @@ public sealed class ClipboardServiceTests
         await SettleAsync();
 
         h.Transport.Published.Should().BeEmpty();
+        h.Logger.Warnings.Should().ContainSingle()
+            .Which.Message.Should().Contain("text key").And.Contain("not been admitted");
+    }
+
+    [Fact]
+    public async Task Captured_Text_PublishThrows_LogsWarningWithReason_DoesNotCrash()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        h.Transport.PublishError = new InvalidOperationException(
+            "Clipboard request POST https://x/api/clipboard/items failed with status 413: too large");
+
+        h.Capture.Raise(Text("doomed"));
+        await SettleAsync();
+
+        var warning = h.Logger.Warnings.Should().ContainSingle().Which;
+        warning.Message.Should().Contain("publish failed").And.Contain("413");
+        warning.Ex.Should().BeSameAs(h.Transport.PublishError);
+    }
+
+    [Fact]
+    public async Task Captured_Image_PublishThrows_LogsWarningWithReason_DoesNotCrash()
+    {
+        var h = new Harness(TextCrypto.NewKey(), hardMax: 1000);
+        h.Transport.PublishError = new InvalidOperationException(
+            "Clipboard request POST https://x/api/clipboard/items failed with status 413: too large");
+
+        h.Capture.Raise(Image(new byte[100]));
+        await SettleAsync();
+
+        var warning = h.Logger.Warnings.Should().ContainSingle().Which;
+        warning.Message.Should().Contain("publish failed").And.Contain("413");
+        warning.Ex.Should().BeSameAs(h.Transport.PublishError);
     }
 
     [Fact]
@@ -198,6 +256,8 @@ public sealed class ClipboardServiceTests
         await SettleAsync();
 
         h.Transport.Published.Should().BeEmpty();
+        // Echo suppression is the normal case after every apply — never a Warning.
+        h.Logger.Warnings.Should().BeEmpty();
     }
 
     [Fact]
@@ -292,7 +352,7 @@ public sealed class ClipboardServiceTests
     }
 
     [Fact]
-    public async Task Received_Text_NoKey_NotSet()
+    public async Task Received_Text_NoKey_NotSet_AndWarns()
     {
         var h = new Harness(textKey: null);
 
@@ -306,10 +366,26 @@ public sealed class ClipboardServiceTests
         await SettleAsync();
 
         h.Sink.Set.Should().BeEmpty();
+        h.Logger.Warnings.Should().ContainSingle()
+            .Which.Message.Should().Contain("cannot be decrypted yet").And.Contain("text key");
     }
 
     [Fact]
-    public async Task Captured_ImageOverHardMax_Skipped()
+    public async Task Received_SinkThrows_LogsWarning_DoesNotCrash()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        h.Sink.SetError = new InvalidOperationException("clipboard is locked by another process");
+
+        h.Transport.RaiseItem(Image(new byte[50]));
+        await SettleAsync();
+
+        var warning = h.Logger.Warnings.Should().ContainSingle().Which;
+        warning.Message.Should().Contain("apply failed").And.Contain("locked by another process");
+        warning.Ex.Should().BeSameAs(h.Sink.SetError);
+    }
+
+    [Fact]
+    public async Task Captured_ImageOverHardMax_Skipped_AndWarnsWithSize()
     {
         var h = new Harness(TextCrypto.NewKey(), hardMax: 10);
 
@@ -317,6 +393,8 @@ public sealed class ClipboardServiceTests
         await SettleAsync();
 
         h.Transport.Published.Should().BeEmpty();
+        h.Logger.Warnings.Should().ContainSingle()
+            .Which.Message.Should().Contain("100 bytes").And.Contain("exceeds");
     }
 
     [Fact]
@@ -383,6 +461,8 @@ public sealed class ClipboardServiceTests
         h.Transport.UpdatedSettings[0].NeedsTextKey.Should().BeTrue();
         h.Transport.UpdatedSettings[0].PublicKeyBase64.Should().NotBeNullOrEmpty();
         h.Sink.Set.Should().BeEmpty(); // nothing undecryptable ever reaches the OS clipboard
+        // Each undecryptable item must leave a trace in the log, not vanish.
+        h.Logger.Warnings.Should().Contain(w => w.Message.Contains("could not be decrypted"));
     }
 
     [Fact]
@@ -417,6 +497,20 @@ public sealed class ClipboardServiceTests
 
         // Never 3 consecutive failures -> the key is never marked suspect, no re-request.
         h.Transport.UpdatedSettings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Constructor_NullLogger_Throws()
+    {
+        var keys = new FakeKeyStore();
+        var transport = new FakeTransport();
+        var keyExchange = new ClipboardKeyExchange(keys, transport, () => "this-dev");
+
+        var act = () => new ClipboardService(
+            new FakeCapture(), transport, new FakeSink(), keys, keyExchange,
+            new ClipboardDedupe(), () => new ClipboardSettings(), 100, null!);
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("logger");
     }
 
     [Fact]

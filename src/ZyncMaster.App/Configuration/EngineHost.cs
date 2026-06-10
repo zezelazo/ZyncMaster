@@ -276,7 +276,8 @@ public sealed class EngineHost : IDisposable
             clipboardKeyExchange,
             new ClipboardDedupe(),
             () => actions.CurrentClipboardSettings,
-            ClipboardHardMaxImageBytes);
+            ClipboardHardMaxImageBytes,
+            logger);
 
         // Route paste through the ClipboardService so it marks the dedupe before the OS write and the
         // resulting clipboard capture is suppressed as an echo (no spurious re-publish on every paste).
