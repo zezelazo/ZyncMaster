@@ -3117,13 +3117,19 @@ function clipRelTime(iso) {
 function clipRowEl(item) {
   const type = clipNormalizeType(item);
   const isImg = type === 'image';
+  const hasThumb = isImg && !!item.imagePreviewDataUri;
   const cls = ['cb-row'];
   if (isImg) cls.push('cb-row--img');
+  if (hasThumb) cls.push('cb-row--thumb');
 
-  const av = el('div', {
-    class: 'cb-av' + (type === 'file' ? ' cb-av--file' : type === 'image' ? ' cb-av--img' : ''),
-    'aria-hidden': 'true',
-  }, type === 'text' ? 'T' : type === 'file' ? 'F' : '');
+  // Avatar slot: image items with a preview render a small inline thumbnail (same markup as the
+  // floating viewer's rows); everything else keeps the typed tile.
+  const av = hasThumb
+    ? el('img', { class: 'cb-av cb-av--thumb', src: item.imagePreviewDataUri, alt: '', 'aria-hidden': 'true' })
+    : el('div', {
+        class: 'cb-av' + (type === 'file' ? ' cb-av--file' : type === 'image' ? ' cb-av--img' : ''),
+        'aria-hidden': 'true',
+      }, type === 'text' ? 'T' : type === 'file' ? 'F' : '');
 
   const title = el('div', {
     class: 'cb-title' + (clipIsLocked(item) ? ' cb-title--waiting' : ''),

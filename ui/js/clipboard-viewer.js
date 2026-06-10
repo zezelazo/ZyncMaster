@@ -235,14 +235,20 @@ const root = () => document.getElementById('cbRoot');
 function rowEl(item, index, selected) {
   const type = itemType(item);
   const isImg = type === 'image';
+  const hasThumb = isImg && !!item.imagePreviewDataUri;
   const cls = ['cb-row'];
   if (isImg) cls.push('cb-row--img');
+  if (hasThumb) cls.push('cb-row--thumb');
   if (selected) cls.push('is-selected');
 
-  const av = el('div', {
-    class: 'cb-av' + (type === 'file' ? ' cb-av--file' : type === 'image' ? ' cb-av--img' : ''),
-    'aria-hidden': 'true',
-  }, type === 'text' ? 'T' : type === 'file' ? 'F' : '');
+  // Avatar slot: image items with a preview render a small inline thumbnail; everything else
+  // (text, file, image without preview) keeps the typed tile.
+  const av = hasThumb
+    ? el('img', { class: 'cb-av cb-av--thumb', src: item.imagePreviewDataUri, alt: '', 'aria-hidden': 'true' })
+    : el('div', {
+        class: 'cb-av' + (type === 'file' ? ' cb-av--file' : type === 'image' ? ' cb-av--img' : ''),
+        'aria-hidden': 'true',
+      }, type === 'text' ? 'T' : type === 'file' ? 'F' : '');
 
   const mini = state.density === 'mini';
 

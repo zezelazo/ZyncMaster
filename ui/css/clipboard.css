@@ -222,6 +222,19 @@ html.cb-viewer-page body,
   border-color: var(--glass-stroke);
 }
 
+/* Inline image thumbnail in the row avatar slot (both the floating viewer rows and the dashboard
+   history rows). Used when the item carries a preview data URI; rows without one keep the hatched
+   .cb-av--img tile. The carrying row widens its avatar column via .cb-row--thumb. */
+.cb-row--thumb { grid-template-columns: 38px minmax(0, 1fr); }
+.cb-av--thumb {
+  width: 38px; height: 38px;
+  border-radius: 8px;
+  display: block;
+  object-fit: cover;
+  border: 1px solid var(--glass-stroke);
+  background: var(--glass-fill-2);
+}
+
 /* Selected-image expand preview (RICH only — gated to :not(.cb-viewer--mini) because the JS only
    appends the preview in rich; in mini a selected image must render as a plain selected row). The
    selected image row grows to a single column and shows a large thumbnail keeping aspect ratio. */
@@ -235,6 +248,10 @@ html.cb-viewer-page body,
   grid-template-columns: 21px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
+}
+/* When the avatar is an inline thumbnail, the expanded head keeps the wider avatar column. */
+.cb-viewer:not(.cb-viewer--mini) .cb-row--thumb.is-selected .cb-row__head {
+  grid-template-columns: 38px minmax(0, 1fr);
 }
 /* In the un-expanded state the head IS the row content (no wrapper grid needed). This covers all
    non-image rows, un-selected image rows, and — because the expand grid above is rich-only — every
