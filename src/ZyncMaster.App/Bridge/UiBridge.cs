@@ -380,6 +380,22 @@ public sealed class UiBridge
                 await _engine.CancelConnectAsync(ct);
                 return null;
             }
+            // ---------------- Calendar v2 (unified day, replicas, prefix rules) ----------------
+            // These payloads are RAW server JSON in both directions: EngineActions passes them
+            // through verbatim, so each case returns the string as-is (it is already serialized).
+            case "getCalendarDay":
+                return await _engine.GetCalendarDayAsync(message.Payload ?? "", ct);
+            case "createCalendarEvent":
+                return await _engine.CreateCalendarEventAsync(message.Payload ?? "", ct);
+            case "createEventReplicas":
+                return await _engine.CreateEventReplicasAsync(message.Payload ?? "", ct);
+            case "listPrefixRules":
+                return await _engine.ListPrefixRulesAsync(ct);
+            case "savePrefixRule":
+                return await _engine.SavePrefixRuleAsync(message.Payload ?? "", ct);
+            case "deletePrefixRule":
+                await _engine.DeletePrefixRuleAsync(message.Payload ?? "", ct);
+                return null;
             // ---------------- Clipboard module (Plan 2/3) ----------------
             case "getClipboardHistory":
             {

@@ -1482,4 +1482,60 @@ public class UiBridgeTests
         reply.GetProperty("ok").GetBoolean().Should().BeFalse();
         reply.GetProperty("error").GetString().Should().Contain("cleanup boom");
     }
+
+    // ---------------- Calendar v2 (unified day, replicas, prefix rules) ----------------
+
+    [Fact]
+    public async Task GetCalendarDay_dispatches_and_returns_the_raw_json_payload()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound("{\"action\":\"getCalendarDay\",\"correlationId\":\"c1\",\"payload\":\"2026-06-10\"}");
+        await Task.Delay(50);
+
+        engine.GetCalendarDayArg.Should().Be("2026-06-10");
+        transport.Sent.Should().ContainSingle();
+        using var doc = JsonDocument.Parse(transport.Sent[0]);
+        doc.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
+        doc.RootElement.GetProperty("payload").GetString().Should().Be(engine.CalendarDayJsonToReturn);
+    }
+
+    [Fact]
+    public async Task CreateEventReplicas_and_prefix_rule_actions_dispatch_their_payloads()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions();
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound("{\"action\":\"createCalendarEvent\",\"correlationId\":\"c2\",\"payload\":\"{\\\"title\\\":\\\"X\\\"}\"}");
+        transport.PushInbound("{\"action\":\"createEventReplicas\",\"correlationId\":\"c3\",\"payload\":\"{\\\"accountId\\\":\\\"a1\\\",\\\"eventId\\\":\\\"e1\\\"}\"}");
+        transport.PushInbound("{\"action\":\"listPrefixRules\",\"correlationId\":\"c4\"}");
+        transport.PushInbound("{\"action\":\"savePrefixRule\",\"correlationId\":\"c5\",\"payload\":\"{\\\"prefix\\\":\\\"Lunch\\\"}\"}");
+        transport.PushInbound("{\"action\":\"deletePrefixRule\",\"correlationId\":\"c6\",\"payload\":\"r-1\"}");
+        await Task.Delay(100);
+
+        engine.CreateCalendarEventArg.Should().Contain("title");
+        engine.CreateEventReplicasArg.Should().Contain("e1");
+        engine.ListPrefixRulesCalls.Should().Be(1);
+        engine.SavePrefixRuleArg.Should().Contain("Lunch");
+        engine.DeletePrefixRuleArg.Should().Be("r-1");
+        transport.Sent.Should().HaveCount(5);
+    }
+
+    [Fact]
+    public async Task GetCalendarDay_failure_becomes_an_ok_false_reply()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { Throw = () => throw new InvalidOperationException("boom-day") };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound("{\"action\":\"getCalendarDay\",\"correlationId\":\"c7\",\"payload\":\"2026-06-10\"}");
+        await Task.Delay(50);
+
+        using var doc = JsonDocument.Parse(transport.Sent[0]);
+        doc.RootElement.GetProperty("ok").GetBoolean().Should().BeFalse();
+        doc.RootElement.GetProperty("error").GetString().Should().Be("boom-day");
+    }
 }
