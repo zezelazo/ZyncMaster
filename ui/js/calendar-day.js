@@ -51,6 +51,22 @@ export function maskedTitle(input) {
   return t.length ? t : null;
 }
 
+// The createEventReplicas bridge payload from the panel's destination rows, or null when
+// nothing is checked OR any checked destination still misses its REQUIRED mask title
+// (decision D6). The origin title is NOT a parameter on purpose: no code path in this module
+// can copy it into a replica — the server enforces the same invariant on its side.
+export function replicateRequest(accountId, eventId, rows) {
+  const checked = (rows || []).filter((r) => r && r.checked);
+  if (!checked.length) return null;
+  const destinations = [];
+  for (const r of checked) {
+    const title = maskedTitle(r.title);
+    if (!title) return null; // blank mask = invalid; the CTA stays disabled
+    destinations.push({ accountId: r.accountId, calendarId: r.calendarId, title });
+  }
+  return { accountId, eventId, destinations };
+}
+
 // The Monday-start week containing dateIso ('yyyy-mm-dd'). Pure UTC math on the string so the
 // result never depends on the machine's timezone.
 export function weekDates(dateIso) {

@@ -77,3 +77,36 @@ test('freshnessLabel maps the server freshness STRING to badge text', () => {
   assert.equal(freshnessLabel(null), null);
   assert.equal(freshnessLabel(undefined), null);
 });
+
+test('replicateRequest builds the bridge payload from checked destinations with REQUIRED typed titles', async () => {
+  const { replicateRequest } = await import('../../ui/js/calendar-day.js');
+  const req = replicateRequest('acc-1', 'evt-1', [
+    { checked: true, accountId: 'a1', calendarId: 'c1', title: ' Busy ' },
+    { checked: false, accountId: 'a2', calendarId: 'c2', title: 'ignored' },
+  ]);
+  assert.deepEqual(req, {
+    accountId: 'acc-1',
+    eventId: 'evt-1',
+    destinations: [{ accountId: 'a1', calendarId: 'c1', title: 'Busy' }],
+  });
+  assert.equal(replicateRequest('acc-1', 'evt-1', [{ checked: false }]), null); // nothing checked
+  // Decision D6: a checked destination with a blank mask makes the whole request invalid.
+  assert.equal(replicateRequest('acc-1', 'evt-1', [
+    { checked: true, accountId: 'a1', calendarId: 'c1', title: '   ' },
+  ]), null);
+});
+
+test('the origin title never appears in a replicate payload unless the user typed it', async () => {
+  // Privacy contract (calendar-v2 spec §12.1): replicateRequest does not even RECEIVE the
+  // origin title, so no code path can copy it. Typing it is the only way it travels.
+  const { replicateRequest } = await import('../../ui/js/calendar-day.js');
+  const origin = 'Dentista — chequeo anual';
+  const req = replicateRequest('acc-1', 'evt-1', [
+    { checked: true, accountId: 'a1', calendarId: 'c1', title: 'Busy' },
+  ]);
+  assert.ok(!JSON.stringify(req).includes(origin));
+  const typed = replicateRequest('acc-1', 'evt-1', [
+    { checked: true, accountId: 'a1', calendarId: 'c1', title: origin },
+  ]);
+  assert.equal(typed.destinations[0].title, origin);
+});

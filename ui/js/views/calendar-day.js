@@ -5,9 +5,9 @@
 // import + la llamada de boot. Los helpers PUROS viven en ../calendar-day.js (test node).
 import {
   accountColorClass, clampBlock, localMinutes, replicateButtonLabel,
-  maskedTitle, weekDates, shiftDate, freshnessLabel,
-  // Las tareas 7/8/9 AÑADEN aquí, a medida que existan, los exports que cada una crea:
-  //   tarea 7 → replicateRequest, tarea 8 → prefixRulePayload, tarea 9 → newEventPayload.
+  maskedTitle, weekDates, shiftDate, freshnessLabel, replicateRequest,
+  // Las tareas 8/9 AÑADEN aquí, a medida que existan, los exports que cada una crea:
+  //   tarea 8 → prefixRulePayload, tarea 9 → newEventPayload.
   // NO importarlos antes de que existan: un import de un export inexistente rompe el módulo
   // ES (node --check/--test fallan). Cada tarea extiende esta línea cuando crea su helper.
 } from '../calendar-day.js';
@@ -227,15 +227,137 @@ export function registerCalendarDayView(ctx) {
     if (calDay.panel === 'new-event') return renderNewEventPanel(panel);
     if (calDay.panel === 'rules') return renderPrefixRulesPanel(panel);
     panel.innerHTML = '<p class="calday-empty">Select an event to replicate it, or create a new one.</p>';
-    appendPrefixRulesSummary(panel); // task 7 adds this; until then a no-op stub
+    appendPrefixRulesSummary(panel);
   }
 
-  // Temporary stubs so the module loads before tasks 7-9 land their panels. Each of those
+  // ---------------- Calendar v2: Replicate panel (task 7) ----------------
+  function renderReplicatePanel(panel) {
+    const { ev, account } = calDay.selected;
+    panel.innerHTML = `
+      <header><h2>Replicate event</h2>
+        <button class="x btn" id="calDayPanelClose" aria-label="Close">✕</button></header>
+      <div class="calday-sect">
+        <div class="calday-src"><span class="bar"></span><div>
+          <b>${escapeHtml(ev.title || '(no title)')}</b>
+          <span class="num" style="font-size:var(--t-meta);color:var(--ink-3)">
+            ${calDay.date} · ${fmtRange(ev.start, ev.end)} · ${escapeHtml(account.email || '')}</span>
+        </div></div>
+        <p class="calday-hint">A replica copies only time and availability. Title, notes and
+          participants never cross accounts.</p>
+      </div>
+      <div class="calday-sect"><h3>Destinations</h3><div id="calDayDests"></div></div>
+      <div class="calday-sect"><h3>Prefix rules
+        <button class="btn" id="calDayManageRules" style="float:right">Manage</button></h3>
+        <div id="calDayRulesSummary"></div></div>
+      <div class="calday-actions">
+        <button class="btn" id="calDayCancelReplicate">Cancel</button>
+        <button class="btn primary" id="calDayCreateReplicas" disabled>Select a destination</button>
+      </div>`;
+
+    const destsEl = panel.querySelector('#calDayDests');
+    // One row per destination calendar from the REAL bridge shapes (see 6.3):
+    // CalendarAccountSummary {id, kind, provider, accountEmail, scope, status, displayName}
+    // enriched with .calendars = CalendarInfo[] {id, displayName, isDefault, owner}.
+    // The event's own ACCOUNT is excluded (self-replication is meaningless and the server
+    // rejects it). Scope casing is the server's enum ToString ("Read"/"ReadWrite") — compare
+    // case-insensitively so a future casing change cannot silently disable every destination.
+    const rows = [];
+    (calDay.accounts || []).forEach((acct) => {
+      if (acct.id === ev.accountId) return;
+      const writable = (acct.scope || '').toLowerCase() === 'readwrite';
+      (acct.calendars || []).forEach((cal) => {
+        const row = { checked: false, accountId: acct.id, calendarId: cal.id, title: '' };
+        const div = document.createElement('div');
+        div.className = 'calday-dest';
+        div.innerHTML = `
+          <div class="head">
+            <input type="checkbox" ${writable ? '' : 'disabled'} aria-label="Use this destination">
+            <span class="name">${escapeHtml(cal.displayName || 'Calendar')}</span>
+            <span class="acct">${escapeHtml(acct.accountEmail || '')} · ${escapeHtml(acct.scope || '')}${writable ? '' : ' — upgrade scope to enable'}</span>
+          </div>
+          <div class="mask" hidden>
+            <label>Visible title in destination</label>
+            <input type="text" placeholder="Busy">
+            <div class="calday-hint">Required — the original title never crosses accounts.</div>
+          </div>`;
+        const cb = div.querySelector('input[type="checkbox"]');
+        const maskWrap = div.querySelector('.mask');
+        const maskInput = div.querySelector('input[type="text"]');
+        cb.onchange = () => {
+          row.checked = cb.checked;
+          div.classList.toggle('on', cb.checked);
+          maskWrap.hidden = !cb.checked;
+          updateCta();
+        };
+        maskInput.oninput = () => { row.title = maskInput.value; updateCta(); };
+        rows.push(row);
+        destsEl.appendChild(div);
+      });
+    });
+    if (!rows.length) destsEl.innerHTML = '<p class="calday-empty">No other calendars connected yet.</p>';
+
+    appendPrefixRulesSummary(panel.querySelector('#calDayRulesSummary'));
+
+    const cta = panel.querySelector('#calDayCreateReplicas');
+    function updateCta() {
+      // Decision D6: the CTA only enables when every checked destination has a typed title.
+      const checked = rows.filter((r) => r.checked);
+      const missing = checked.some((r) => !maskedTitle(r.title));
+      cta.disabled = !checked.length || missing;
+      cta.textContent = replicateButtonLabel(checked.length, missing);
+    }
+    panel.querySelector('#calDayPanelClose').onclick = closePanel;
+    panel.querySelector('#calDayCancelReplicate').onclick = closePanel;
+    panel.querySelector('#calDayManageRules').onclick = () => { calDay.panel = 'rules'; rerenderInPlace(); };
+    cta.onclick = () => {
+      const req = replicateRequest(ev.accountId, ev.eventId, rows);
+      if (!req) return;
+      cta.disabled = true;
+      cta.textContent = 'Creating…';
+      Bridge.call('createEventReplicas', JSON.stringify(req))
+        .then(() => {
+          announce('Replicas created');
+          closePanel();
+          delete calDay.days[calDay.date]; // refetch: the day now carries the link icons
+          loadCalendarDay();
+        })
+        .catch((err) => {
+          updateCta();
+          announce(`Replicate failed: ${err.message}`);
+          const msg = document.createElement('p');
+          msg.className = 'calday-hint';
+          msg.style.color = 'var(--err)';
+          msg.textContent = err.message;
+          cta.parentElement.appendChild(msg);
+        });
+    };
+
+    function closePanel() { calDay.panel = null; calDay.selected = null; rerenderInPlace(); }
+  }
+
+  // Read-only summary of the prefix rules inside the Replicate panel (full CRUD is task 8).
+  function appendPrefixRulesSummary(target) {
+    if (!target) return;
+    if (!calDay.rules.length) {
+      target.innerHTML = '<p class="calday-hint">No prefix rules yet. A “[Lunch] X” event is renamed to “X” and replicated as “Lunch”. Graph readwrite accounts only.</p>';
+      return;
+    }
+    target.replaceChildren(...calDay.rules.map((r) => {
+      const div = document.createElement('div');
+      div.className = 'calday-rule';
+      const n = (r.destinations || []).length;
+      div.innerHTML = `<code>[${escapeHtml(r.prefix)}]</code><span style="color:var(--ink-4)">→</span>`
+        + `<span>“${escapeHtml(r.maskTitle)}”</span>`
+        + `<span class="n num">${n} destination${n === 1 ? '' : 's'}</span>`
+        + `<span style="font-size:var(--t-micro);font-weight:var(--w-micro);color:${r.enabled ? 'var(--ok)' : 'var(--ink-4)'}">${r.enabled ? 'on' : 'off'}</span>`;
+      return div;
+    }));
+  }
+
+  // Temporary stubs so the module loads before tasks 8-9 land their panels. Each of those
   // tasks REPLACES its stub; none of these may survive past task 9.
-  function renderReplicatePanel(p) { p.innerHTML = '<p class="calday-empty">Replicate — task 7</p>'; }
   function renderNewEventPanel(p) { p.innerHTML = ''; }
   function renderPrefixRulesPanel(p) { p.innerHTML = ''; }
-  function appendPrefixRulesSummary() {}
 
   // ======== registry ========
   registry.register('calendar-day', {
