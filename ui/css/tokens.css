@@ -3,6 +3,18 @@
    Values ported verbatim from the design handoff (styles.css).
    ========================================================= */
 
+/* =========================================================
+   PUBLIC TOKEN MANIFEST — contract with the Angular web UI
+   (spec web-ui §4). The web imports this file and may depend
+   ONLY on this subset: surfaces --bg-*, ink --ink-*, accents
+   --azure* / --cyan* / --aqua* and semantic --ok / --warn /
+   --err (+ -soft), elevation --border-1 / --border-2, control
+   surfaces --ctrl-*, spacing --s-*, radii --r-*, type ramp
+   --t-* / --lh-* / --w-*, motion --ease-* / --d-*, --focus,
+   --surface-solid. Everything else (e.g. --glass-*, --terra-*)
+   is desktop-only and may change without notice.
+   ========================================================= */
+
 :root {
   /* ---- spacing ---- */
   --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
@@ -40,12 +52,6 @@
   --bg-2: #161b2a;
   --bg-3: #1c2236;
 
-  /* aurora colors (subtle) */
-  --aurora-1: #1e4a7a;  /* deep azure */
-  --aurora-2: #2a3a6b;  /* indigo */
-  --aurora-3: #6b3a2a;  /* warm terracotta tint */
-  --aurora-4: #0e1a30;  /* dark base */
-
   /* glass — readable, layered */
   --glass-fill:     rgba(255, 255, 255, 0.07);
   --glass-fill-2:   rgba(255, 255, 255, 0.045);
@@ -60,15 +66,24 @@
   /* ink */
   --ink-1: rgba(244, 247, 252, 0.96);
   --ink-2: rgba(213, 220, 232, 0.66);
-  --ink-3: rgba(180, 190, 206, 0.42);
+  --ink-3: rgba(198, 208, 224, 0.58);
   --ink-4: rgba(180, 190, 206, 0.22);
 
-  /* accents */
+  /* accents — azure es el primario de acción/selección (spec §5) */
   --azure:        #5b8cff;
   --azure-2:      #79a4ff;
   --azure-soft:   rgba(91, 140, 255, 0.16);
   --azure-edge:   rgba(91, 140, 255, 0.42);
 
+  /* acento secundario/informativo — NUEVO, parte del contrato con la web Angular */
+  --cyan:         #4cc8e8;
+  --cyan-soft:    rgba(76, 200, 232, 0.13);
+  --cyan-edge:    rgba(76, 200, 232, 0.40);
+  --aqua:         #3fd2b8;
+  --aqua-soft:    rgba(63, 210, 184, 0.13);
+  --aqua-edge:    rgba(63, 210, 184, 0.40);
+
+  /* terra — DEMOVIDO: solo marca puntual (logo, ilustración); prohibido en controles/estados */
   --terra:        #d97757;
   --terra-2:      #e89072;
   --terra-soft:   rgba(217, 119, 87, 0.18);
@@ -88,12 +103,16 @@
   --ctrl-hover:  rgba(255, 255, 255, 0.08);
   --ctrl-active: rgba(255, 255, 255, 0.12);
 
+  /* elevación border-light — NUEVO, contrato con la web Angular */
+  --border-1: rgba(255, 255, 255, 0.07);
+  --border-2: rgba(255, 255, 255, 0.14);
+
   /* inverted ink — text that sits on a light/accent fill (selected segments, active filters) */
   --ink-on-accent: #0e1320;  /* dark ink on a near-white fill */
   --ink-on-azure:  #ffffff;  /* light ink on an azure fill */
 
   /* opaque card surface — the solid fallback when backdrop-filter is unavailable */
-  --surface-solid: var(--bg-2);
+  --surface-solid: var(--bg-1);
 
   /* focus */
   --focus: 0 0 0 2px var(--bg-0), 0 0 0 4px var(--azure);
@@ -110,11 +129,6 @@
   --bg-2: #c0b2a6;
   --bg-3: #b5a799;
 
-  --aurora-1: #a7bad1;
-  --aurora-2: #d0bcae;
-  --aurora-3: #e6a07c;
-  --aurora-4: #c8b9ab;
-
   --glass-fill:     rgba(255, 255, 255, 0.58);
   --glass-fill-2:   rgba(255, 255, 255, 0.36);
   --glass-stroke:   rgba(17, 24, 39, 0.10);
@@ -127,13 +141,20 @@
 
   --ink-1: rgba(12, 18, 32, 0.96);
   --ink-2: rgba(36, 46, 66, 0.72);
-  --ink-3: rgba(56, 68, 90, 0.50);
+  --ink-3: rgba(50, 62, 84, 0.62);
   --ink-4: rgba(56, 68, 90, 0.22);
 
   --azure:      #2762cf;
   --azure-2:    #1a4faf;
   --azure-soft: rgba(39, 98, 207, 0.14);
   --azure-edge: rgba(39, 98, 207, 0.42);
+
+  --cyan:      #0d7f9e;
+  --cyan-soft: rgba(13, 127, 158, 0.12);
+  --cyan-edge: rgba(13, 127, 158, 0.38);
+  --aqua:      #0e8a72;
+  --aqua-soft: rgba(14, 138, 114, 0.12);
+  --aqua-edge: rgba(14, 138, 114, 0.38);
 
   --terra:      #b85230;
   --terra-2:    #9d4322;
@@ -151,6 +172,9 @@
   --ctrl-stroke: rgba(17, 24, 39, 0.10);
   --ctrl-hover:  rgba(17, 24, 39, 0.08);
   --ctrl-active: rgba(17, 24, 39, 0.13);
+
+  --border-1: rgba(17, 24, 39, 0.10);
+  --border-2: rgba(17, 24, 39, 0.18);
 
   /* inverted ink — text on a light/accent fill (selected segments, active filters) */
   --ink-on-accent: #0e1320;  /* dark ink on a near-white fill */
