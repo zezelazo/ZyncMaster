@@ -240,7 +240,83 @@ public static class CalendarV2Endpoints
             return Results.Ok(new { status = "ok" });
         }).RequireIdentityBearer();
 
-        // Task 16: GET  /api/calendar/day
+        // Unified day view (spec §8/§9): every Graph account live, COM accounts as an explicit
+        // "snapshot_unavailable" entry (the App-push snapshot store is future work — visible
+        // degradation, never an omitted account). Day window is UTC (plan decision 6); the UI
+        // owns the timezone presentation.
+        app.MapGet("/api/calendar/day", async (
+            string? date,
+            string? accounts,
+            ICalendarAccountStore accountStore,
+            IReplicaLinkStore links,
+            Func<string, IReplicaGraphClient> clients,
+            CancellationToken ct) =>
+        {
+            if (!DateOnly.TryParseExact(date ?? "", "yyyy-MM-dd",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var day))
+            {
+                return Results.BadRequest(new
+                {
+                    error = "invalid_date",
+                    message = "Expected date=yyyy-MM-dd.",
+                });
+            }
+            var from = new DateTimeOffset(day.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+            var to = from.AddDays(1);
+
+            var requested = (accounts ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.Ordinal);
+            var selected = (await accountStore.ListAsync(ct))
+                .Where(a => a.Status == "active" && (requested.Count == 0 || requested.Contains(a.Id)))
+                .ToList();
+
+            // Replica/mask annotations: every non-tombstone link keyed by its source event.
+            var linksBySource = (await links.ListAsync(ct))
+                .Where(l => l.Status != ReplicaLinkStatus.Tombstone)
+                .ToLookup(l => l.SourceEventId, StringComparer.Ordinal);
+
+            var accountViews = new List<DayAccountDto>();
+            foreach (var account in selected)
+            {
+                if (account.Kind != AccountKind.Graph)
+                {
+                    accountViews.Add(new DayAccountDto(
+                        account.Id, account.AccountEmail, "com", account.Scope.ToString(),
+                        "snapshot_unavailable", Array.Empty<DayEventDto>()));
+                    continue;
+                }
+
+                var client = clients(account.Id);
+                var canWrite = account.Scope == AccountScope.ReadWrite;
+                var events = new List<DayEventDto>();
+                foreach (var calendar in await client.ListCalendarsAsync(ct))
+                {
+                    foreach (var ev in await client.ListWindowAsync(calendar.Id, from, to, ct))
+                    {
+                        var replicas = linksBySource[ev.StableId]
+                            .Select(l => new DayReplicaDto(
+                                l.Id, l.DestinationAccountId, l.DestinationCalendarId,
+                                l.MaskTitle, l.Status.ToString().ToLowerInvariant()))
+                            .ToList();
+                        events.Add(new DayEventDto(
+                            account.Id, calendar.Id, ev.GraphEventId, ev.StableId, ev.Subject,
+                            ev.Start, ev.End, ev.IsAllDay, ev.ShowAs, ev.IsCancelled,
+                            ev.IsOrganizer,
+                            // Either managed mark renders as replica — the UI must not offer
+                            // re-replication (anti-loop 3 is also enforced server-side).
+                            ev.HasReplicaMark || ev.HasCalImportMark,
+                            canWrite, replicas));
+                    }
+                }
+                accountViews.Add(new DayAccountDto(
+                    account.Id, account.AccountEmail, "graph", account.Scope.ToString(),
+                    "live", events.OrderBy(e => e.Start).ToList()));
+            }
+
+            return Results.Ok(new { date = day.ToString("yyyy-MM-dd"), accounts = accountViews });
+        }).RequireIdentityBearer();
     }
 
     internal static object ToLinkDto(ReplicaLink l) => new
@@ -370,3 +446,16 @@ public sealed class RespondRequestValidator : AbstractValidator<RespondRequest>
         RuleFor(x => x.Message).MaximumLength(1024);
     }
 }
+
+public sealed record DayReplicaDto(
+    string LinkId, string DestinationAccountId, string DestinationCalendarId,
+    string MaskTitle, string Status);
+
+public sealed record DayEventDto(
+    string AccountId, string CalendarId, string EventId, string StableId, string Title,
+    DateTimeOffset Start, DateTimeOffset End, bool IsAllDay, string ShowAs, bool IsCancelled,
+    bool IsOrganizer, bool IsReplica, bool CanWrite, IReadOnlyList<DayReplicaDto> Replicas);
+
+public sealed record DayAccountDto(
+    string AccountId, string Email, string Kind, string Scope, string Freshness,
+    IReadOnlyList<DayEventDto> Events);
