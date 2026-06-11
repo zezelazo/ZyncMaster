@@ -1,1 +1,5 @@
-/* Tailwind-by-tokens only; component-specific rules go here when utilities fall short. */
+/* Dynamic per-account accents (composed class names can't be Tailwind utilities). */
+.ev-az { background: var(--azure-soft); border-color: var(--azure-edge); border-left-color: var(--azure); }
+.ev-aq { background: var(--aqua-soft); border-color: var(--aqua-edge); border-left-color: var(--aqua); }
+.ev-cy { background: var(--cyan-soft); border-color: var(--cyan-edge); border-left-color: var(--cyan); }
+.ev-sel { outline: 2px solid var(--azure); outline-offset: 1px; }

@@ -1,1 +1,68 @@
-<p>Calendar</p>
+<header class="sticky top-0 z-10 flex h-[52px] items-center gap-s5 border-b border-border-1 bg-bg-1 px-s6">
+  <span class="flex items-center gap-s2 text-title font-semibold text-ink-1">
+    <span class="inline-block h-5 w-5 rounded-[5px] bg-gradient-to-br from-azure to-aqua"></span>SyncMaster
+  </span>
+  <nav class="flex gap-s1 text-body text-ink-2"><span class="rounded-sm border border-azure-edge bg-azure-soft px-s3 py-s1 text-ink-1">Calendar</span></nav>
+</header>
+
+<main class="mx-auto max-w-[1280px] p-s6">
+  <div class="mb-s5 flex flex-wrap items-center gap-s3">
+    <h1 class="m-0 text-title font-semibold text-ink-1">Calendar</h1>
+    <button type="button" class="rounded-sm border border-ctrl-stroke bg-ctrl-fill px-s3 py-s1 text-meta text-ink-2" (click)="shift(-1)" data-testid="prev">‹</button>
+    <button type="button" class="rounded-sm border border-ctrl-stroke bg-ctrl-fill px-s3 py-s1 text-meta text-ink-2" (click)="today()" data-testid="today">Today</button>
+    <button type="button" class="rounded-sm border border-ctrl-stroke bg-ctrl-fill px-s3 py-s1 text-meta text-ink-2" (click)="shift(1)" data-testid="next">›</button>
+    <span class="text-meta text-ink-2" data-testid="date">{{ store.date() }}</span>
+  </div>
+
+  @if (store.error(); as err) { <p class="text-body text-err" data-testid="error">{{ err }}</p> }
+  @if (store.loading() && !store.day()) { <p class="text-body text-ink-3">Loading the day…</p> }
+
+  @if (store.day(); as day) {
+    <div class="grid items-start gap-s5 max-[980px]:grid-cols-1 min-[981px]:grid-cols-[minmax(0,1fr)_400px]">
+      <section class="overflow-hidden rounded-md border border-border-1 bg-surface" aria-label="Unified day view">
+        <div class="grid border-b border-border-1" [style.grid-template-columns]="'52px repeat(' + day.accounts.length + ', 1fr)'">
+          <div></div>
+          @for (account of day.accounts; track account.accountId) {
+            <div class="border-l border-border-1 px-s3 py-s2 text-micro font-semibold uppercase tracking-wider text-ink-3" data-testid="col-head">
+              {{ account.email }}
+              @if (freshness(account.freshness); as label) {
+                <span class="ml-s1 rounded-pill border border-warn bg-warn-soft px-s2 font-semibold text-warn normal-case tracking-normal">{{ label }}</span>
+              }
+            </div>
+          }
+        </div>
+        <div class="relative grid" [style.grid-template-columns]="'52px repeat(' + day.accounts.length + ', 1fr)'" [style.height.px]="gridHeight">
+          <div class="relative">
+            @for (h of hours; track h) {
+              <span class="absolute right-s2 text-micro text-ink-3" [style.top.px]="(h - 7) * 40">{{ h < 10 ? '0' + h : h }}:00</span>
+            }
+          </div>
+          @for (account of day.accounts; track account.accountId; let i = $index) {
+            <div class="relative border-l border-border-1">
+              @for (ev of account.events; track ev.eventId) {
+                @if (block(ev); as b) {
+                  <button type="button" data-testid="event"
+                          class="absolute inset-x-[6px] cursor-pointer overflow-hidden rounded-xs border border-l-[3px] p-s1 text-left text-meta ev-{{ accent(i) }}"
+                          [class.ev-sel]="store.selected()?.event?.eventId === ev.eventId && store.selected()?.event?.accountId === ev.accountId"
+                          [style.top.px]="b.top" [style.height.px]="b.height"
+                          (click)="store.select({ accountId: ev.accountId, eventId: ev.eventId })">
+                    <b class="block text-meta font-semibold text-ink-1">{{ ev.title }}
+                      @if (ev.replicas.length) { <span class="text-micro text-azure-2">⛓ {{ ev.replicas.length }}</span> }
+                      @if (ev.isReplica) { <span class="text-micro text-azure-2">⛓ replica</span> }
+                    </b>
+                  </button>
+                }
+              }
+            </div>
+          }
+        </div>
+      </section>
+
+      @if (store.selected(); as sel) {
+        <zw-event-detail [event]="sel.event" [account]="sel.account" (changed)="store.reload()" />
+      } @else {
+        <aside class="rounded-md border border-border-1 bg-surface p-s5 text-meta text-ink-3">Select an event to manage it.</aside>
+      }
+    </div>
+  }
+</main>

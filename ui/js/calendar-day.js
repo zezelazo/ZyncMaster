@@ -1,6 +1,8 @@
 // Pure helpers for the Calendar v2 unified day/week view. NO DOM, NO bridge, NO Date.now()
 // on purpose so plain `node --test` can unit-test them (tests/js-unit/calendar-day.test.mjs);
 // app.js wires them to the DOM. Mirrors the web-transport.js pattern.
+// clampBlock/localMinutes: kept in sync with
+// web/zync-web/src/app/features/calendar/day-layout.ts by hand — change both.
 
 // Column accent classes cycle per account, matching the approved mock's azure/aqua/cyan palette
 // (docs/research/mocks/mock-app-calendar.html).

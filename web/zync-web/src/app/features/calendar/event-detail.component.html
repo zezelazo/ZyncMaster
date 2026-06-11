@@ -1,0 +1,75 @@
+<aside class="rounded-md border border-border-1 bg-surface" aria-label="Event detail">
+  <div class="border-b border-border-1 p-s4">
+    <h2 class="m-0 inline text-title font-semibold text-ink-1">{{ event().title }}</h2>
+  </div>
+  <dl class="grid grid-cols-[96px_1fr] gap-x-s3 gap-y-s1 p-s4 text-meta">
+    <dt class="m-0 text-ink-3">When</dt><dd class="m-0 text-ink-2">{{ event().start.slice(0, 10) }} · {{ fmtRange() }}</dd>
+    <dt class="m-0 text-ink-3">Calendar</dt><dd class="m-0 text-ink-2">{{ account().email }} ({{ account().scope }})</dd>
+    <!-- The v1 day view carries no organizerEmail/responseStatus — only isOrganizer. -->
+    <dt class="m-0 text-ink-3">Role</dt>
+    <dd class="m-0 text-ink-2">{{ event().isOrganizer ? 'You organize this event' : 'You are invited' }}</dd>
+    <dt class="m-0 text-ink-3">Status</dt><dd class="m-0 text-ink-2">shows as {{ event().showAs }}</dd>
+  </dl>
+
+  <section class="border-t border-border-1 p-s4">
+    <h3 class="m-0 mb-s2 text-micro font-semibold uppercase tracking-wider text-ink-3">Replicas</h3>
+    @for (replica of event().replicas; track replica.linkId) {
+      <div class="flex items-center gap-s2 text-meta text-ink-2" data-testid="replica-row">
+        <span>⛓ “{{ replica.maskTitle }}”</span>
+        <span class="rounded-pill px-s2 text-micro font-semibold"
+              [class]="replica.status === 'active' ? 'bg-ok-soft text-ok' : 'bg-warn-soft text-warn'">{{ replica.status }}</span>
+        <span class="flex-1"></span>
+        @if (confirmingReplica() === replica.linkId) {
+          <button type="button" data-testid="replica-remove-confirm"
+                  class="rounded-sm border border-err bg-err-soft px-s2 py-s1 text-micro text-err"
+                  (click)="confirmRemoveReplica(replica.linkId)">Confirm remove</button>
+        } @else {
+          <button type="button" data-testid="replica-remove"
+                  class="rounded-sm border border-ctrl-stroke bg-ctrl-fill px-s2 py-s1 text-micro text-ink-2"
+                  (click)="startRemoveReplica(replica.linkId)">Remove</button>
+        }
+      </div>
+    } @empty {
+      <p class="m-0 text-meta text-ink-3">Not replicated anywhere yet.</p>
+    }
+    <p class="m-0 mt-s2 text-micro text-ink-3">A replica carries only time and availability — the real title never leaves this account.</p>
+  </section>
+
+  <section class="border-t border-border-1 p-s4">
+    <h3 class="m-0 mb-s2 text-micro font-semibold uppercase tracking-wider text-ink-3">Respond to organizer</h3>
+    <div class="flex gap-s2">
+      <button type="button" data-testid="respond-accept" (click)="action.set('accept')"
+              class="flex-1 rounded-sm border px-s2 py-s1 text-meta"
+              [class]="action() === 'accept' ? 'border-ok bg-ok-soft text-ok' : 'border-ctrl-stroke bg-ctrl-fill text-ink-2'">✓ Accept</button>
+      <button type="button" data-testid="respond-tentative" (click)="action.set('tentative')"
+              class="flex-1 rounded-sm border px-s2 py-s1 text-meta"
+              [class]="action() === 'tentative' ? 'border-warn bg-warn-soft text-warn' : 'border-ctrl-stroke bg-ctrl-fill text-ink-2'">? Tentative</button>
+      <button type="button" data-testid="respond-decline" (click)="action.set('decline')"
+              class="flex-1 rounded-sm border px-s2 py-s1 text-meta"
+              [class]="action() === 'decline' ? 'border-err bg-err-soft text-err' : 'border-ctrl-stroke bg-ctrl-fill text-ink-2'">✕ Decline</button>
+    </div>
+    <textarea data-testid="respond-message" rows="3" [value]="message"
+              (input)="onMessage($any($event.target).value)"
+              placeholder="Optional message to the organizer…"
+              class="mt-s3 w-full resize-y rounded-xs border border-ctrl-stroke bg-bg-2 p-s2 text-body text-ink-1"></textarea>
+    <p class="m-0 mt-s1 text-micro text-ink-3">The message travels to the organizer of the origin event — it is the only information that crosses to that side, and you write it.</p>
+    @if (!writable()) {
+      <p class="m-0 mt-s2 text-micro text-warn" data-testid="scope-hint">This account is read-only — upgrade its scope to respond from here.</p>
+    }
+    @if (error(); as err) { <p class="m-0 mt-s2 text-micro text-err">{{ err }}</p> }
+    <div class="mt-s3 flex justify-end gap-s2">
+      @if (event().isOrganizer && writable()) {
+        @if (confirmingCancel()) {
+          <button type="button" data-testid="cancel-confirm" (click)="confirmCancel()"
+                  class="rounded-sm border border-err bg-err-soft px-s3 py-s1 text-meta text-err">Confirm cancel</button>
+        } @else {
+          <button type="button" data-testid="cancel-event" (click)="startCancel()"
+                  class="rounded-sm border border-err bg-err-soft px-s3 py-s1 text-meta text-err">Cancel event…</button>
+        }
+      }
+      <button type="button" data-testid="respond-send" (click)="send()"
+              [disabled]="!writable() || busy()"
+              class="rounded-sm border border-azure-edge bg-azure-soft px-s3 py-s1 text-meta text-azure-2 disabled:opacity-50">Send response</button>
+    </div>
+  </section>
+</aside>
