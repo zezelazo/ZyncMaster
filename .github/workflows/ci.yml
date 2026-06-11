@@ -60,6 +60,7 @@ jobs:
         run: |
           node --check ui/js/app.js
           node --check ui/js/web-transport.js
+          node --check ui/js/calendar-day.js
 
       - name: Run js-unit tests
         run: node --test tests/js-unit/*.mjs
