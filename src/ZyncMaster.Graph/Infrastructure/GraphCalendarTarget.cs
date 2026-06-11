@@ -1,10 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -14,10 +11,7 @@ namespace ZyncMaster.Graph;
 
 public sealed class GraphCalendarTarget : ICalendarTarget
 {
-    private const string GraphBaseUrl = "https://graph.microsoft.com/v1.0/";
-
-    private readonly HttpClient                  _http;
-    private readonly IGraphTokenProvider         _auth;
+    private readonly GraphJsonHttp               _io;
     private readonly string                      _extendedPropertyId;
     private readonly string                      _pairPropertyId;
 
@@ -32,21 +26,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
 
     public GraphCalendarTarget(HttpClient http, IGraphTokenProvider auth, Guid extendedPropertyGuid)
     {
-        _http = http ?? throw new ArgumentNullException(nameof(http));
-        _auth = auth ?? throw new ArgumentNullException(nameof(auth));
-
-        if (_http.BaseAddress == null)
-        {
-            _http.BaseAddress = new Uri(GraphBaseUrl);
-        }
-        else if (_http.BaseAddress != new Uri(GraphBaseUrl))
-        {
-            // Silent fallthrough to a different host would send relative URLs to the
-            // wrong endpoint and surface as confusing 404s. Fail fast on the contract.
-            throw new ArgumentException(
-                "HttpClient must have no BaseAddress or BaseAddress equal to " + GraphBaseUrl,
-                nameof(http));
-        }
+        _io = new GraphJsonHttp(http, auth);
 
         // Single-value extended property identifier shape used by Graph:
         //   String {GUID} Name CalImportSourceId
@@ -62,11 +42,11 @@ public sealed class GraphCalendarTarget : ICalendarTarget
 
     public async Task<IReadOnlyList<CalendarTargetInfo>> ListCalendarsAsync(CancellationToken ct = default)
     {
-        var json = await SendJsonAsync(HttpMethod.Get,
+        var json = await _io.SendJsonAsync(HttpMethod.Get,
             "me/calendars?$select=id,name,isDefaultCalendar,owner", null, ct).ConfigureAwait(false);
 
         var list  = new List<CalendarTargetInfo>();
-        var arr   = RequireCollection(json, "me/calendars");
+        var arr   = GraphJsonHttp.RequireCollection(json, "me/calendars");
         foreach (var item in arr)
         {
             list.Add(new CalendarTargetInfo
@@ -86,7 +66,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
             throw new ArgumentException("Calendar name is required.", nameof(name));
 
         var body = new JObject(new JProperty("name", name)).ToString(Formatting.None);
-        var json = await SendJsonAsync(HttpMethod.Post, "me/calendars", body, ct).ConfigureAwait(false);
+        var json = await _io.SendJsonAsync(HttpMethod.Post, "me/calendars", body, ct).ConfigureAwait(false);
 
         return new CalendarTargetInfo
         {
@@ -113,11 +93,11 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                 continue;
 
             var filter =
-                $"singleValueExtendedProperties/Any(ep:ep/id eq '{EscapeOData(_extendedPropertyId)}' " +
-                $"and ep/value eq '{EscapeOData(externalId)}')";
+                $"singleValueExtendedProperties/Any(ep:ep/id eq '{GraphJsonHttp.EscapeOData(_extendedPropertyId)}' " +
+                $"and ep/value eq '{GraphJsonHttp.EscapeOData(externalId)}')";
 
             var expand =
-                $"singleValueExtendedProperties($filter=id eq '{EscapeOData(_extendedPropertyId)}')";
+                $"singleValueExtendedProperties($filter=id eq '{GraphJsonHttp.EscapeOData(_extendedPropertyId)}')";
 
             var url =
                 $"me/calendars/{Uri.EscapeDataString(calendarId)}/events" +
@@ -126,11 +106,11 @@ public sealed class GraphCalendarTarget : ICalendarTarget
                 $"&$select=id,subject,body" +
                 $"&$top=1";
 
-            var json = await SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
+            var json = await _io.SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
             // A 2xx with no "value" key is malformed, not "event not found". Treating it as
             // not-found would make us create a duplicate of an event that already exists.
             // RequireCollection throws a transient so the run aborts cleanly instead.
-            var arr  = RequireCollection(json, url);
+            var arr  = GraphJsonHttp.RequireCollection(json, url);
             if (arr.Count == 0) continue;
 
             var ev   = arr[0]!;
@@ -155,7 +135,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
             {
                 if (!_bodyCacheBySourceId.TryGetValue(externalId, out var cached))
                 {
-                    var bodyJson = await SendJsonAsync(HttpMethod.Get,
+                    var bodyJson = await _io.SendJsonAsync(HttpMethod.Get,
                         $"me/events/{Uri.EscapeDataString(id)}?$select=body", null, ct).ConfigureAwait(false);
                     cached = bodyJson["body"]?["content"]?.Value<string>() ?? "";
                     _bodyCacheBySourceId[externalId] = cached;
@@ -175,7 +155,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         if (draft       == null)                   throw new ArgumentNullException(nameof(draft));
 
         var body = BuildEventJson(draft, forUpdate: false).ToString(Formatting.None);
-        var json = await SendJsonAsync(HttpMethod.Post,
+        var json = await _io.SendJsonAsync(HttpMethod.Post,
             $"me/calendars/{Uri.EscapeDataString(calendarId)}/events", body, ct).ConfigureAwait(false);
 
         return json["id"]?.Value<string>() ?? "";
@@ -190,7 +170,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         // the destination event is preserved. The reminder is set ONLY at create time (the source has
         // no per-event reminder to mirror, so once created it is the user's to manage).
         var body = BuildEventJson(draft, forUpdate: true).ToString(Formatting.None);
-        await SendJsonAsync(new HttpMethod("PATCH"),
+        await _io.SendJsonAsync(new HttpMethod("PATCH"),
             $"me/events/{Uri.EscapeDataString(eventId)}", body, ct).ConfigureAwait(false);
     }
 
@@ -198,7 +178,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
     {
         if (string.IsNullOrWhiteSpace(eventId)) throw new ArgumentException("eventId required.", nameof(eventId));
 
-        await SendJsonAsync(HttpMethod.Delete,
+        await _io.SendJsonAsync(HttpMethod.Delete,
             $"me/events/{Uri.EscapeDataString(eventId)}", null, ct).ConfigureAwait(false);
     }
 
@@ -213,7 +193,7 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         var end   = toUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ",   CultureInfo.InvariantCulture);
 
         var expand =
-            $"singleValueExtendedProperties($filter=id eq '{EscapeOData(_extendedPropertyId)}')";
+            $"singleValueExtendedProperties($filter=id eq '{GraphJsonHttp.EscapeOData(_extendedPropertyId)}')";
 
         var url =
             $"me/calendars/{Uri.EscapeDataString(calendarId)}/calendarView" +
@@ -227,8 +207,8 @@ public sealed class GraphCalendarTarget : ICalendarTarget
 
         while (!string.IsNullOrEmpty(url))
         {
-            var json = await SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
-            var arr  = RequireCollection(json, url);
+            var json = await _io.SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
+            var arr  = GraphJsonHttp.RequireCollection(json, url);
 
             foreach (var ev in arr)
             {
@@ -279,14 +259,14 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         if (string.IsNullOrWhiteSpace(pairId))     throw new ArgumentException("pairId required.", nameof(pairId));
 
         var filter =
-            $"singleValueExtendedProperties/Any(ep:ep/id eq '{EscapeOData(_pairPropertyId)}' " +
-            $"and ep/value eq '{EscapeOData(pairId)}')";
+            $"singleValueExtendedProperties/Any(ep:ep/id eq '{GraphJsonHttp.EscapeOData(_pairPropertyId)}' " +
+            $"and ep/value eq '{GraphJsonHttp.EscapeOData(pairId)}')";
 
         // Expand BOTH managed properties so the source id can be surfaced on the ref (the pair id
         // is the filter key; the source id is informational).
         var expand =
-            $"singleValueExtendedProperties($filter=id eq '{EscapeOData(_extendedPropertyId)}' " +
-            $"or id eq '{EscapeOData(_pairPropertyId)}')";
+            $"singleValueExtendedProperties($filter=id eq '{GraphJsonHttp.EscapeOData(_extendedPropertyId)}' " +
+            $"or id eq '{GraphJsonHttp.EscapeOData(_pairPropertyId)}')";
 
         var url =
             $"me/calendars/{Uri.EscapeDataString(calendarId)}/events" +
@@ -299,8 +279,8 @@ public sealed class GraphCalendarTarget : ICalendarTarget
 
         while (!string.IsNullOrEmpty(url))
         {
-            var json = await SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
-            var arr  = RequireCollection(json, url);
+            var json = await _io.SendJsonAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
+            var arr  = GraphJsonHttp.RequireCollection(json, url);
 
             foreach (var ev in arr)
             {
@@ -442,154 +422,4 @@ public sealed class GraphCalendarTarget : ICalendarTarget
         return json;
     }
 
-    private async Task<JObject> SendJsonAsync(HttpMethod method, string url, string? jsonBody, CancellationToken ct)
-    {
-        const int maxAttempts        = 3;
-        bool      unauthorizedRetried = false;
-        bool      forceRefreshNext    = false;
-
-        // Manual loop control instead of a for-loop: a 401 replay must not consume a
-        // retry slot (otherwise a single token-refresh consumes one of the three attempts
-        // budgeted for transient transport/throttling failures). We increment `attempt`
-        // only on paths that actually count as a retry.
-        int attempt = 1;
-        while (true)
-        {
-            using var request = new HttpRequestMessage(method, url);
-            if (jsonBody != null)
-                request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
-
-            var token = await _auth.GetAccessTokenAsync(forceRefresh: forceRefreshNext, ct).ConfigureAwait(false);
-            forceRefreshNext = false;
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            HttpResponseMessage? response = null;
-            string               body     = "";
-
-            try
-            {
-                response = await _http.SendAsync(request, ct).ConfigureAwait(false);
-                body     = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            }
-            catch (HttpRequestException ex)
-            {
-                // DNS, socket reset, TLS — transient transport failures deserve the same
-                // backoff treatment as a 503.
-                response?.Dispose();
-                if (attempt >= maxAttempts)
-                    throw new GraphRequestException(
-                        $"Graph transport error after {attempt} attempts: {ex.Message}. URL={url}", ex, isTransient: true);
-                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct).ConfigureAwait(false);
-                attempt++;
-                continue;
-            }
-            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
-            {
-                // HttpClient surfaces request timeouts as TaskCanceledException with an
-                // unsignalled token. Only retry when the caller did not cancel us.
-                response?.Dispose();
-                if (attempt >= maxAttempts)
-                    throw new GraphRequestException(
-                        $"Graph request timed out after {attempt} attempts. URL={url}", ex, isTransient: true);
-                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct).ConfigureAwait(false);
-                attempt++;
-                continue;
-            }
-
-            using (response)
-            {
-                // 401: replay once with a forced token refresh. The default silent path
-                // returns whatever bearer is currently cached, which is exactly the token
-                // that just got rejected. WithForceRefresh(true) bypasses that cache.
-                // This replay does not consume a retry slot — `attempt` is not incremented.
-                if (response.StatusCode == HttpStatusCode.Unauthorized && !unauthorizedRetried)
-                {
-                    unauthorizedRetried = true;
-                    forceRefreshNext    = true;
-                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct).ConfigureAwait(false);
-                    continue;
-                }
-
-                // Second 401 (or 401 we already replayed): the refreshed token was also
-                // rejected → credentials/consent problem, abort the run.
-                if (response.StatusCode == HttpStatusCode.Unauthorized)
-                {
-                    throw new AuthenticationFailedException(
-                        $"Graph returned 401 after refreshing the access token. " +
-                        $"URL={url}, Body={Truncate(body, 200)}");
-                }
-
-                // Retry on throttling (429) and on the transient 5xx gateway/server errors
-                // documented by Graph as safe to retry. 500/502/504 are bucketed with 503
-                // because Graph's load balancer occasionally surfaces them for the same
-                // transient conditions.
-                var status = (int)response.StatusCode;
-                if (status == 429 || status == 500 || status == 502 || status == 503 || status == 504)
-                {
-                    if (attempt >= maxAttempts)
-                        throw new GraphRequestException(
-                            $"Graph transient error after {attempt} attempts: {status} {response.ReasonPhrase}. " +
-                            $"URL={url}, Body={Truncate(body, 200)}", isTransient: true);
-
-                    var delay = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(2 * attempt);
-                    await Task.Delay(delay, ct).ConfigureAwait(false);
-                    attempt++;
-                    continue;
-                }
-
-                if (!response.IsSuccessStatusCode)
-                    throw new GraphRequestException(
-                        $"Graph request failed: {status} {response.ReasonPhrase}. " +
-                        $"URL={url}, Body={Truncate(body, 500)}");
-
-                // An empty 2xx body is legitimate for DELETE/PATCH (204 No Content) and is
-                // not a collection response, so callers that expect a collection guard the
-                // "value" key themselves. Return an empty object for the no-content case.
-                if (string.IsNullOrEmpty(body))
-                    return new JObject();
-
-                // A 2xx that does not parse as JSON is a malformed/truncated response, not a
-                // real payload. Treat it as a transient read error so the caller aborts the
-                // run (and the destructive sweep never sees an incomplete picture) instead of
-                // surfacing a raw JsonReaderException that would classify as Fatal.
-                try
-                {
-                    return JObject.Parse(body);
-                }
-                catch (JsonException ex)
-                {
-                    throw new GraphRequestException(
-                        $"Graph returned a 2xx response that did not parse as JSON. " +
-                        $"URL={url}, Body={Truncate(body, 200)}", ex, isTransient: true);
-                }
-            }
-        }
-    }
-
-    // Guards against silent truncation of a paginated Graph read. Every page of a Graph
-    // collection response — the first AND every page reached through @odata.nextLink —
-    // carries a "value" array, even the last page (where it is `value: []` with no
-    // nextLink). So:
-    //   * "value" present (incl. empty array) => a well-formed page; the empty array is the
-    //     normal end of pagination and must NOT be treated as an error.
-    //   * "value" absent entirely => a malformed 2xx page. Interpreting that as "no more
-    //     data / end of pages" would hand the caller a short collection, and for the sweep
-    //     enumeration that means deleting events from pages we never received. Abort the read
-    //     with a transient error so the run stops BEFORE the destructive mirror runs.
-    // (An empty or non-JSON body is already converted to a transient error in SendJsonAsync,
-    //  so it never reaches here.)
-    private static JArray RequireCollection(JObject json, string url)
-    {
-        if (json["value"] is JArray arr)
-            return arr;
-
-        throw new GraphRequestException(
-            $"Graph paged read returned a 2xx response with no 'value' collection; " +
-            $"treating as a truncated read rather than end-of-pages. URL={url}",
-            isTransient: true);
-    }
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s.Substring(0, max) + "…";
-
-    private static string EscapeOData(string value) => value.Replace("'", "''");
 }
