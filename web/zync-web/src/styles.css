@@ -1,0 +1,78 @@
+/* Design-token bridge: ui/css/tokens.css is the ONLY source of truth (web-ui spec §4).
+   The web defines NO color/spacing/radius/type value of its own — Tailwind utilities map
+   BY REFERENCE (var()) so a token change rethemes the vanilla app AND the web, and the
+   data-theme switch keeps working at runtime. Path is repo-relative: web/zync-web/src -> ui/. */
+@import "../../../ui/css/tokens.css";
+@import "tailwindcss";
+
+@theme inline {
+  /* surfaces */
+  --color-bg-0: var(--bg-0);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-surface: var(--surface-solid);
+  /* ink */
+  --color-ink-1: var(--ink-1);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  /* accents (aqua/cyan/blue rule; terra intentionally NOT mapped) */
+  --color-azure: var(--azure);
+  --color-azure-2: var(--azure-2);
+  --color-azure-soft: var(--azure-soft);
+  --color-azure-edge: var(--azure-edge);
+  --color-cyan: var(--cyan);
+  --color-cyan-soft: var(--cyan-soft);
+  --color-cyan-edge: var(--cyan-edge);
+  --color-aqua: var(--aqua);
+  --color-aqua-soft: var(--aqua-soft);
+  --color-aqua-edge: var(--aqua-edge);
+  /* semantic */
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-err: var(--err);
+  --color-err-soft: var(--err-soft);
+  /* controls + border-light elevation */
+  --color-ctrl-fill: var(--ctrl-fill);
+  --color-ctrl-stroke: var(--ctrl-stroke);
+  --color-ctrl-hover: var(--ctrl-hover);
+  --color-border-1: var(--border-1);
+  --color-border-2: var(--border-2);
+  /* radii */
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-pill: var(--r-pill);
+  /* type ramp */
+  --font-sans: var(--font);
+  --text-title: var(--t-title);
+  --text-title--line-height: var(--lh-title);
+  --text-body: var(--t-body);
+  --text-body--line-height: var(--lh-body);
+  --text-meta: var(--t-meta);
+  --text-meta--line-height: var(--lh-meta);
+  --text-micro: var(--t-micro);
+  --text-micro--line-height: var(--lh-micro);
+  /* spacing scale (the --s-* steps; Tailwind numeric spacing stays available too) */
+  --spacing-s1: var(--s-1);
+  --spacing-s2: var(--s-2);
+  --spacing-s3: var(--s-3);
+  --spacing-s4: var(--s-4);
+  --spacing-s5: var(--s-5);
+  --spacing-s6: var(--s-6);
+  --spacing-s7: var(--s-7);
+}
+
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--ink-1);
+  background: var(--bg-0);
+  -webkit-font-smoothing: antialiased;
+}
