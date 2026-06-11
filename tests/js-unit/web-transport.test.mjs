@@ -60,6 +60,10 @@ test('listCalendars -> GET /api/accounts/{ref}/calendars', () => {
     { method: 'GET', path: '/api/accounts/me%40test/calendars' });
 });
 
+test('getCalendarDay -> GET /api/calendar/day', () => {
+  assert.deepEqual(webRequestFor('getCalendarDay'), { method: 'GET', path: '/api/calendar/day' });
+});
+
 test('unlinkAccount -> DELETE /api/accounts/{ref}', () => {
   assert.deepEqual(webRequestFor('unlinkAccount', 'me@test'),
     { method: 'DELETE', path: '/api/accounts/me%40test' });

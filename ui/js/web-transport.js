@@ -66,6 +66,7 @@ export function webRequestFor(action, data) {
       return { method: 'GET', path: `/api/pairs/${enc(pairId)}/managed-count${q ? `?${q}` : ''}` };
     }
     case 'listAccounts':    return { method: 'GET', path: '/api/accounts' };
+    case 'getCalendarDay':  return { method: 'GET', path: '/api/calendar/day' };
     case 'listCalendars':   return { method: 'GET', path: `/api/accounts/${enc(data)}/calendars` };
     case 'unlinkAccount':   return { method: 'DELETE', path: `/api/accounts/${enc(data)}` };
     case 'createCalendar': {

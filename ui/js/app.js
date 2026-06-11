@@ -14,6 +14,7 @@ import { webRequestFor, statusFromPairs } from './web-transport.js';
 import { createRegistry } from './core/registry.js';
 import { calendarDot, clipboardDot, devicesDot } from './core/status-model.js';
 import { initPalette, registerPaletteSource } from './palette.js';
+import { registerHomeViews } from './views/home.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -330,14 +331,6 @@ const SERVICE_SHORT = { Outlook: 'OU', Gmail: 'GM', iCloud: 'IC', Work: 'WK' };
 function svcTone(svc) { return SERVICE_TONE[svc] || 'ink'; }
 function svcShort(svc) { return SERVICE_SHORT[svc] || svc.slice(0, 2).toUpperCase(); }
 
-const MODULES = [
-  { id: 'calendar',  title: 'Calendar Sync',  icon: 'calendar',  active: true,  stat: '2 calendars', sub: 'Last sync 2 min ago' },
-  { id: 'clipboard', title: 'Clipboard Sync', icon: 'clipboard', active: false, stat: 'Coming soon', sub: 'Mirror your clipboard across devices' },
-  { id: 'files',     title: 'File Sync',      icon: 'folder',    active: false, stat: 'Coming soon', sub: 'Keep folders in sync' },
-  { id: 'bookmarks', title: 'Bookmark Sync',  icon: 'bookmark',  active: false, stat: 'Coming soon', sub: 'Browser bookmarks, everywhere' },
-  { id: 'notes',     title: 'Notes Sync',     icon: 'note',      active: false, stat: 'Coming soon', sub: 'Sticky notes & memos' },
-  { id: 'tabs',      title: 'Tab Sync',       icon: 'tab',       active: false, stat: 'Coming soon', sub: 'Open tabs across browsers' },
-];
 
 const PAIRS = [
   {
@@ -398,16 +391,6 @@ const DISCOVERED = [
   { id: 'd4', name: 'Travel',            color: '#d97757', desc: '12 upcoming trips' },
   { id: 'd5', name: 'Holidays in Spain', color: '#9b7adf', desc: 'Subscribed · public' },
 ];
-
-const STATUS = {
-  ok:       { label: 'Connected',   dot: 'ok' },
-  syncing:  { label: 'Syncing…', dot: 'sync' },
-  success:  { label: 'Up to date',  dot: 'ok' },
-  error:    { label: 'Sync failed', dot: 'error' },
-  offline:  { label: 'Offline',     dot: 'offline' },
-  unpaired: { label: 'Not paired',  dot: 'warn' },
-  paused:   { label: 'Paused',      dot: 'warn' },
-};
 
 // ---------------- Live data (bridge) with mock fallback ----------------
 // When the native bridge is available every screen reads real data through these
@@ -925,164 +908,6 @@ function activityRow(row) {
     ),
     actionChip(row.action),
   );
-}
-
-// Real dashboard stats for ANY transport with a bridge (desktop App native/loopback AND the
-// browser web panel), derived from the pairs the shell already loads. "Items synced" sums
-// created+updated+deleted across each pair's lastResult; "Sync runs" counts pairs that have a
-// recorded run. The server's MirrorResult exposes no failure count, so "Conflicts" has no real
-// value to show: it renders an em-dash placeholder rather than a fabricated 0. Until the pairs
-// snapshot has loaded, every cell is an em-dash — never a demo number.
-function liveHomeStats() {
-  const dash = '—';
-  if (!live.loadedPairs) return { items: dash, runs: dash, conflicts: dash };
-  const pairs = live.pairs || [];
-  let items = 0, runs = 0;
-  pairs.forEach((p) => {
-    const lr = p && p.lastResult;
-    if (lr) {
-      runs += 1;
-      items += (lr.created || 0) + (lr.updated || 0) + (lr.deleted || 0);
-    }
-  });
-  return {
-    items: items.toLocaleString(),
-    runs: String(runs),
-    conflicts: dash,
-  };
-}
-
-// Real module tiles for any bridged transport. Only the Calendar module ships today; its tile
-// reflects the real pair state instead of the hardcoded demo ("2 calendars / Last sync 2 min
-// ago / Active"). With one or more active pairs it shows "Active" + the calendar count; with
-// none it shows an impersonal "Set up" state (no fake last-sync, no fake counts) while still
-// opening the Calendar screen so the user can add the first pair. The remaining modules stay
-// "Coming soon" exactly as in the catalog. Never returns the demo MODULES literals.
-function liveModules(activePairCount) {
-  const count = activePairCount || 0;
-  const calendar = count > 0
-    ? {
-        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: true, opens: true, route: 'calendar',
-        stat: `${count} ${count === 1 ? 'pair' : 'pairs'}`,
-        sub: live.loadedPairs ? 'Active sync pairs' : 'Loading…',
-      }
-    : {
-        id: 'calendar', title: 'Calendar Sync', icon: 'calendar', active: false, opens: true, route: 'calendar',
-        stat: '', sub: live.loadedPairs ? 'No pairs yet' : 'Loading…',
-      };
-  // Reuse the catalog for the remaining modules so titles/icons/sub stay in one place. Clipboard Sync
-  // is shipped but DESKTOP-ONLY (it needs native clipboard access), so it opens its screen only in the
-  // App; in the web panel it stays "coming soon" like the not-yet-shipped modules.
-  const rest = MODULES.filter((m) => m.id !== 'calendar').map((m) => {
-    if (m.id === 'clipboard' && Bridge.desktopApp) {
-      // The tile opens the in-app clipboard VIEW (the shared history with copy/delete), not the
-      // settings screen. It reads "Active" when this device is registered AND sending or receiving;
-      // otherwise "Set up". The device roster is lazy-loaded by renderHome so the state is honest.
-      const active = clipboardActive();
-      return {
-        ...m, opens: true, route: 'clipboard', active, stat: '',
-        sub: active ? 'Mirroring your clipboard' : 'Mirror your clipboard across devices',
-      };
-    }
-    return { ...m, opens: false };
-  });
-  return [calendar, ...rest];
-}
-
-// ---------------- Screen: Home ----------------
-function renderHome(root) {
-  const cfg = STATUS[state.sync];
-  const statusLabel =
-    state.sync === 'syncing' ? 'Syncing…' :
-    state.sync === 'offline' ? 'Offline' :
-    state.sync === 'error' ? 'Sync failed' :
-    state.sync === 'unpaired' ? 'Not paired' : 'All systems synced';
-
-  root.append(viewHeader('Dashboard'));
-
-  const stat = (val, lab) => el('div', { class: 'stat' },
-    el('div', { class: 'stat__val num', text: val }),
-    el('div', { class: 'stat__lab', text: lab }),
-  );
-
-  // In any real transport (desktop App or web panel) we must never show fabricated demo
-  // numbers to a real signed-in user. Derive the dashboard stats from the real pairs the shell
-  // already loads; where no real value exists yet (snapshot not loaded) fall back to an em-dash
-  // placeholder. The literal 1,248 / 24 / 0 demo numbers are kept ONLY for the standalone mock
-  // (file://) demo. On a fresh, unpaired first run with a bridge, every cell is an em-dash.
-  const homeStats = Bridge.available ? liveHomeStats() : { items: '1,248', runs: '24', conflicts: '0' };
-
-  root.append(el('div', { class: 'glass glass--card stats-card' },
-    el('div', { class: 'stats-card__hd' },
-      el('span', { class: 'status-dot', dataset: { state: cfg.dot } }),
-      el('span', { class: 'stats-card__status', text: statusLabel }),
-      el('span', { class: 'stats-card__sub', text: Bridge.available ? 'LAST RUN' : 'THIS WEEK' }),
-    ),
-    el('div', { class: 'stats-grid' },
-      stat(homeStats.items, 'Items synced'),
-      el('div', { class: 'stat__sep' }),
-      stat(homeStats.runs, 'Sync runs'),
-      el('div', { class: 'stat__sep' }),
-      stat(homeStats.conflicts, 'Conflicts'),
-    ),
-  ));
-
-  // Modules summary line: "N active · M available". In any real transport, N is the count of
-  // active real pairs (0 on a fresh unpaired run); M stays the catalog size (the single Calendar
-  // module is the only one shipped today, so "available" mirrors the catalog count). Mock keeps
-  // its demo line ("1 active").
-  const activePairCount = (live.pairs || []).filter((p) => p && p.state === 'active').length;
-  const moduleActive = Bridge.available ? String(activePairCount) : '1';
-  root.append(el('div', { class: 'section-head' },
-    el('span', { class: 'section-head__title', text: 'Sync modules' }),
-    el('span', { class: 'section-head__action', style: 'pointer-events:none;color:var(--ink-3)' },
-      el('span', { class: 'num', text: moduleActive }), ' active · ', el('span', { class: 'num', text: '5' }), ' available'),
-  ));
-
-  // Any real transport: ensure the pairs snapshot the stats/modules above derive from is loaded,
-  // and repaint once it lands (the first home paint may precede any pairs fetch). pairsAttempted
-  // fires this at most once so a 401/empty response does not loop.
-  if (Bridge.available && !live.loadedPairs && !live.loadingPairs && !live.pairsAttempted) {
-    live.pairsAttempted = true;  // fire once; rerenderInPlace below must not re-trigger this on a 401
-    loadPairs().then(() => { if (state.view === 'home') rerenderInPlace(); });
-  }
-
-  // Desktop App: load the clipboard roster once so the Clipboard tile can show the right "Active" /
-  // "Set up" chip (registered AND send-or-receive). loadClipboardDevices is once-only and repaints
-  // home when it lands. Web panel has no clipboard module, so this is App-only.
-  if (Bridge.desktopApp) loadClipboardDevices('home');
-
-  // In a real transport the module tiles must reflect the real state: with no active pairs the
-  // Calendar module is "not configured" (inactive, no fake "2 calendars / 2 min ago" line),
-  // never the hardcoded demo. Mock keeps the demo MODULES untouched for the standalone file://
-  // walkthrough.
-  const modules = Bridge.available ? liveModules(activePairCount) : MODULES;
-  const grid = el('div', { class: 'module-grid' });
-  modules.forEach((m) => {
-    // A tile is navigable (clickable) when it is active OR explicitly opens (the shipped Calendar
-    // module always opens its screen even with zero pairs, so the user can add the first pair).
-    const navigable = m.active || m.opens;
-    const footChip = m.active
-      ? el('span', { class: 'chip chip--ok' },
-          el('span', { class: 'status-dot', dataset: { state: 'ok' }, style: 'width:6px;height:6px' }), 'Active')
-      : el('span', { class: 'chip chip--skipped', text: m.opens ? 'Set up' : 'Soon' });
-    const tile = el('button', {
-      class: 'module-tile glass',
-      dataset: { active: String(m.active) },
-      disabled: !navigable,
-      onclick: () => { if (navigable) navigate(m.route || 'calendar'); },
-    },
-      el('div', { class: 'module-tile__icon', html: icon(m.icon, { size: 20, stroke: 1.6 }) }),
-      el('div', { class: 'module-tile__title', text: m.title }),
-      el('div', { class: 'module-tile__sub', text: m.sub }),
-      el('div', { class: 'module-tile__foot' },
-        footChip,
-        el('span', { class: 'module-tile__stat num', text: m.stat }),
-      ),
-    );
-    grid.append(tile);
-  });
-  root.append(grid);
 }
 
 // ---------------- Screen: Calendar Sync (accordion) ----------------
@@ -4797,13 +4622,35 @@ async function boot() {
   rerender();
 }
 
+// ---------------- Shared context para los módulos de vista ----------------
+// Cada ui/js/views/<name>.js exporta register<Name>Views(ctx) y recibe ESTE objeto.
+// Las vistas no importan app.js (cero ciclos); todo lo compartido viaja por aquí.
+const ctx = {
+  // DOM + iconos
+  $, el, iconEl, icon, logoSvg, microsoftLogo,
+  // transporte + estado compartido
+  Bridge, state, live, settings, serverHealth, identityAuth, webAuth,
+  // navegación + repintado
+  registry, navigate, rerender, rerenderInPlace, softRepaint,
+  // feedback
+  announce, openModal,
+  // fragments compartidos
+  viewHeader, navRow, actionChip, activityRow, pairBadge,
+  // datos compartidos
+  loadPairs, loadAccounts, loadCalendars, loadLocalCalendars, ensurePairCalendarNames,
+  pairViewModel, resolveCalendarLabel, comAvailable, fmtMMSS,
+  loadClipboardDevices, refreshClipboardDevices, persistClipboardSettings, thisClipboardDevice, clipboardActive,
+  loadClipboardHistory,
+  // sync runtime
+  runPairNow, setPairState, deletePair, syncAllPairs,
+  // tema + versión
+  applyTheme, storedTheme, resolveTheme, VERSION,
+};
+
 // ---------------- View registry (fase de transición) ----------------
 // Las render functions siguen viviendo en este archivo; cada tarea de extracción las muda
 // a ui/js/views/<name>.js conservando estos ids. El sidebar se construye desde nav/statusDot.
-registry.register('home', {
-  render: renderHome, soft: true,
-  nav: { label: 'Home', icon: 'home', order: 1, section: 'modules' },
-});
+registerHomeViews(ctx);
 registry.register('calendar', {
   render: renderCalendar, soft: true,
   nav: { label: 'Calendar', icon: 'calendar', order: 2, section: 'modules' },
