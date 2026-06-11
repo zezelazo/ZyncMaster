@@ -576,16 +576,11 @@ function scheduleNextHealthProbe() {
     serverHealth.error = true;
     clearHealthPoll();
     rerender();
-    // The error screen is now the determined paint — hand the splash off to it.
-    maybeDismissLaunch();
     return;
   }
   serverHealth.checked = true;
   serverHealth.waking = true;
   rerender();
-  // The "waking up" warm-up screen owns the view while we keep polling; drop the splash onto it
-  // rather than holding the splash for the (still pending) identity gate.
-  maybeDismissLaunch();
   clearHealthPoll();
   healthPoll = setTimeout(probeServerHealth, HEALTH_POLL_MS);
 }
@@ -613,8 +608,7 @@ function onServerReady() {
       if (signedIn) ensureDeviceRegistered();
       rerender();
     })
-    .catch(() => { identityAuth.resolved = true; identityAuth.signedIn = false; rerender(); })
-    .finally(() => maybeDismissLaunch(450));
+    .catch(() => { identityAuth.resolved = true; identityAuth.signedIn = false; rerender(); });
 }
 
 // ensureDeviceRegistered — fire-and-forget request that the host auto-register THIS device against
@@ -3686,44 +3680,6 @@ function signOutApp() {
     });
 }
 
-// renderServerWarmup — the desktop App server warm-up gate. Shown before the identity gate while
-// the Azure F1 server cold-starts. Three states: connecting (first probe), waking (cold start in
-// progress, with a subtle border-light spinner), and error (budget spent → friendly message +
-// Retry). Liquid Glass card; decorative glow lives on the spinner's own ring, nothing flickers on
-// hover and the Retry button stays clickable.
-function renderServerWarmup(root) {
-  // Error state: the warm-up budget ran out without a healthy answer.
-  if (serverHealth.error) {
-    const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' },
-      el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
-      el('div', { class: 'pair-title', text: 'Can’t reach Zync Master' }),
-      el('div', { class: 'pair-sub', text: 'Can’t reach the Zync Master server right now. Check your connection and try again.' }),
-      el('div', { class: 'identity-error', role: 'alert', style: 'margin-top:2px' },
-        iconEl('alert', 13, 1.8), el('span', { text: 'The server did not respond in time.' })),
-      el('button', { class: 'btn btn--primary', style: 'align-self:stretch', onclick: () => retryServerHealth() },
-        iconEl('sync', 14, 1.8), el('span', { text: 'Retry' })),
-    );
-    root.append(card);
-    return;
-  }
-
-  // Connecting (first probe) vs waking (cold start in progress).
-  const waking = serverHealth.waking;
-  const title = waking ? 'Waking up the server…' : 'Connecting to Zync Master…';
-  const sub = waking
-    ? 'This can take a moment on first launch — the server is starting up.'
-    : 'Reaching the Zync Master server.';
-  const card = el('div', { class: 'glass glass--card pair-card identity-card warmup-card', style: 'margin-top:14px' },
-    el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
-    el('div', { class: 'pair-title', text: title }),
-    el('div', { class: 'pair-sub', text: sub }),
-    el('div', { class: 'identity-waiting warmup-waiting' },
-      el('span', { class: 'spinner warmup-spinner' }),
-      el('span', { class: 'identity-waiting__txt', text: waking ? 'Waking up…' : 'Connecting…' })),
-  );
-  root.append(card);
-}
-
 // renderIdentitySignIn — the desktop App identity gate. Liquid Glass card with the Microsoft
 // 4-square button and an email magic-link form. States: idle, loading (login in flight), error,
 // and the "magic-link sent" confirmation. Decorative glow lives on the buttons' own
@@ -4270,6 +4226,24 @@ function renderShellChrome() {
   shell.classList.toggle('shell--gated', shellGated());
   renderSidebar();
   renderViewHeader();
+  renderOfflineBanner();
+}
+
+// Banner offline no-bloqueante (spec §3.1): la app SIEMPRE renderiza; si el server no
+// responde se avisa arriba del contenido. Settings, pares cacheados y export COM siguen
+// accesibles. El retry reusa la misma lógica del viejo gate de warm-up.
+function renderOfflineBanner() {
+  const banner = $('#offlineBanner');
+  if (!banner) return;
+  const show = Bridge.desktopApp && serverHealth.checked && !serverHealth.ok;
+  banner.hidden = !show;
+  if (!show) { banner.replaceChildren(); return; }
+  banner.replaceChildren(
+    el('span', { class: 'side-dot' }),
+    el('span', { text: serverHealth.waking ? 'Connecting to the server…' : 'Server unreachable — working offline.' }),
+    el('span', { class: 'offline-banner__spacer' }),
+    el('button', { class: 'btn', type: 'button', onclick: () => retryServerHealth() }, 'Retry'),
+  );
 }
 
 // ---------------- Per-pair .txt export popup ----------------
@@ -4515,18 +4489,6 @@ function rerender() {
     return;
   }
 
-  // Desktop App server warm-up gate: in native/loopback, this gate sits IN FRONT of the identity
-  // gate. While the server is cold-starting (Azure F1) we show "connecting / waking up" with a
-  // spinner; if the warm-up budget runs out we show a friendly error + Retry. Only once the
-  // server is alive (serverHealth.ok) does the identity gate below get a chance to paint. The web
-  // panel and mock demo do NOT use this gate.
-  if (Bridge.desktopApp && !serverHealth.ok && (serverHealth.waking || serverHealth.error || !serverHealth.checked)) {
-    renderServerWarmup(root);
-    void root.offsetWidth;
-    root.classList.add('enter');
-    return;
-  }
-
   // Desktop App identity gate: in native/loopback, until getIdentityState reports signed-in the
   // only screen is the identity sign-in card (Microsoft / magic-link). The web panel and the mock
   // demo do NOT use this gate.
@@ -4755,64 +4717,12 @@ function wireTitlebar() {
   });
 }
 
-// ---------------- Launch splash ----------------
-let launchDismissed = false;
-function dismissLaunch() {
-  if (launchDismissed) return;
-  launchDismissed = true;
-  const launch = $('#launch');
-  if (!launch) return;
-  launch.classList.add('is-out');
-  launch.addEventListener('animationend', () => { launch.hidden = true; }, { once: true });
-  setTimeout(() => { launch.hidden = true; }, 800); // safety in case animationend never fires
-}
-function playLaunch() {
-  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // Hard cap so the splash ALWAYS clears, even with no bridge, a wedged gate, or a slow host.
-  // This is the only unconditional dismissal; every other path goes through maybeDismissLaunch,
-  // which keeps the splash up until the gate that will own the screen has settled.
-  setTimeout(dismissLaunch, reduce ? 4000 : 6000);
-}
-
-// splashGatesSettled — true once the screen that will replace the splash is determined, so the
-// splash can clear WITHOUT flashing an empty/half-built dashboard before a gate decides. Single
-// source of truth for "is it safe to drop the splash":
-//   * web panel    — the session probe has answered (webAuth.resolved); the next paint is either
-//                    the sign-in gate or the dashboard.
-//   * desktop app  — the warm-up gate decides first: while the health probe is still pending we
-//                    hold the splash; once it errors or is still waking, that gate screen is the
-//                    next paint, so we may drop. Only when the server is healthy do we additionally
-//                    wait for the identity gate to resolve (so we never flash an empty dashboard in
-//                    the gap between health-ok and identity-resolved).
-//   * mock / other — no gates, always settled.
-function splashGatesSettled() {
-  if (Bridge.webPanel) return webAuth.resolved;
-  if (Bridge.desktopApp) {
-    if (!serverHealth.checked) return false;
-    if (serverHealth.error || !serverHealth.ok) return true;
-    return identityAuth.resolved;
-  }
-  return true;
-}
-
-// maybeDismissLaunch — the SINGLE deterministic dismissal point. No-op until the gates settle, so
-// callers can fire it freely from every settle path (boot, health probe, onServerReady, the
-// unauthorized gate) without racing two independent timers against the gate. The optional floor
-// gives the splash a brief minimum hold so a near-instant host still feels intentional.
-function maybeDismissLaunch(floorMs) {
-  if (!splashGatesSettled()) return;
-  if (floorMs) setTimeout(dismissLaunch, floorMs);
-  else dismissLaunch();
-}
-
 // ---------------- Boot ----------------
 async function boot() {
   hydrateIcons();
   applyTheme(storedTheme());
   wireTitlebar();
   const tag = $('#pausedTag'); if (tag) tag.hidden = true;
-  // Single source of truth for the splash version: write VERSION over the HTML placeholder.
-  const launchVer = $('#launchVersion'); if (launchVer) launchVer.textContent = `v${VERSION}`;
 
   // Settle the http(s) transport (web vs the App's loopback host) before the first
   // data-driven paint. Native + mock resolve synchronously; this only awaits the probe.
@@ -4820,7 +4730,7 @@ async function boot() {
   document.documentElement.setAttribute('data-transport', Bridge.mode);
 
   // Web panel: a 401 from any call drops us back to the sign-in gate.
-  if (Bridge.webPanel) Bridge.onUnauthorized(() => { webAuth.resolved = true; webAuth.signedIn = false; rerender(); maybeDismissLaunch(); });
+  if (Bridge.webPanel) Bridge.onUnauthorized(() => { webAuth.resolved = true; webAuth.signedIn = false; rerender(); });
 
   if (Bridge.available) {
     Bridge.start();
@@ -4862,20 +4772,15 @@ async function boot() {
       probeServerHealth();
     }
 
-    // Dismiss the splash shortly after the first status settles (with a small floor) so the
-    // app feels instant when the host responds quickly, instead of a fixed long hold.
+    // First status settle. In the web panel getStatus IS the sign-in gate, so it resolves
+    // webAuth and repaints; in the desktop app the health/identity gates own the first paint.
     Bridge.call('getStatus')
       .then((s) => { applyNativeStatus(s); if (Bridge.webPanel) { webAuth.resolved = true; rerender(); } })
       .catch(() => {
         // In the web panel a failed getStatus (typically 401) is the unauthenticated state:
         // resolve the gate so the sign-in screen shows instead of an empty dashboard.
         if (Bridge.webPanel) { webAuth.resolved = true; webAuth.signedIn = false; rerender(); }
-      })
-      // Route through the single gate-aware dismissal. In the web panel getStatus IS the gate, so
-      // this drops the splash; in the desktop app the health/identity gates own dismissal (this is
-      // a no-op until they settle), so getStatus resolving early can no longer reveal the dashboard
-      // before those gates have decided what to paint.
-      .finally(() => maybeDismissLaunch(450));
+      });
   }
 
   // Ctrl+1..9 salta a los módulos del sidebar en su orden visible (spec §3.2).
@@ -4888,11 +4793,6 @@ async function boot() {
   });
 
   rerender();
-  playLaunch();
-  // Non-bridge transports (the mock/demo panel) have no gates and no inbound settle callback, so
-  // dismiss as soon as the first paint is up — splashGatesSettled() is already true for them, and
-  // this keeps the demo splash short instead of waiting on playLaunch's hard cap.
-  if (!Bridge.available) maybeDismissLaunch(450);
 }
 
 // ---------------- View registry (fase de transición) ----------------
