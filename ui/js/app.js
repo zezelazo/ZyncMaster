@@ -13,6 +13,7 @@ import { icon, logoSvg, microsoftLogo, hydrateIcons } from './icons.js';
 import { webRequestFor, statusFromPairs } from './web-transport.js';
 import { createRegistry } from './core/registry.js';
 import { calendarDot, clipboardDot, devicesDot } from './core/status-model.js';
+import { initPalette, registerPaletteSource } from './palette.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -4720,6 +4721,7 @@ function wireTitlebar() {
 // ---------------- Boot ----------------
 async function boot() {
   hydrateIcons();
+  initPalette();
   applyTheme(storedTheme());
   wireTitlebar();
   const tag = $('#pausedTag'); if (tag) tag.hidden = true;
@@ -4822,6 +4824,56 @@ registry.register('config', {
 });
 registry.register('about', { render: renderAbout, parent: 'config' });
 registry.register('pairing', { render: renderPairing });
+
+// ---------------- Palette sources (v1: navegación + acciones + pairs + clipboard) ----------------
+registerPaletteSource(() => registry.navItems().map((v, i) => ({
+  group: 'Navigation',
+  label: `Go to ${v.nav.label}`,
+  hint: v.nav.section === 'modules' ? `Ctrl+${i + 1}` : '',
+  run: () => navigate(v.id),
+})));
+
+registerPaletteSource(() => {
+  const items = [
+    { group: 'Actions', label: 'Sync now', hint: 'all active pairs', run: () => syncAllPairs() },
+    { group: 'Actions', label: 'New sync pair', hint: 'Calendar', run: () => navigate('add-pair') },
+    { group: 'Actions', label: 'Add calendar account', hint: 'Calendar', run: () => { state.returnTo = state.view; navigate('add-calendar'); } },
+    { group: 'Actions', label: 'Toggle theme', hint: 'dark / light', run: () => { applyTheme(resolveTheme(storedTheme()) === 'dark' ? 'light' : 'dark'); rerender(); } },
+  ];
+  if (Bridge.desktopApp) {
+    items.push({ group: 'Actions', label: 'Open clipboard history', hint: 'Clipboard', run: () => navigate('clipboard') });
+    const latest = (live.clipboardHistory && live.clipboardHistory[0]) || null;
+    if (latest) items.push({
+      group: 'Actions', label: 'Copy latest clipboard item', hint: 'copies to clipboard',
+      run: () => { Bridge.call('copyClipboardEntry', String(latest.id)).then(() => announce('Copied.')).catch(() => {}); },
+    });
+  }
+  return items;
+});
+
+registerPaletteSource(() => (live.pairs || []).filter(Boolean).map((p) => ({
+  group: 'Sync pairs',
+  label: p.name || 'Sync pair',
+  hint: 'open pair',
+  run: () => { navigate('calendar'); },
+})));
+
+// Items recientes del clipboard como entradas del palette (spec §3.2: texto = primeras
+// palabras; acción = copiar). Misma normalización de tipo que board-model.clipboardRows.
+registerPaletteSource(() => {
+  if (!Bridge.desktopApp) return [];
+  return (live.clipboardHistory || []).slice(0, 5).filter((it) => it && it.id != null).map((it) => {
+    const t = (it.type ? String(it.type) : '').toLowerCase();
+    const words = it.text == null ? '' : String(it.text).replace(/\s+/g, ' ').trim().split(' ').slice(0, 6).join(' ');
+    const label = t === 'image' ? 'Image' : t === 'file' ? (words || 'File') : (words || 'Encrypted item');
+    return {
+      group: 'Clipboard',
+      label,
+      hint: 'copy',
+      run: () => Bridge.call('copyClipboardEntry', String(it.id)).then(() => announce('Copied.')).catch(() => {}),
+    };
+  });
+});
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
 else boot();

@@ -124,3 +124,53 @@ kbd.kbd {
 .offline-banner[hidden] { display: none; }
 .offline-banner .side-dot { background: var(--warn); }
 .offline-banner__spacer { flex: 1; }
+
+/* ---- command palette (overlay modal: glass atenuado permitido) ---- */
+.palette-overlay {
+  position: fixed; inset: 0;
+  background: rgba(5, 8, 16, 0.62);
+  z-index: 40;
+}
+.palette {
+  position: fixed; left: 50%; top: 16%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 48px));
+  overflow: hidden;
+  animation: palette-in var(--d-fast) var(--ease-out);
+}
+@keyframes palette-in { from { opacity: 0; transform: translateX(-50%) translateY(-6px); } to { opacity: 1; transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .palette { animation: none; } }
+.palette input {
+  width: 100%;
+  font: inherit; font-size: var(--t-title);
+  color: var(--ink-1);
+  background: none; border: 0; outline: 0;
+  padding: var(--s-4) var(--s-5);
+  border-bottom: 1px solid var(--border-1);
+}
+.palette input::placeholder { color: var(--ink-3); }
+.palette__list { max-height: 320px; overflow-y: auto; padding-bottom: var(--s-2); }
+.p-group {
+  font-size: var(--t-micro); font-weight: var(--w-micro);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-3);
+  padding: var(--s-3) var(--s-5) var(--s-1);
+}
+.p-item {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: 8px var(--s-5);
+  color: var(--ink-2);
+  font-size: var(--t-body);
+  cursor: pointer;
+}
+.p-item--sel { background: var(--azure-soft); color: var(--ink-1); box-shadow: inset 2px 0 0 var(--azure); }
+.p-item__lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p-item__m { color: var(--azure-2); font-weight: var(--w-title); }
+.p-item__hint { margin-left: auto; font-size: var(--t-micro); color: var(--ink-3); flex: none; }
+.p-empty { padding: var(--s-5); color: var(--ink-3); font-size: var(--t-body); text-align: center; }
+.palette__foot {
+  display: flex; gap: var(--s-4);
+  padding: var(--s-2) var(--s-5);
+  border-top: 1px solid var(--border-1);
+  font-size: var(--t-micro); color: var(--ink-3);
+}
