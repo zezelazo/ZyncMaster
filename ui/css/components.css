@@ -19,7 +19,7 @@
 .status-dot[data-state="offline"] { background: var(--ink-3);color: var(--ink-3); }
 
 .status-label {
-  font-size: 13px; font-weight: 600;
+  font-size: var(--t-body); font-weight: 600;
   color: var(--ink-1);
   letter-spacing: 0.01em;
 }
@@ -33,7 +33,7 @@
   gap: 7px;
   height: 34px;
   padding: 0 16px;
-  font-size: 13px; font-weight: 600;
+  font-size: var(--t-body); font-weight: 600;
   color: var(--ink-1);
   background: var(--ctrl-fill);
   border: 1px solid var(--ctrl-stroke);
@@ -115,7 +115,7 @@
 .identity-error {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 12px;
-  font-size: 12px; color: var(--err);
+  font-size: var(--t-meta); color: var(--err);
   background: var(--err-soft);
   border: 1px solid rgba(227,103,116,0.4);
   border-radius: var(--r-sm);
@@ -132,7 +132,7 @@
 }
 .identity-divider__line { flex: 1; height: 1px; background: var(--glass-stroke); }
 .identity-divider__txt {
-  font-size: 10.5px; font-weight: 600; letter-spacing: 0.10em;
+  font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.10em;
   color: var(--ink-3); text-transform: uppercase;
 }
 
@@ -143,7 +143,7 @@
 /* azure (aqua/blue) focus ring on the email field — matches the identity accent */
 .identity-email:focus { border-color: var(--azure-edge); box-shadow: 0 0 0 3px var(--azure-soft); }
 
-.identity-foot { font-size: 11px; color: var(--ink-3); line-height: 15px; }
+.identity-foot { font-size: var(--t-micro); color: var(--ink-3); line-height: var(--lh-micro); }
 
 /* "waiting for the magic link" state */
 .identity-waiting {
@@ -154,7 +154,7 @@
   border: 1px solid var(--azure-edge);
   border-radius: var(--r-pill);
 }
-.identity-waiting__txt { font-size: 12px; font-weight: 500; color: var(--azure-2); }
+.identity-waiting__txt { font-size: var(--t-meta); font-weight: 500; color: var(--azure-2); }
 
 /* spinner inside primary / generic */
 .spinner {
@@ -203,7 +203,7 @@
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   height: 22px; padding: 0 9px;
-  font-size: 10.5px; font-weight: 600;
+  font-size: var(--t-micro); font-weight: 600;
   letter-spacing: 0.04em;
   border-radius: var(--r-pill);
   border: 1px solid;
@@ -227,12 +227,12 @@
   margin: 18px 0 8px;
 }
 .section-head__title {
-  font-size: 11px; font-weight: 600;
+  font-size: var(--t-micro); font-weight: 600;
   color: var(--ink-3);
   text-transform: uppercase; letter-spacing: 0.10em;
 }
 .section-head__action {
-  font-size: 11px; font-weight: 500;
+  font-size: var(--t-micro); font-weight: 500;
   color: var(--ink-2);
   background: none; border: 0; cursor: pointer; padding: 4px 8px; border-radius: var(--r-xs);
 }
@@ -252,16 +252,16 @@
 .activity__row:hover { background: var(--ctrl-hover); }
 .activity__time {
   font-family: var(--font-num);
-  font-size: 11px; color: var(--ink-3);
+  font-size: var(--t-micro); color: var(--ink-3);
   font-variant-numeric: tabular-nums;
 }
 .activity__title {
-  font-size: 13px; color: var(--ink-1);
+  font-size: var(--t-body); color: var(--ink-1);
   font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .activity__sub {
-  font-size: 11px; color: var(--ink-3); margin-top: 1px;
+  font-size: var(--t-micro); color: var(--ink-3); margin-top: 1px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -274,7 +274,7 @@
 }
 .config-section__hd {
   padding: 8px 10px 6px;
-  font-size: 11px; font-weight: 600;
+  font-size: var(--t-micro); font-weight: 600;
   color: var(--ink-3);
   text-transform: uppercase; letter-spacing: 0.10em;
 }
@@ -287,8 +287,8 @@
   border-radius: var(--r-sm);
 }
 .cfg-row + .cfg-row { border-top: 1px solid var(--glass-stroke-2); }
-.cfg-row__label { font-size: 13px; color: var(--ink-1); font-weight: 500; }
-.cfg-row__hint  { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.cfg-row__label { font-size: var(--t-body); color: var(--ink-1); font-weight: 500; }
+.cfg-row__hint  { font-size: var(--t-micro); color: var(--ink-3); margin-top: 2px; }
 
 /* Navigable settings row (Calendar, About). Label/sublabel left, optional value + chevron right,
    all vertically centred. Fixes the previously misaligned About chevron. */
@@ -309,10 +309,10 @@
 }
 .nav-row:hover { background: var(--ctrl-fill); }
 .nav-row__text { flex: 1 1 auto; min-width: 0; }
-.nav-row__label { font-size: 13px; color: var(--ink-1); font-weight: 500; }
-.nav-row__sub   { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.nav-row__label { font-size: var(--t-body); color: var(--ink-1); font-weight: 500; }
+.nav-row__sub   { font-size: var(--t-micro); color: var(--ink-3); margin-top: 2px; }
 .nav-row__right { display: flex; align-items: center; gap: 8px; flex: none; }
-.nav-row__value { font-size: 11px; color: var(--ink-3); }
+.nav-row__value { font-size: var(--t-micro); color: var(--ink-3); }
 .nav-row__chevron {
   display: inline-flex;
   align-items: center;
@@ -325,8 +325,8 @@
   padding: 18px 12px;
   text-align: center;
 }
-.empty-cal__title { font-size: 13px; font-weight: 600; color: var(--ink-1); }
-.empty-cal__sub   { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+.empty-cal__title { font-size: var(--t-body); font-weight: 600; color: var(--ink-1); }
+.empty-cal__sub   { font-size: var(--t-micro); color: var(--ink-3); margin-top: 4px; }
 
 /* Connect-a-calendar-account block (button + reuse hint), kept full-width and left-aligned. */
 .connect-cal__wrap { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -356,7 +356,7 @@
 }
 .acct-text { min-width: 0; }
 .acct-text__title {
-  font-size: 13px;
+  font-size: var(--t-body);
   font-weight: 600;
   color: var(--ink-1);
   white-space: nowrap;
@@ -369,7 +369,7 @@
 .acct-disconnect:hover { color: var(--err); }
 
 /* Disconnect confirm modal copy. */
-.disconnect-modal__lead { font-size: 14px; font-weight: 600; color: var(--ink-1); }
+.disconnect-modal__lead { font-size: var(--t-body); font-weight: 600; color: var(--ink-1); }
 .disconnect-modal__detail { margin-top: 8px; line-height: 17px; }
 .modal__foot .acct-disconnect--confirm { background: var(--err); border-color: var(--err); }
 
@@ -379,7 +379,7 @@
   border: 1px solid var(--ctrl-stroke);
   border-radius: var(--r-sm);
   color: var(--ink-1);
-  font-family: inherit; font-size: 13px;
+  font-family: inherit; font-size: var(--t-body);
   padding: 0 10px;
   min-width: 160px;
   outline: none;
@@ -479,7 +479,7 @@
   display: inline-flex; align-items: center; gap: 5px;
   border: 0; background: transparent;
   border-radius: var(--r-pill);
-  font-size: 12px; font-weight: 600;
+  font-size: var(--t-meta); font-weight: 600;
   color: var(--ink-2);
   cursor: pointer;
   transition: color var(--d-base), background var(--d-base);
@@ -502,7 +502,7 @@
   width: 22px; height: 22px; border-radius: 50%;
   display: grid; place-items: center;
   background: var(--ctrl-fill); border: 1px solid var(--ctrl-stroke);
-  font-size: 11px; font-weight: 700; color: var(--ink-3);
+  font-size: var(--t-micro); font-weight: 700; color: var(--ink-3);
 }
 .stepper__dot svg { width: 11px; height: 11px; }
 .stepper__dot[data-state="active"] { background: var(--azure); border-color: var(--azure-edge); color: #fff; }
@@ -514,7 +514,7 @@
 .stepper__line[data-state="active"] { background: linear-gradient(90deg, var(--ok), var(--azure)); }
 .stepper__label {
   margin-top: 4px;
-  font-size: 11px; color: var(--ink-3); font-weight: 600;
+  font-size: var(--t-micro); color: var(--ink-3); font-weight: 600;
 }
 
 .pair-card {
@@ -522,14 +522,14 @@
   display: grid; gap: 14px;
   text-align: center;
 }
-.pair-title { font-size: 18px; font-weight: 600; color: var(--ink-1); }
-.pair-sub   { font-size: 13px; color: var(--ink-2); line-height: 18px; }
+.pair-title { font-size: var(--t-title); font-weight: 600; color: var(--ink-1); }
+.pair-sub   { font-size: var(--t-body); color: var(--ink-2); line-height: var(--lh-body); }
 .pair-link {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 8px 12px;
   background: var(--ctrl-fill); border: 1px solid var(--ctrl-stroke);
   border-radius: var(--r-sm);
-  font-family: var(--font-num); font-size: 12px;
+  font-family: var(--font-num); font-size: var(--t-meta);
   color: var(--ink-2);
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer;
@@ -599,8 +599,8 @@
   color: var(--ink-2);
 }
 .empty__icon svg { width: 22px; height: 22px; }
-.empty__title { font-size: 15px; font-weight: 600; color: var(--ink-1); }
-.empty__sub   { font-size: 12px; color: var(--ink-3); max-width: 280px; line-height: 17px; }
+.empty__title { font-size: var(--t-title); font-weight: 600; color: var(--ink-1); }
+.empty__sub   { font-size: var(--t-meta); color: var(--ink-3); max-width: 280px; line-height: var(--lh-meta); }
 
 @media (prefers-reduced-motion: reduce) {
   /* Spinner: hold still rather than spin (the "waiting" copy still reads as in-progress). */
@@ -649,7 +649,7 @@
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; margin-bottom: 12px;
 }
-.modal__title { font-size: 15px; font-weight: 600; color: var(--ink-1); }
+.modal__title { font-size: var(--t-title); font-weight: 600; color: var(--ink-1); }
 .modal__close {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; flex: none;
@@ -676,7 +676,7 @@
   border: 1px dashed var(--ctrl-stroke);
   background: transparent; color: var(--azure);
   border-radius: var(--r-sm); cursor: pointer;
-  font-size: 12px; font-weight: 600;
+  font-size: var(--t-meta); font-weight: 600;
   transition: border-color var(--d-fast), background var(--d-fast);
 }
 .cal-new__trigger:hover { border-color: var(--azure-edge); background: var(--azure-soft); }
@@ -727,10 +727,10 @@
 }
 .cal-acct-head.is-open .cal-acct-head__chev { transform: rotate(0deg); }
 .cal-acct-head__name {
-  flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.cal-acct-head__sum { flex: none; font-size: 11px; color: var(--ink-3); }
+.cal-acct-head__sum { flex: none; font-size: var(--t-micro); color: var(--ink-3); }
 .cal-acct-head.is-active,
 .cal-acct-head.is-active .cal-acct-head__chev { color: var(--azure); }
 .cal-acct-body { padding-bottom: 4px; }
@@ -747,7 +747,7 @@
   border-left: 3px solid var(--warn);
 }
 .cal-switch-confirm__text {
-  font-size: 12px;
+  font-size: var(--t-meta);
   color: var(--ink-2);
   line-height: 1.45;
 }

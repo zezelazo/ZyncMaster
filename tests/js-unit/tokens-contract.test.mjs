@@ -82,4 +82,16 @@ test('.glass--overlay exists with blur <= 16px', () => {
   assert.ok(parseInt(m[1], 10) <= 16, `overlay blur ${m[1]}px > 16px`);
 });
 
+// ---- ramp tipográfico (spec §2 principio 4): cero font-size crudos sin exención ---------
+const shellCss = css('shell.css');
+for (const [name, text] of [['shell.css', shellCss], ['components.css', components], ['layout.css', layout]]) {
+  test(`${name}: no raw font-size (use var(--t-*) or annotate /* ramp-exempt */)`, () => {
+    const offenders = [];
+    for (const line of (text || '').split('\n')) {
+      if (/font-size:\s*[\d.]+(px|rem|em)/.test(line) && !line.includes('ramp-exempt')) offenders.push(line.trim());
+    }
+    assert.deepEqual(offenders, [], `${offenders.length} raw font-size line(s):\n${offenders.join('\n')}`);
+  });
+}
+
 console.log(`\n${passed} passed${process.exitCode ? ' (with failures)' : ''}`);
