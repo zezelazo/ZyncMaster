@@ -19,6 +19,7 @@ import { initPalette, registerPaletteSource } from './palette.js';
 import { showToast } from './toast.js';
 import { registerHomeViews } from './views/home.js';
 import { registerCalendarViews } from './views/calendar.js';
+import { registerCalendarDayView } from './views/calendar-day.js';
 import { registerClipboardViews } from './views/clipboard.js';
 import { registerDevicesViews } from './views/devices.js';
 import { registerSettingsViews } from './views/settings.js';
@@ -1778,6 +1779,7 @@ const ctx = {
 registerClipboardViews(ctx);
 registerHomeViews(ctx);
 registerCalendarViews(ctx);
+registerCalendarDayView(ctx);
 registerDevicesViews(ctx);
 registerSettingsViews(ctx);
 registerAuthViews(ctx);

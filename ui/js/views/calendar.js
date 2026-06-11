@@ -287,7 +287,14 @@ export function registerCalendarViews(ctx) {
   function renderCalendar(root) {
     const addPairBtn = el('button', { class: 'btn btn--ghost', style: 'height:28px;padding:0 8px', onclick: () => navigate('add-pair') },
       iconEl('plus', 12, 2), el('span', { style: 'font-size:12px', text: 'Add pair' }));
-    root.append(viewHeader('Calendar Sync', { onBack: () => navigate('home'), action: addPairBtn }));
+    // Calendar v2 — entry to the unified day/week view (a sub-route of Calendar, no nav entry).
+    const dayViewBtn = el('button',
+      { class: 'btn btn--ghost', style: 'height:28px;padding:0 8px', id: 'openCalendarDay',
+        onclick: () => navigate('calendar-day') },
+      iconEl('calendar', 12, 2), el('span', { style: 'font-size:12px', text: 'Day view' }));
+    // viewHeader takes a single `action`; group both buttons in one container.
+    const headerActions = el('div', { style: 'display:flex;gap:8px' }, dayViewBtn, addPairBtn);
+    root.append(viewHeader('Calendar Sync', { onBack: () => navigate('home'), action: headerActions }));
     root.append(calendarTabs('pairs'));
 
     // Bridge: render the live pairs snapshot (refreshing in the background). Browser: mock.

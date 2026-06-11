@@ -1,0 +1,71 @@
+/* Calendar v2 — unified day/week view (mirrors docs/research/mocks/mock-app-calendar.html). */
+.calday { display: grid; grid-template-columns: 1fr 360px; min-height: 0; flex: 1; gap: 0; }
+.calday-head { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--border-1); flex-wrap: wrap; }
+.calday-head h1 { font-size: var(--t-title); line-height: var(--lh-title); font-weight: var(--w-title); margin: 0; }
+.calday-seg { display: flex; border: 1px solid var(--ctrl-stroke); border-radius: var(--r-sm); overflow: hidden; }
+.calday-seg button { font: inherit; font-size: var(--t-meta); font-weight: var(--w-meta); color: var(--ink-3);
+  background: none; border: 0; padding: 5px 14px; cursor: pointer; }
+.calday-seg button.on { background: var(--azure-soft); color: var(--azure-2); }
+.calday-legend { display: flex; gap: var(--s-3); font-size: var(--t-micro); font-weight: var(--w-micro);
+  color: var(--ink-2); margin-left: auto; flex-wrap: wrap; }
+.calday-legend .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+.calday-fresh { display: inline-flex; align-items: center; font-size: var(--t-micro); font-weight: var(--w-micro);
+  color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn);
+  border-radius: var(--r-pill); padding: 0 7px; margin-left: 4px; }
+.calday-grid-wrap { overflow: auto; padding: var(--s-5); }
+.calday-grid { position: relative; border: 1px solid var(--border-1); border-radius: var(--r-md);
+  background: var(--surface-solid); }
+.calday-hour { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border-1);
+  font-size: var(--t-micro); color: var(--ink-3); padding: 2px 0 0 8px; pointer-events: none; }
+.calday-cols { position: absolute; inset: 0; left: 56px; right: 8px; display: grid; gap: 6px; }
+.calday-col { position: relative; min-width: 0; }
+.calday-ev { position: absolute; left: 0; right: 0; border-radius: var(--r-xs); border: 1px solid;
+  border-left-width: 3px; padding: 4px 8px; font-size: var(--t-meta); line-height: var(--lh-meta);
+  overflow: hidden; cursor: pointer; text-align: left; width: 100%; font-family: inherit; }
+.calday-ev b { display: block; color: var(--ink-1); font-weight: var(--w-title); font-size: var(--t-meta); }
+.calday-ev span { color: var(--ink-3); font-size: var(--t-micro); }
+.calday-ev.az { background: var(--azure-soft); border-color: var(--azure-edge); border-left-color: var(--azure); }
+.calday-ev.aq { background: var(--aqua-soft); border-color: var(--aqua-edge); border-left-color: var(--aqua); }
+.calday-ev.cy { background: var(--cyan-soft); border-color: var(--cyan-edge); border-left-color: var(--cyan); }
+.calday-ev.sel { outline: 2px solid var(--azure); outline-offset: 1px; }
+.calday-link { color: var(--azure-2); font-size: var(--t-micro); }
+.calday-panel { border-left: 1px solid var(--border-1); background: var(--bg-1); display: flex;
+  flex-direction: column; overflow: auto; min-width: 0; }
+.calday-panel header { display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--border-1); }
+.calday-panel header h2 { font-size: var(--t-title); font-weight: var(--w-title); margin: 0; flex: 1; }
+.calday-sect { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--border-1); }
+.calday-sect h3 { font-size: var(--t-micro); font-weight: var(--w-micro); letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 var(--s-3); }
+.calday-src { display: flex; align-items: center; gap: var(--s-3); background: var(--bg-2);
+  border: 1px solid var(--border-1); border-radius: var(--r-sm); padding: var(--s-3); }
+.calday-src .bar { width: 3px; align-self: stretch; border-radius: 2px; background: var(--aqua); }
+.calday-hint { font-size: var(--t-micro); color: var(--ink-3); margin-top: 5px; }
+.calday-dest { border: 1px solid var(--border-1); border-radius: var(--r-sm); padding: var(--s-3);
+  margin-bottom: var(--s-3); }
+.calday-dest.on { border-color: var(--azure-edge); background: var(--azure-soft); }
+.calday-dest .head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
+.calday-dest .name { font-weight: var(--w-meta); flex: 1; }
+.calday-dest .acct { font-size: var(--t-micro); color: var(--ink-3); }
+.calday-dest label { display: block; font-size: var(--t-micro); font-weight: var(--w-micro);
+  color: var(--ink-3); margin: 0 0 4px; }
+.calday-dest input[type="text"] { width: 100%; font: inherit; font-size: var(--t-body); color: var(--ink-1);
+  background: var(--bg-2); border: 1px solid var(--ctrl-stroke); border-radius: var(--r-xs); padding: 7px 10px; }
+.calday-dest input[type="text"]::placeholder { color: var(--ink-3); font-style: italic; }
+.calday-dest input[type="text"]:focus { outline: none; border-color: var(--azure-edge);
+  box-shadow: 0 0 0 2px var(--azure-soft); }
+.calday-rule { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) 0;
+  font-size: var(--t-meta); border-top: 1px solid var(--border-1); }
+.calday-rule:first-of-type { border-top: 0; }
+.calday-rule code { font-family: Consolas, monospace; font-size: var(--t-meta); color: var(--cyan);
+  background: var(--cyan-soft); border-radius: 4px; padding: 1px 6px; }
+.calday-rule .n { margin-left: auto; color: var(--ink-3); font-size: var(--t-micro); }
+.calday-actions { display: flex; gap: var(--s-2); padding: var(--s-4) var(--s-5); margin-top: auto; }
+.calday-actions .btn { flex: 1; justify-content: center; padding: 8px; }
+.calday-form label { display: block; font-size: var(--t-micro); font-weight: var(--w-micro);
+  color: var(--ink-3); margin: var(--s-3) 0 4px; }
+.calday-form input, .calday-form select { width: 100%; font: inherit; font-size: var(--t-body);
+  color: var(--ink-1); background: var(--bg-2); border: 1px solid var(--ctrl-stroke);
+  border-radius: var(--r-xs); padding: 7px 10px; }
+.calday-empty { color: var(--ink-3); font-size: var(--t-meta); padding: var(--s-4) var(--s-5); }
