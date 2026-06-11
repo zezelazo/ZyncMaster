@@ -31,6 +31,7 @@ public static class SyncRunDueEndpoints
             HttpContext http,
             IOptions<ServerOptions> opts,
             CronSyncRunner runner,
+            ReplicaSyncRunner replicaRunner,
             CancellationToken ct) =>
         {
             var configured = opts.Value.CronTriggerSecret;
@@ -50,7 +51,27 @@ public static class SyncRunDueEndpoints
             // FIX 5 — log a one-line per-run summary at Info so a "it doesn't sync" report can be
             // diagnosed from the logs alone (how many pairs were due vs run vs skipped vs failed).
             var summary = await runner.RunDueAsync(ct);
-            return Results.Ok(new { ran = summary.Ran, skipped = summary.Skipped, failed = summary.Failed });
+
+            // Calendar v2: the SAME external trigger drives the replica engine + prefix rules
+            // (spec §11 — the VPS crontab is the only scheduler). Additive response key.
+            var calendar = await replicaRunner.RunAsync(ct);
+
+            return Results.Ok(new
+            {
+                ran = summary.Ran,
+                skipped = summary.Skipped,
+                failed = summary.Failed,
+                calendar = new
+                {
+                    usersProcessed = calendar.UsersProcessed,
+                    rulesApplied = calendar.RulesApplied,
+                    replicasCreated = calendar.ReplicasCreated,
+                    moved = calendar.Moved,
+                    cancelled = calendar.Cancelled,
+                    broken = calendar.Broken,
+                    failed = calendar.Failed,
+                },
+            });
         }).RequireRateLimiting(RateLimitPolicy);
     }
 

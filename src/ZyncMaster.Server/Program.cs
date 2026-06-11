@@ -310,6 +310,10 @@ builder.Services.AddSingleton<IEntitlementsService, DefaultEntitlementsService>(
 // external scheduler hits /api/sync/run-due.
 builder.Services.AddSingleton<CronSyncRunner>();
 
+// Calendar v2 — the replica/prefix-rule runner shares the same external trigger as the pair
+// cron. Always server-side: the App never executes the replica engine, so no lease gating.
+builder.Services.AddSingleton<ReplicaSyncRunner>();
+
 // §A/§D — ephemeral-table hygiene. Background sweep that set-deletes expired identity tokens,
 // expired/consumed magic-links and expired run-locks (see EphemeralPurgeService for the token
 // safety rule). Registered ONLY outside Development so the WebApplicationFactory test host never
