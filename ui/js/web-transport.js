@@ -66,7 +66,6 @@ export function webRequestFor(action, data) {
       return { method: 'GET', path: `/api/pairs/${enc(pairId)}/managed-count${q ? `?${q}` : ''}` };
     }
     case 'listAccounts':    return { method: 'GET', path: '/api/accounts' };
-    case 'getCalendarDay':  return { method: 'GET', path: '/api/calendar/day' };
     case 'listCalendars':   return { method: 'GET', path: `/api/accounts/${enc(data)}/calendars` };
     case 'unlinkAccount':   return { method: 'DELETE', path: `/api/accounts/${enc(data)}` };
     case 'createCalendar': {
@@ -77,6 +76,31 @@ export function webRequestFor(action, data) {
       const { accountRef, name } = data || {};
       return { method: 'POST', path: `/api/accounts/${enc(accountRef)}/calendars`, body: { name } };
     }
+    // ---------------- Calendar v2 (unified day, replicas, prefix rules) ----------------
+    case 'getCalendarDay':
+      // The date payload is optional: the home board calls this with no data (server
+      // defaults to today), the day view passes an explicit yyyy-MM-dd.
+      return data
+        ? { method: 'GET', path: `/api/calendar/day?date=${enc(data)}` }
+        : { method: 'GET', path: '/api/calendar/day' };
+    case 'createCalendarEvent': return { method: 'POST', path: '/api/calendar/events', body: data };
+    case 'createEventReplicas': {
+      // { accountId, eventId, destinations } → the event identity is TWO path segments
+      // (backend decision 1); only destinations travel as body (mirrors
+      // EngineActions.CreateEventReplicasAsync for the desktop transport).
+      const { accountId, eventId, destinations } = data || {};
+      return { method: 'POST', path: `/api/calendar/events/${enc(accountId)}/${enc(eventId)}/replicas`, body: { destinations } };
+    }
+    case 'listPrefixRules':     return { method: 'GET', path: '/api/calendar/prefix-rules' };
+    case 'savePrefixRule': {
+      // Create-or-update: with "id" it is a PUT to that rule, without it a POST (same contract
+      // as EngineActions.SavePrefixRuleAsync).
+      const { id, ...rule } = data || {};
+      return id
+        ? { method: 'PUT', path: `/api/calendar/prefix-rules/${enc(id)}`, body: rule }
+        : { method: 'POST', path: '/api/calendar/prefix-rules', body: rule };
+    }
+    case 'deletePrefixRule':    return { method: 'DELETE', path: `/api/calendar/prefix-rules/${enc(data)}` };
     default:
       if (INERT_ACTIONS.includes(action)) return null;
       throw new Error(`web transport: unmapped action "${action}"`);

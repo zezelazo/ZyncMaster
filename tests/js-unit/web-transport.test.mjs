@@ -248,5 +248,39 @@ await testAsync('mapping + runner end to end: runPairNow posts to /run', async (
   assert.deepEqual(result, { created: 3 });
 });
 
+// ---- 4. Calendar v2 mapping (unified day, replicas, prefix rules) ---------------------
+
+test('getCalendarDay maps to GET /api/calendar/day with the date escaped', () => {
+  const r = webRequestFor('getCalendarDay', '2026-06-10');
+  assert.deepEqual(r, { method: 'GET', path: '/api/calendar/day?date=2026-06-10' });
+});
+
+test('createCalendarEvent posts the payload to /api/calendar/events', () => {
+  const body = { title: 'X', replicas: [] };
+  const r = webRequestFor('createCalendarEvent', body);
+  assert.deepEqual(r, { method: 'POST', path: '/api/calendar/events', body });
+});
+
+test('createEventReplicas builds the two-segment event path and keeps destinations as body', () => {
+  const r = webRequestFor('createEventReplicas', {
+    accountId: 'acc/1', eventId: 'evt-1',
+    destinations: [{ accountId: 'a', calendarId: 'c', title: 'Busy' }],
+  });
+  assert.equal(r.method, 'POST');
+  assert.equal(r.path, '/api/calendar/events/acc%2F1/evt-1/replicas');
+  assert.deepEqual(r.body, { destinations: [{ accountId: 'a', calendarId: 'c', title: 'Busy' }] });
+});
+
+test('prefix rule actions map to the CRUD endpoints', () => {
+  assert.deepEqual(webRequestFor('listPrefixRules', null),
+    { method: 'GET', path: '/api/calendar/prefix-rules' });
+  assert.deepEqual(webRequestFor('savePrefixRule', { prefix: 'Lunch', maskTitle: 'Lunch' }),
+    { method: 'POST', path: '/api/calendar/prefix-rules', body: { prefix: 'Lunch', maskTitle: 'Lunch' } });
+  assert.deepEqual(webRequestFor('savePrefixRule', { id: 'r-1', prefix: 'Gym' }),
+    { method: 'PUT', path: '/api/calendar/prefix-rules/r-1', body: { prefix: 'Gym' } });
+  assert.deepEqual(webRequestFor('deletePrefixRule', 'r-1'),
+    { method: 'DELETE', path: '/api/calendar/prefix-rules/r-1' });
+});
+
 console.log(`\n${passed} assertions passed.`);
 if (process.exitCode) console.error('SOME TESTS FAILED');
