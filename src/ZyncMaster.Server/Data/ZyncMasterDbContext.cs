@@ -56,6 +56,9 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<MagicLinkRow> MagicLinks => Set<MagicLinkRow>();
     public DbSet<ClipboardItemRow> ClipboardItems => Set<ClipboardItemRow>();
     public DbSet<ClipboardDeviceSettingsRow> ClipboardDeviceSettings => Set<ClipboardDeviceSettingsRow>();
+    public DbSet<ReplicaLinkRow> ReplicaLinks => Set<ReplicaLinkRow>();
+    public DbSet<PrefixRuleRow> PrefixRules => Set<PrefixRuleRow>();
+    public DbSet<PrefixRuleDestinationRow> PrefixRuleDestinations => Set<PrefixRuleDestinationRow>();
 
     // Data Protection key ring lives in the DB so keys survive restarts and are shared
     // across instances (see AddDataProtection().PersistKeysToDbContext in Program.cs).
@@ -308,6 +311,64 @@ public sealed class ZyncMasterDbContext : DbContext, IDataProtectionKeyContext
             // larger key sizes without going unbounded.
             e.Property(x => x.PublicKeyBase64).HasMaxLength(4096);
             e.HasIndex(x => x.UserId);
+        });
+
+        b.Entity<ReplicaLinkRow>(e =>
+        {
+            e.ToTable("ReplicaLinks");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.SourceAccountId).HasMaxLength(64);
+            e.Property(x => x.SourceEventId).HasMaxLength(128).IsRequired();
+            // Graph event/calendar ids are long opaque tokens (~150 chars observed); 512 is headroom.
+            e.Property(x => x.SourceGraphEventId).HasMaxLength(512);
+            e.Property(x => x.SourceKind).HasMaxLength(16).IsRequired();
+            e.Property(x => x.DestinationAccountId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.DestinationCalendarId).HasMaxLength(512).IsRequired();
+            e.Property(x => x.DestinationEventId).HasMaxLength(512).IsRequired();
+            e.Property(x => x.MaskTitle).HasMaxLength(256).IsRequired();
+            e.Property(x => x.RuleId).HasMaxLength(64);
+            e.Property(x => x.ContentHash).HasMaxLength(64);
+            e.Property(x => x.Status).HasMaxLength(16).IsRequired();
+            // The runner lists a user's non-tombstone links; the fan-out dedupes by source event.
+            e.HasIndex(x => new { x.UserId, x.Status });
+            e.HasIndex(x => new { x.UserId, x.SourceEventId });
+            e.HasOne<UserRow>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<PrefixRuleRow>(e =>
+        {
+            e.ToTable("PrefixRules");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Prefix).HasMaxLength(64).IsRequired();
+            e.Property(x => x.MaskTitle).HasMaxLength(256).IsRequired();
+            e.HasIndex(x => new { x.UserId, x.SortOrder });
+            e.HasOne<UserRow>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<PrefixRuleDestinationRow>(e =>
+        {
+            e.ToTable("PrefixRuleDestinations");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(64);
+            e.Property(x => x.RuleId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.AccountId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.CalendarId).HasMaxLength(512).IsRequired();
+            e.HasIndex(x => x.RuleId);
+            // Deleting a rule deletes its destination rows — membership IS the two-way flag.
+            e.HasOne<PrefixRuleRow>()
+                .WithMany()
+                .HasForeignKey(x => x.RuleId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

@@ -19,4 +19,15 @@ public sealed class SchemaMigratesTests
         // A trivial query against a migrated table proves the DDL ran.
         db.Devices.Count().Should().BeGreaterThanOrEqualTo(0);
     }
+
+    [SkippableFact]
+    public void CalendarV2_ReplicaTables_Migrate_AndAreQueryable()
+    {
+        Skip.IfNot(_pg.Available, "No PostgreSQL (set ZYNCMASTER_TEST_PG).");
+        using var db = _pg.NewContext();
+        // A trivial query against each new table proves the CalendarV2Replicas DDL ran.
+        db.ReplicaLinks.Count().Should().BeGreaterThanOrEqualTo(0);
+        db.PrefixRules.Count().Should().BeGreaterThanOrEqualTo(0);
+        db.PrefixRuleDestinations.Count().Should().BeGreaterThanOrEqualTo(0);
+    }
 }

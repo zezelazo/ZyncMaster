@@ -217,3 +217,69 @@ public sealed class SyncStateRow
     public int LastUpdated { get; set; }
     public int LastDeleted { get; set; }
 }
+
+// Calendar v2 — replica link (spec 2026-06-10-calendar-v2-design §7). One row binds ONE source
+// event to ONE destination calendar/event with the user's manual mask title. The row is the
+// server-side source of truth; the ZmReplicaOf extended property on the destination event is
+// defense-in-depth for reconciling DB↔Graph drift. Status: active | broken | tombstone.
+// "broken" = the user deleted the replica by hand at the destination (the UI offers recreate /
+// discard / write-back); "tombstone" is ONLY for closed links (write-back confirmed, discarded,
+// removed from our UI, or origin cancelled) — never the trigger state itself.
+public sealed class ReplicaLinkRow
+{
+    public string Id { get; set; } = "";
+    public string UserId { get; set; } = "";
+
+    // Null only for SourceKind == "com" (reserved: COM sources arrive with the snapshot work).
+    public string? SourceAccountId { get; set; }
+
+    // Stable per-occurrence id (OccurrenceId.For), the same family CalImport uses. Opaque UUID —
+    // it is the value written into the ZmReplicaOf property, so it must never carry account
+    // identity (privacy invariant 5).
+    public string SourceEventId { get; set; } = "";
+
+    // Addressable Graph event id of the source occurrence (GET /me/events/{id}). Empty for com.
+    public string SourceGraphEventId { get; set; } = "";
+
+    public string SourceKind { get; set; } = "graph"; // "graph" | "com"
+    public string DestinationAccountId { get; set; } = "";
+    public string DestinationCalendarId { get; set; } = "";
+    public string DestinationEventId { get; set; } = "";
+
+    // The user's manual per-destination title. NEVER defaulted from the source subject.
+    public string MaskTitle { get; set; } = "";
+
+    // Set when a prefix rule created this link; null for manual replication.
+    public string? RuleId { get; set; }
+
+    // SHA-256 hex over (startUtc|endUtc|showAs|isAllDay) of the source — the skip-by-hash key:
+    // the runner PATCHes the replica only when this differs from the source's current hash.
+    public string ContentHash { get; set; } = "";
+
+    public string Status { get; set; } = "active"; // "active" | "broken" | "tombstone"
+    public DateTimeOffset CreatedUtc { get; set; }
+    public DateTimeOffset UpdatedUtc { get; set; }
+}
+
+// Calendar v2 — prefix rule (spec §5). "[<Prefix>] X" on a readwrite Graph account renames the
+// origin to "X" and fans out a replica titled MaskTitle to EVERY destination row of the rule.
+// Membership in PrefixRuleDestinations IS the per-calendar two-way flag — no extra boolean.
+public sealed class PrefixRuleRow
+{
+    public string Id { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string Prefix { get; set; } = "";
+    public string MaskTitle { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+
+    // Collision rule: an event matches at most ONE rule — the first by this order (spec §5).
+    public int SortOrder { get; set; }
+}
+
+public sealed class PrefixRuleDestinationRow
+{
+    public string Id { get; set; } = "";
+    public string RuleId { get; set; } = "";
+    public string AccountId { get; set; } = "";
+    public string CalendarId { get; set; } = "";
+}
