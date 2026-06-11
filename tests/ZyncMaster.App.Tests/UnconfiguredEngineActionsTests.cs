@@ -79,6 +79,18 @@ public class UnconfiguredEngineActionsTests
     }
 
     [Fact]
+    public async Task CalendarV2_actions_degrade_clearly_when_unconfigured()
+    {
+        var sut = Build();
+
+        (await sut.ListPrefixRulesAsync()).Should().Be("[]");
+        await ((System.Func<Task>)(() => sut.GetCalendarDayAsync("2026-06-10")))
+            .Should().ThrowAsync<System.InvalidOperationException>().WithMessage("*Settings*");
+        await ((System.Func<Task>)(() => sut.SavePrefixRuleAsync("{}")))
+            .Should().ThrowAsync<System.InvalidOperationException>().WithMessage("*Settings*");
+    }
+
+    [Fact]
     public async Task GetClipboardDevices_surfaces_persisted_opacity_when_unconfigured()
     {
         var repo = new Mock<ISettingsRepository<AppSettings>>();

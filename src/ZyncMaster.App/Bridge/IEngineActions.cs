@@ -139,6 +139,21 @@ public interface IEngineActions
     //     right away. Mirrors CancelLoginAsync.
     Task CancelConnectAsync(CancellationToken ct = default);
 
+    // ---------------- Calendar v2 (unified day, replicas, prefix rules) ----------------
+    // RAW-JSON pass-through to the server's /api/calendar surface (human identity bearer).
+    // The server owns the wire shape and the UI renders it directly, so these accept/return
+    // verbatim JSON strings — no DTO re-modelling in the App (see ICalendarV2Client).
+    Task<string> GetCalendarDayAsync(string dateIso, CancellationToken ct = default);
+    Task<string> CreateCalendarEventAsync(string requestJson, CancellationToken ct = default);
+    // Request JSON: { accountId, eventId, destinations: [ {accountId, calendarId, title} ] }.
+    // accountId+eventId become the two REST path segments (backend decision 1); only
+    // {destinations} is forwarded as the body.
+    Task<string> CreateEventReplicasAsync(string requestJson, CancellationToken ct = default);
+    Task<string> ListPrefixRulesAsync(CancellationToken ct = default);
+    // Create-or-update: a payload WITH "id" is a PUT to that rule, without it a POST.
+    Task<string> SavePrefixRuleAsync(string ruleJson, CancellationToken ct = default);
+    Task DeletePrefixRuleAsync(string ruleId, CancellationToken ct = default);
+
     // ---------------- Clipboard module (Plan 2/3) ----------------
     // The clipboard viewer + Settings panel drive these. Every Text item is DECRYPTED in the App
     // before it leaves here (the UI never sees ciphertext); Image items carry a best-effort PNG data

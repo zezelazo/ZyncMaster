@@ -181,6 +181,27 @@ public sealed class UnconfiguredEngineActions : IEngineActions
         return Task.CompletedTask;
     }
 
+    // ---------------- Calendar v2 ----------------
+    // Day view / replicas / rules need a configured server: clear "configure first" error.
+    // The rules LIST degrades to an empty array so the panel renders its zero state quietly.
+    public Task<string> GetCalendarDayAsync(string dateIso, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<string> CreateCalendarEventAsync(string requestJson, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<string> CreateEventReplicasAsync(string requestJson, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task<string> ListPrefixRulesAsync(CancellationToken ct = default)
+        => Task.FromResult("[]");
+
+    public Task<string> SavePrefixRuleAsync(string ruleJson, CancellationToken ct = default)
+        => throw NotConfigured();
+
+    public Task DeletePrefixRuleAsync(string ruleId, CancellationToken ct = default)
+        => throw NotConfigured();
+
     // ---------------- Clipboard module (Plan 2/3) ----------------
     // No engine yet → no transport / sink / hotkey. History + devices degrade to empty so the viewer
     // shows its "nothing yet" state instead of throwing; the mutating actions degrade to a quiet

@@ -383,6 +383,27 @@ public class UiBridgeTests
             OpenLicensesCalls++;
         }
 
+        // Calendar v2 capture fields.
+        public string? GetCalendarDayArg; public string? CreateCalendarEventArg;
+        public string? CreateEventReplicasArg; public string? SavePrefixRuleArg;
+        public string? DeletePrefixRuleArg; public int ListPrefixRulesCalls;
+        public string CalendarDayJsonToReturn = "{\"date\":\"2026-06-10\",\"accounts\":[]}";
+        public string PrefixRulesJsonToReturn = "[]";
+        public string CalendarEchoToReturn = "{\"ok\":true}";
+
+        public async Task<string> GetCalendarDayAsync(string dateIso, CancellationToken ct = default)
+        { if (Throw != null) await Throw(); GetCalendarDayArg = dateIso; return CalendarDayJsonToReturn; }
+        public async Task<string> CreateCalendarEventAsync(string requestJson, CancellationToken ct = default)
+        { if (Throw != null) await Throw(); CreateCalendarEventArg = requestJson; return CalendarEchoToReturn; }
+        public async Task<string> CreateEventReplicasAsync(string requestJson, CancellationToken ct = default)
+        { if (Throw != null) await Throw(); CreateEventReplicasArg = requestJson; return CalendarEchoToReturn; }
+        public async Task<string> ListPrefixRulesAsync(CancellationToken ct = default)
+        { if (Throw != null) await Throw(); ListPrefixRulesCalls++; return PrefixRulesJsonToReturn; }
+        public async Task<string> SavePrefixRuleAsync(string ruleJson, CancellationToken ct = default)
+        { if (Throw != null) await Throw(); SavePrefixRuleArg = ruleJson; return CalendarEchoToReturn; }
+        public async Task DeletePrefixRuleAsync(string ruleId, CancellationToken ct = default)
+        { if (Throw != null) await Throw(); DeletePrefixRuleArg = ruleId; }
+
         // Clipboard capture fields.
         public int GetClipboardHistoryCalls;
         public int GetClipboardDevicesCalls;

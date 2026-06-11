@@ -4,6 +4,7 @@ using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using ZyncMaster.App.Configuration;
 using ZyncMaster.App.State;
 using ZyncMaster.Core;
@@ -60,6 +61,11 @@ public sealed class EngineActions : IEngineActions, IDisposable
     private readonly IClipboardHotkey? _clipboardHotkey;
     private readonly IClipboardDevicesSource? _clipboardDevices;
     private readonly ClipboardKeyExchange? _clipboardKeyExchange;
+
+    // Calendar v2 management surface (unified day / replicas / prefix rules). Optional like the
+    // clipboard collaborators: a host without a server URL (or a test that does not exercise it)
+    // simply does not wire it, and using it then reports a clear "not available" instead of NREing.
+    private readonly ICalendarV2Client? _calendarV2;
 
     // The live, in-process clipboard settings for THIS device. The capture/apply pipeline reads this
     // through the Func<ClipboardSettings> the ClipboardService was given (App passes () =>
@@ -163,7 +169,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
         IClipboardKeyStore? clipboardKeys = null,
         IClipboardHotkey? clipboardHotkey = null,
         IClipboardDevicesSource? clipboardDevices = null,
-        ClipboardKeyExchange? clipboardKeyExchange = null)
+        ClipboardKeyExchange? clipboardKeyExchange = null,
+        ICalendarV2Client? calendarV2 = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
         _pairing = pairing ?? throw new ArgumentNullException(nameof(pairing));
@@ -196,6 +203,9 @@ public sealed class EngineActions : IEngineActions, IDisposable
         _clipboardHotkey = clipboardHotkey;
         _clipboardDevices = clipboardDevices;
         _clipboardKeyExchange = clipboardKeyExchange;
+
+        // Calendar v2 is optional wiring too (see field comment); no null-guard here.
+        _calendarV2 = calendarV2;
 
         // Track the live online roster the server pushes over the connection. Once any presence frame
         // has been seen it becomes the authoritative online set for the devices view (the last-seen
@@ -1050,6 +1060,98 @@ public sealed class EngineActions : IEngineActions, IDisposable
         }
         return tokens.AccessToken;
     }
+
+    // ---------------- Calendar v2 (unified day, replicas, prefix rules) ----------------
+    // RAW-JSON pass-through (see IEngineActions). The only parsing here extracts the values
+    // that become REST path segments (accountId+eventId / rule id); everything else travels verbatim.
+
+    public async Task<string> GetCalendarDayAsync(string dateIso, CancellationToken ct = default)
+    {
+        if (dateIso == null) throw new ArgumentNullException(nameof(dateIso));
+        var trimmed = dateIso.Trim();
+        if (!DateOnly.TryParseExact(trimmed, "yyyy-MM-dd", out _))
+            throw new InvalidOperationException("Date must be in yyyy-MM-dd format.");
+
+        var client = RequireCalendarV2();
+        var bearer = await RequireBearerAsync(ct);
+        return await client.GetDayAsync(bearer, trimmed, ct);
+    }
+
+    public async Task<string> CreateCalendarEventAsync(string requestJson, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestJson))
+            throw new InvalidOperationException("create-event request is empty.");
+
+        var client = RequireCalendarV2();
+        var bearer = await RequireBearerAsync(ct);
+        return await client.CreateEventAsync(bearer, requestJson, ct);
+    }
+
+    public async Task<string> CreateEventReplicasAsync(string requestJson, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestJson))
+            throw new InvalidOperationException("create-replicas request is empty.");
+
+        Newtonsoft.Json.Linq.JObject root;
+        try { root = Newtonsoft.Json.Linq.JObject.Parse(requestJson); }
+        catch (Newtonsoft.Json.JsonReaderException)
+        { throw new InvalidOperationException("Invalid create-replicas request."); }
+
+        var accountId = root["accountId"]?.Value<string>();
+        if (string.IsNullOrEmpty(accountId))
+            throw new InvalidOperationException("create-replicas request is missing 'accountId'.");
+        var eventId = root["eventId"]?.Value<string>();
+        if (string.IsNullOrEmpty(eventId))
+            throw new InvalidOperationException("create-replicas request is missing 'eventId'.");
+        if (root["destinations"] is not Newtonsoft.Json.Linq.JArray { Count: > 0 } destinations)
+            throw new InvalidOperationException("create-replicas request needs at least one destination.");
+
+        var body = new Newtonsoft.Json.Linq.JObject { ["destinations"] = destinations };
+        var client = RequireCalendarV2();
+        var bearer = await RequireBearerAsync(ct);
+        return await client.CreateReplicasAsync(
+            bearer, accountId, eventId, body.ToString(Newtonsoft.Json.Formatting.None), ct);
+    }
+
+    public async Task<string> ListPrefixRulesAsync(CancellationToken ct = default)
+    {
+        var client = RequireCalendarV2();
+        var bearer = await RequireBearerAsync(ct);
+        return await client.ListPrefixRulesAsync(bearer, ct);
+    }
+
+    public async Task<string> SavePrefixRuleAsync(string ruleJson, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(ruleJson))
+            throw new InvalidOperationException("prefix-rule payload is empty.");
+
+        Newtonsoft.Json.Linq.JObject root;
+        try { root = Newtonsoft.Json.Linq.JObject.Parse(ruleJson); }
+        catch (Newtonsoft.Json.JsonReaderException)
+        { throw new InvalidOperationException("Invalid prefix-rule payload."); }
+
+        var client = RequireCalendarV2();
+        var bearer = await RequireBearerAsync(ct);
+
+        var id = root["id"]?.Value<string>();
+        return string.IsNullOrEmpty(id)
+            ? await client.CreatePrefixRuleAsync(bearer, ruleJson, ct)
+            : await client.UpdatePrefixRuleAsync(bearer, id, ruleJson, ct);
+    }
+
+    public async Task DeletePrefixRuleAsync(string ruleId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(ruleId)) throw new ArgumentNullException(nameof(ruleId));
+        var client = RequireCalendarV2();
+        var bearer = await RequireBearerAsync(ct);
+        await client.DeletePrefixRuleAsync(bearer, ruleId, ct);
+    }
+
+    // Calendar v2 is optional wiring (a host without a server URL or a headless test may not
+    // provide it); using it without the client must fail with a clear message, never NRE.
+    private ICalendarV2Client RequireCalendarV2()
+        => _calendarV2 ?? throw new InvalidOperationException(
+            "Calendar management is not available on this host.");
 
     // ---------------- Clipboard module (Plan 2/3) ----------------
 

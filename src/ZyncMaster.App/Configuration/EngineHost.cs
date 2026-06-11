@@ -238,6 +238,10 @@ public sealed class EngineHost : IDisposable
         var clipboardKeyExchange = new ClipboardKeyExchange(
             clipboardKeyStore, clipboardTransport, () => actionsRef?.ClipboardOrigin.id, logger);
 
+        // Calendar v2 management surface (unified day / replicas / prefix rules): bearer-only
+        // REST against the same server, raw-JSON pass-through to the UI.
+        var calendarV2Client = new HttpCalendarV2Client(http, engineSettings.ServerBaseUrl);
+
         var actions = new EngineActions(
             keyStore, pairingService, syncEngine, settingsRepo, resolver, settingsPath,
             pairsClient, identityCache, txtExporter, autoStart, engineSettings, saveDialog, autoStartExePath,
@@ -255,7 +259,8 @@ public sealed class EngineHost : IDisposable
             clipboardKeys: clipboardKeyStore,
             clipboardHotkey: clipboardHotkey,
             clipboardDevices: clipboardDevices,
-            clipboardKeyExchange: clipboardKeyExchange);
+            clipboardKeyExchange: clipboardKeyExchange,
+            calendarV2: calendarV2Client);
         actionsRef = actions;
 
         // The capture source stamps each local copy with THIS device's identity. The id/name come from

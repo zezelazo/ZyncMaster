@@ -122,6 +122,12 @@ public class ClipboardBridgeTests
         public Task<IReadOnlyList<CalendarAccountSummary>> ListCalendarAccountsAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task OpenLicensesAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task CancelConnectAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string> GetCalendarDayAsync(string dateIso, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string> CreateCalendarEventAsync(string requestJson, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string> CreateEventReplicasAsync(string requestJson, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string> ListPrefixRulesAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string> SavePrefixRuleAsync(string ruleJson, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeletePrefixRuleAsync(string ruleId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private static string Message(string action, string? correlationId, string? payload = null)
