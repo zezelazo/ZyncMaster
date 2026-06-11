@@ -67,6 +67,24 @@ export function replicateRequest(accountId, eventId, rows) {
   return { accountId, eventId, destinations };
 }
 
+// Validates + normalises the prefix-rule form into the savePrefixRule payload. Returns the
+// payload object, or a human error STRING when the form is invalid (the panel shows it).
+// Brackets are forbidden inside the prefix: the stored value is the bare word, the UI renders
+// the [brackets] (calendar-v2 spec §5 — the bracket is instruction, not content).
+export function prefixRulePayload(form) {
+  const prefix = (form.prefix || '').trim();
+  const maskTitle = (form.maskTitle || '').trim();
+  if (!prefix) return 'The prefix is required.';
+  if (/[\[\]]/.test(prefix)) return 'Type the prefix without brackets — they are added automatically.';
+  if (!maskTitle) return 'The mask title is required.';
+  const destinations = (form.destinations || []).filter((d) => d && d.accountId && d.calendarId);
+  if (!destinations.length) return 'Pick at least one destination calendar.';
+  const sortOrder = Number.isFinite(Number(form.sortOrder)) ? Number(form.sortOrder) : 0;
+  const payload = { prefix, maskTitle, enabled: form.enabled !== false, sortOrder, destinations };
+  if (form.id) payload.id = form.id;
+  return payload;
+}
+
 // The Monday-start week containing dateIso ('yyyy-mm-dd'). Pure UTC math on the string so the
 // result never depends on the machine's timezone.
 export function weekDates(dateIso) {

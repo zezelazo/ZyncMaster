@@ -96,6 +96,22 @@ test('replicateRequest builds the bridge payload from checked destinations with 
   ]), null);
 });
 
+test('prefixRulePayload validates and normalises the rule form', async () => {
+  const { prefixRulePayload } = await import('../../ui/js/calendar-day.js');
+  assert.deepEqual(
+    prefixRulePayload({ prefix: ' Lunch ', maskTitle: ' Lunch ', destinations: [{ accountId: 'a', calendarId: 'c' }] }),
+    { prefix: 'Lunch', maskTitle: 'Lunch', enabled: true, sortOrder: 0, destinations: [{ accountId: 'a', calendarId: 'c' }] });
+  // editing keeps id + enabled + sortOrder (the wire field is sortOrder, NOT order)
+  assert.deepEqual(
+    prefixRulePayload({ id: 'r1', prefix: 'Gym', maskTitle: 'Personal', enabled: false, sortOrder: 3, destinations: [{ accountId: 'a', calendarId: 'c' }] }),
+    { id: 'r1', prefix: 'Gym', maskTitle: 'Personal', enabled: false, sortOrder: 3, destinations: [{ accountId: 'a', calendarId: 'c' }] });
+  // invalid forms return an error string instead of a payload
+  assert.equal(typeof prefixRulePayload({ prefix: '', maskTitle: 'X', destinations: [{}] }), 'string');
+  assert.equal(typeof prefixRulePayload({ prefix: 'A]B', maskTitle: 'X', destinations: [{}] }), 'string');
+  assert.equal(typeof prefixRulePayload({ prefix: 'A', maskTitle: '', destinations: [{}] }), 'string');
+  assert.equal(typeof prefixRulePayload({ prefix: 'A', maskTitle: 'X', destinations: [] }), 'string');
+});
+
 test('the origin title never appears in a replicate payload unless the user typed it', async () => {
   // Privacy contract (calendar-v2 spec §12.1): replicateRequest does not even RECEIVE the
   // origin title, so no code path can copy it. Typing it is the only way it travels.

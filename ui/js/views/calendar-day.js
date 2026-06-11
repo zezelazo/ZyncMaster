@@ -5,9 +5,9 @@
 // import + la llamada de boot. Los helpers PUROS viven en ../calendar-day.js (test node).
 import {
   accountColorClass, clampBlock, localMinutes, replicateButtonLabel,
-  maskedTitle, weekDates, shiftDate, freshnessLabel, replicateRequest,
-  // Las tareas 8/9 AÑADEN aquí, a medida que existan, los exports que cada una crea:
-  //   tarea 8 → prefixRulePayload, tarea 9 → newEventPayload.
+  maskedTitle, weekDates, shiftDate, freshnessLabel, replicateRequest, prefixRulePayload,
+  // La tarea 9 AÑADE aquí, cuando exista, el export que crea:
+  //   tarea 9 → newEventPayload.
   // NO importarlos antes de que existan: un import de un export inexistente rompe el módulo
   // ES (node --check/--test fallan). Cada tarea extiende esta línea cuando crea su helper.
 } from '../calendar-day.js';
@@ -354,10 +354,102 @@ export function registerCalendarDayView(ctx) {
     }));
   }
 
-  // Temporary stubs so the module loads before tasks 8-9 land their panels. Each of those
-  // tasks REPLACES its stub; none of these may survive past task 9.
+  // Temporary stub so the module loads before task 9 lands its panel. Task 9 REPLACES it;
+  // it may not survive past task 9.
   function renderNewEventPanel(p) { p.innerHTML = ''; }
-  function renderPrefixRulesPanel(p) { p.innerHTML = ''; }
+
+  // ---------------- Calendar v2: Prefix rules panel (task 8) ----------------
+  function renderPrefixRulesPanel(panel) {
+    panel.innerHTML = `
+      <header><h2>Prefix rules</h2>
+        <button class="x btn" id="calDayRulesClose" aria-label="Close">✕</button></header>
+      <div class="calday-sect">
+        <p class="calday-hint">A “[Lunch] X” event is renamed to “X” and replicated as “Lunch” to
+          every destination of the rule. Graph readwrite accounts only.</p>
+        <div id="calDayRulesList"></div>
+        ${calDay.rulesError ? `<p class="calday-hint" style="color:var(--err)">${escapeHtml(calDay.rulesError)}</p>` : ''}
+      </div>
+      <div class="calday-sect calday-form"><h3>New rule</h3>
+        <label for="ruleNewPrefix">Prefix (without brackets)</label>
+        <input id="ruleNewPrefix" type="text" placeholder="Lunch">
+        <label for="ruleNewMask">Mask title</label>
+        <input id="ruleNewMask" type="text" placeholder="Lunch">
+        <label>Destinations</label>
+        <div id="ruleNewDests"></div>
+        <p class="calday-hint" id="ruleNewError" style="color:var(--err)" hidden></p>
+        <div class="calday-actions" style="padding:var(--s-3) 0 0">
+          <button class="btn primary" id="ruleNewSave">Add rule</button>
+        </div>
+      </div>`;
+
+    panel.querySelector('#calDayRulesClose').onclick = () => { calDay.panel = calDay.selected ? 'replicate' : null; rerenderInPlace(); };
+
+    // ---- existing rules: enabled toggle + delete ----
+    const list = panel.querySelector('#calDayRulesList');
+    if (!calDay.rules.length) list.innerHTML = '<p class="calday-empty">No rules yet.</p>';
+    calDay.rules.forEach((rule) => {
+      const row = document.createElement('div');
+      row.className = 'calday-rule';
+      const n = (rule.destinations || []).length;
+      row.innerHTML = `<code>[${escapeHtml(rule.prefix)}]</code><span style="color:var(--ink-4)">→</span>`
+        + `<span>“${escapeHtml(rule.maskTitle)}”</span>`
+        + `<span class="n num">${n} destination${n === 1 ? '' : 's'}</span>`;
+      const toggle = document.createElement('button');
+      toggle.className = 'btn';
+      toggle.textContent = rule.enabled ? 'on' : 'off';
+      toggle.setAttribute('aria-label', `Toggle rule ${rule.prefix}`);
+      toggle.onclick = () => {
+        Bridge.call('savePrefixRule', JSON.stringify({ ...rule, enabled: !rule.enabled }))
+          .then(() => loadCalendarDay())
+          .catch((err) => announce(`Rule update failed: ${err.message}`));
+      };
+      const del = document.createElement('button');
+      del.className = 'btn';
+      del.textContent = 'Delete';
+      del.onclick = () => {
+        if (!window.confirm(`Delete the [${rule.prefix}] rule? Existing replicas are kept.`)) return;
+        Bridge.call('deletePrefixRule', rule.id)
+          .then(() => loadCalendarDay())
+          .catch((err) => announce(`Rule delete failed: ${err.message}`));
+      };
+      row.appendChild(toggle);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+
+    // ---- new-rule destination checklist (writable accounts only; REAL bridge shapes — see 6.3:
+    // CalendarAccountSummary {id, accountEmail, scope, ...} + .calendars CalendarInfo[]) ----
+    const destRows = [];
+    const destsEl = panel.querySelector('#ruleNewDests');
+    (calDay.accounts || []).filter((a) => (a.scope || '').toLowerCase() === 'readwrite').forEach((acct) => {
+      (acct.calendars || []).forEach((cal) => {
+        const row = { checked: false, accountId: acct.id, calendarId: cal.id };
+        const div = document.createElement('div');
+        div.className = 'calday-dest';
+        div.innerHTML = `<div class="head"><input type="checkbox" aria-label="Use this destination">
+          <span class="name">${escapeHtml(cal.displayName || 'Calendar')}</span>
+          <span class="acct">${escapeHtml(acct.accountEmail || '')}</span></div>`;
+        div.querySelector('input').onchange = (e) => { row.checked = e.target.checked; div.classList.toggle('on', row.checked); };
+        destRows.push(row);
+        destsEl.appendChild(div);
+      });
+    });
+    if (!destRows.length) destsEl.innerHTML = '<p class="calday-empty">Connect a readwrite account first.</p>';
+
+    panel.querySelector('#ruleNewSave').onclick = () => {
+      const errEl = panel.querySelector('#ruleNewError');
+      const payload = prefixRulePayload({
+        prefix: panel.querySelector('#ruleNewPrefix').value,
+        maskTitle: panel.querySelector('#ruleNewMask').value,
+        destinations: destRows.filter((r) => r.checked),
+      });
+      if (typeof payload === 'string') { errEl.textContent = payload; errEl.hidden = false; return; }
+      errEl.hidden = true;
+      Bridge.call('savePrefixRule', JSON.stringify(payload))
+        .then(() => { announce('Rule created'); loadCalendarDay(); })
+        .catch((err) => { errEl.textContent = err.message; errEl.hidden = false; });
+    };
+  }
 
   // ======== registry ========
   registry.register('calendar-day', {
