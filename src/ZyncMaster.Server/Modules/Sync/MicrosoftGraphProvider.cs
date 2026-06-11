@@ -140,7 +140,7 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
             $"{GraphBaseUrl}me/calendars/{Uri.EscapeDataString(calendarId)}/calendarView" +
             $"?startDateTime={Uri.EscapeDataString(start)}" +
             $"&endDateTime={Uri.EscapeDataString(end)}" +
-            "&$select=id,iCalUId,subject,body,start,end,isAllDay,isCancelled,organizer,createdDateTime" +
+            "&$select=id,iCalUId,subject,body,start,end,isAllDay,isCancelled,organizer,createdDateTime,showAs" +
             "&$top=50";
 
         var records = new List<AppointmentRecord>();
@@ -193,6 +193,7 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
         var description = ev["body"]?["content"]?.Value<string>() ?? "";
         var isAllDay = ev["isAllDay"]?.Value<bool>() ?? false;
         var isCancelled = ev["isCancelled"]?.Value<bool>() ?? false;
+        var showAs = ev["showAs"]?.Value<string>() ?? "";
 
         var organizerName = ev["organizer"]?["emailAddress"]?["name"]?.Value<string>() ?? "";
         var organizerEmail = ev["organizer"]?["emailAddress"]?["address"]?.Value<string>() ?? "";
@@ -221,6 +222,7 @@ public sealed class MicrosoftGraphProvider : ICalendarReader, ICalendarWriter
             Description = description,
             IsAllDay = isAllDay,
             IsCancelled = isCancelled,
+            ShowAs = showAs,
             OrganizerName = organizerName,
             OrganizerEmail = organizerEmail,
             Start = startOffset.DateTime,

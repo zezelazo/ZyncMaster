@@ -30,6 +30,12 @@ public sealed class AppointmentRecord
     // mirrored event body so the destination shows when the original invitation was created.
     public DateTimeOffset? Created                 { get; init; }
 
+    // Free/busy status as the source reports it (Graph: free|tentative|busy|oof|
+    // workingElsewhere). Captured for the calendar v2 replica engine — a replica copies ONLY
+    // start/end/showAs plus the manual mask title. Empty when the source does not report it
+    // (the COM path today); consumers must degrade an empty value to "busy".
+    public string ShowAs { get; init; } = "";
+
     public IReadOnlyList<ParticipantRecord> Participants { get; init; }
         = Array.Empty<ParticipantRecord>();
 }
