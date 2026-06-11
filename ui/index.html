@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="css/glass.css" />
   <link rel="stylesheet" href="css/components.css" />
   <link rel="stylesheet" href="css/layout.css" />
+  <link rel="stylesheet" href="css/shell.css" />
   <link rel="stylesheet" href="css/clipboard.css" />
 </head>
 <body>
@@ -55,25 +56,13 @@
           </div>
         </header>
 
-        <!-- Active screen — populated by app.js. One screen at a time, like the design. -->
-        <div class="view" id="view" role="main"></div>
-
-        <!-- Bottom nav — built by app.js so the sliding indicator and active state stay in sync. -->
-        <nav class="navbar" id="navbar" aria-label="Primary" style="--nav-count:3;--nav-idx:0;"></nav>
-
-        <!-- Launch splash -->
-        <div class="launch" id="launch">
-          <div class="launch__center">
-            <div class="launch__logo">
-              <span data-icon="logo" data-icon-size="104"></span>
-              <div class="launch__rings"><span></span><span></span><span></span></div>
-            </div>
-            <div class="launch__name">Zync Master</div>
-            <div class="launch__tag">Mirror your calendars, quietly.</div>
-          </div>
-          <div class="launch__foot">
-            <div class="launch__progress"><span></span></div>
-            <div class="launch__version num" id="launchVersion">v0.3.0</div>
+        <!-- App shell: left sidebar + view header + content (built by app.js) -->
+        <div class="shell" id="shell">
+          <aside class="sidebar" id="sidebar" aria-label="Primary"></aside>
+          <div class="main">
+            <div class="offline-banner" id="offlineBanner" hidden></div>
+            <header class="vhead" id="vhead"></header>
+            <div class="view" id="view" role="main"></div>
           </div>
         </div>
 

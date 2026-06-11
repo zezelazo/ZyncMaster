@@ -12,6 +12,7 @@
 import { icon, logoSvg, microsoftLogo, hydrateIcons } from './icons.js';
 import { webRequestFor, statusFromPairs } from './web-transport.js';
 import { createRegistry } from './core/registry.js';
+import { calendarDot, clipboardDot, devicesDot } from './core/status-model.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -4160,6 +4161,117 @@ function openModal({ title, body, onClose }) {
   return { close };
 }
 
+// ---------------- Shell chrome: sidebar + view header ----------------
+const SIDEBAR_KEY = 'zyncmaster.sidebar';
+function sidebarCollapsed() { try { return localStorage.getItem(SIDEBAR_KEY) === 'collapsed'; } catch (_) { return false; } }
+function toggleSidebar() {
+  try { localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed() ? 'expanded' : 'collapsed'); } catch (_) {}
+  renderShellChrome();
+}
+
+// Los gates (sign-in / identidad) ocupan la pantalla completa: sin sidebar ni header.
+function shellGated() {
+  if (Bridge.webPanel) return webAuth.resolved && !webAuth.signedIn;
+  if (Bridge.desktopApp) return serverHealth.ok && identityAuth.resolved && !identityAuth.signedIn;
+  return false;
+}
+
+function sideDotEl(dot) {
+  if (!dot) return null;
+  return el('span', { class: `side-dot side-dot--${dot.state}`, title: dot.title, 'aria-label': dot.title });
+}
+
+function renderSidebar() {
+  const side = $('#sidebar');
+  if (!side) return;
+  side.replaceChildren();
+  side.append(el('div', { class: 'brand' },
+    el('span', { class: 'brand__mark', html: logoSvg({ size: 22 }) }),
+    el('span', { class: 'brand__name', text: 'SyncMaster' })));
+
+  const nav = el('nav', { class: 'side-nav' });
+  const items = registry.navItems();
+  const activeId = registry.activeNavId(state.view);
+  let sepDone = false;
+  items.forEach((v, i) => {
+    if (v.nav.section === 'system' && !sepDone) { nav.append(el('div', { class: 'side-nav__sep' })); sepDone = true; }
+    const active = v.id === activeId;
+    const btn = el('button', {
+      class: 'side-item', type: 'button',
+      'aria-current': active ? 'page' : false,
+      tabindex: active || (i === 0 && !activeId) ? '0' : '-1',
+      onclick: () => navigate(v.id),
+    },
+      el('span', { class: 'side-item__ico', html: icon(v.nav.icon, { size: 16, stroke: 1.5 }) }),
+      el('span', { class: 'side-item__lbl', text: v.nav.label }),
+      sideDotEl(v.statusDot ? v.statusDot() : null),
+      v.nav.section === 'modules' ? el('span', { class: 'side-item__kbd num', text: String(i + 1) }) : null,
+    );
+    nav.append(btn);
+  });
+  // Roving tabindex: flechas mueven el foco, Enter/Space activan (spec §8).
+  nav.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const btns = [...nav.querySelectorAll('.side-item')];
+    const cur = btns.indexOf(document.activeElement);
+    const next = btns[(cur + (e.key === 'ArrowDown' ? 1 : -1) + btns.length) % btns.length];
+    btns.forEach((b) => b.setAttribute('tabindex', '-1'));
+    next.setAttribute('tabindex', '0');
+    next.focus();
+  });
+  side.append(nav);
+
+  const health = serverHealth.ok
+    ? { state: 'ok', text: 'Connected' }
+    : serverHealth.waking ? { state: 'warn', text: 'Reconnecting…' } : { state: 'off', text: 'Offline' };
+  side.append(el('div', { class: 'side-foot' },
+    el('span', { class: `side-dot side-dot--${health.state}` }),
+    el('span', { text: Bridge.available ? health.text : 'Demo data' })));
+  side.append(el('button', {
+    class: 'side-collapse', type: 'button',
+    'aria-label': sidebarCollapsed() ? 'Expand sidebar' : 'Collapse sidebar',
+    onclick: toggleSidebar,
+  }, iconEl('chevronleft', 14, 1.8)));
+}
+
+function renderViewHeader() {
+  const head = $('#vhead');
+  if (!head) return;
+  head.replaceChildren();
+  const def = registry.get(state.view);
+  const info = def && def.header ? def.header() : null;
+  const navDef = def && registry.activeNavId(state.view) ? registry.get(registry.activeNavId(state.view)) : null;
+  const title = (info && info.title) || (def && def.nav && def.nav.label) || (navDef && navDef.nav.label) || 'SyncMaster';
+  head.append(el('h1', { class: 'vhead__title', text: title }));
+  if (info && info.meta) head.append(el('span', { class: 'vhead__meta num', text: info.meta }));
+  head.append(el('span', { class: 'vhead__spacer' }));
+  if (Bridge.available) {
+    head.append(el('button', { class: 'btn btn--primary', type: 'button', onclick: () => syncAllPairs() }, 'Sync now'));
+  }
+  const search = el('button', { class: 'btn', type: 'button', 'aria-label': 'Open command palette (Ctrl+K)' },
+    'Search… ', el('kbd', { class: 'kbd', text: 'Ctrl' }), el('kbd', { class: 'kbd', text: 'K' }));
+  search.addEventListener('click', () => { if (typeof window.__openPalette === 'function') window.__openPalette(); });
+  head.append(search);
+}
+
+// "Sync now" global del header: dispara el run de cada par activo (real y honesto: con
+// 0 pares es un no-op silencioso; el botón existe igualmente porque la vista lo explica).
+function syncAllPairs() {
+  const pairs = (live.pairs || []).filter((p) => p && p.state === 'active');
+  pairs.forEach((p) => runPairNow(p.id));
+  announce(pairs.length ? 'Sync started.' : 'No active sync pairs.');
+}
+
+function renderShellChrome() {
+  const shell = $('#shell');
+  if (!shell) return;
+  shell.classList.toggle('shell--collapsed', sidebarCollapsed());
+  shell.classList.toggle('shell--gated', shellGated());
+  renderSidebar();
+  renderViewHeader();
+}
+
 // ---------------- Per-pair .txt export popup ----------------
 // openExportTxtModal(pair) — month/year/include-cancelled options for exporting the pair's SOURCE
 // calendar for one month. Routing is by source provider:
@@ -4386,53 +4498,18 @@ function applyNativeStatus(s) {
   rerenderInPlace();
 }
 
-// ---------------- Bottom nav ----------------
-const NAV = [
-  { id: 'home',    label: 'Home',     icon: 'home' },
-  { id: 'config',  label: 'Settings', icon: 'settings' },
-  { id: 'pairing', label: 'Pair',     icon: 'link' },
-];
-// Map sub-routes back to a parent tab so the indicator follows the user.
-const TAB_MAP = { home: 'home', calendar: 'home', clipboard: 'home', 'add-pair': 'home', 'add-calendar': 'home', config: 'config', 'calendar-settings': 'config', 'clipboard-settings': 'config', about: 'config', pairing: 'pairing' };
-
-// The visible tabs. "Pair" is the legacy manual pairing-by-key walkthrough; a device now
-// registers as part of the identity sign-in, so the tab is meaningless in every REAL transport
-// (the App and the web panel). It survives ONLY in the mock file:// demo so the standalone page
-// still showcases the flow. The pairing screen is gated again in navigate().
-function navItems() {
-  return Bridge.available ? NAV.filter((i) => i.id !== 'pairing') : NAV;
-}
-
-function renderNav() {
-  const nav = $('#navbar');
-  if (!nav) return;
-  const items = navItems();
-  const currentTab = TAB_MAP[state.view] || 'home';
-  const activeIndex = Math.max(0, items.findIndex((i) => i.id === currentTab));
-  nav.style.setProperty('--nav-count', String(items.length));
-  nav.style.setProperty('--nav-idx', String(activeIndex));
-  nav.replaceChildren();
-  nav.append(el('span', { class: 'navbar__indicator' }));
-  items.forEach((it) => {
-    const active = it.id === currentTab;
-    nav.append(el('button', { class: 'nav-item', 'aria-current': String(active), onclick: () => navigate(it.id) },
-      iconEl(it.icon, 15, 1.7), el('span', { text: it.label })));
-  });
-}
-
 // ---------------- Render dispatch ----------------
 function rerender() {
+  renderShellChrome();
   const root = $('#view');
   if (!root) return;
   root.replaceChildren();
   root.classList.remove('enter');
 
   // Web panel sign-in gate: until the session resolves as signed-in, the only screen is the
-  // sign-in card and the bottom nav is hidden. Other transports gate themselves (pairing).
+  // sign-in card and the shell chrome collapses (renderShellChrome applies .shell--gated).
   if (Bridge.webPanel && webAuth.resolved && !webAuth.signedIn) {
     renderSignIn(root);
-    const nav = $('#navbar');
-    if (nav) { nav.replaceChildren(); nav.hidden = true; }
     void root.offsetWidth;
     root.classList.add('enter');
     return;
@@ -4445,33 +4522,26 @@ function rerender() {
   // panel and mock demo do NOT use this gate.
   if (Bridge.desktopApp && !serverHealth.ok && (serverHealth.waking || serverHealth.error || !serverHealth.checked)) {
     renderServerWarmup(root);
-    const nav = $('#navbar');
-    if (nav) { nav.replaceChildren(); nav.hidden = true; }
     void root.offsetWidth;
     root.classList.add('enter');
     return;
   }
 
   // Desktop App identity gate: in native/loopback, until getIdentityState reports signed-in the
-  // only screen is the identity sign-in card (Microsoft / magic-link) and the bottom nav is
-  // hidden. The web panel and the mock demo do NOT use this gate.
+  // only screen is the identity sign-in card (Microsoft / magic-link). The web panel and the mock
+  // demo do NOT use this gate.
   if (Bridge.desktopApp && identityAuth.resolved && !identityAuth.signedIn) {
     renderIdentitySignIn(root);
-    const nav = $('#navbar');
-    if (nav) { nav.replaceChildren(); nav.hidden = true; }
     void root.offsetWidth;
     root.classList.add('enter');
     return;
   }
-  const nav = $('#navbar');
-  if (nav) nav.hidden = false;
 
   const def = registry.get(state.view) || registry.get('home');
   def.render(root);
   // retrigger the staggered card entrance
   void root.offsetWidth;
   root.classList.add('enter');
-  renderNav();
 }
 // rerenderInPlace — repaint the current view WITHOUT replaying the entrance animation (no
 // `enter` class) and preserving scroll, so progress ticks and in-screen control changes don't
@@ -4492,9 +4562,7 @@ function rerenderInPlace() {
   root.replaceChildren();
   def.render(root);
   root.scrollTop = prevScroll;
-  const nav = $('#navbar');
-  if (nav) nav.hidden = false;          // a real view is up → the bottom nav must be visible
-  renderNav();
+  renderShellChrome();
 }
 // softRepaint — alias used by in-screen control handlers (interval/theme/select on the settings
 // screens) to repaint without the entrance animation. Distinct name from rerenderInPlace to make
@@ -4810,6 +4878,15 @@ async function boot() {
       .finally(() => maybeDismissLaunch(450));
   }
 
+  // Ctrl+1..9 salta a los módulos del sidebar en su orden visible (spec §3.2).
+  document.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey) return;
+    const n = parseInt(e.key, 10);
+    if (!n || n < 1 || n > 9) return;
+    const mods = registry.navItems().filter((v) => v.nav.section === 'modules');
+    if (mods[n - 1]) { e.preventDefault(); navigate(mods[n - 1].id); }
+  });
+
   rerender();
   playLaunch();
   // Non-bridge transports (the mock/demo panel) have no gates and no inbound settle callback, so
@@ -4820,15 +4897,29 @@ async function boot() {
 
 // ---------------- View registry (fase de transición) ----------------
 // Las render functions siguen viviendo en este archivo; cada tarea de extracción las muda
-// a ui/js/views/<name>.js conservando estos ids. nav/statusDot llegan en la tarea del shell.
-registry.register('home', { render: renderHome, soft: true });
-registry.register('calendar', { render: renderCalendar, soft: true, parent: 'home' });
+// a ui/js/views/<name>.js conservando estos ids. El sidebar se construye desde nav/statusDot.
+registry.register('home', {
+  render: renderHome, soft: true,
+  nav: { label: 'Home', icon: 'home', order: 1, section: 'modules' },
+});
+registry.register('calendar', {
+  render: renderCalendar, soft: true,
+  nav: { label: 'Calendar', icon: 'calendar', order: 2, section: 'modules' },
+  statusDot: () => calendarDot(live.pairs, live.loadedPairs),
+});
 registry.register('add-pair', { render: renderAddPair, parent: 'calendar' });
 registry.register('add-calendar', { render: renderAddCalendar, parent: 'calendar' });
 registry.register('calendar-settings', { render: renderCalendarSettings, soft: true, parent: 'calendar' });
-registry.register('clipboard', { render: renderClipboard, soft: true, parent: 'home' });
+registry.register('clipboard', {
+  render: renderClipboard, soft: true,
+  nav: { label: 'Clipboard', icon: 'clipboard', order: 3, section: 'modules', hidden: () => Bridge.webPanel },
+  statusDot: () => clipboardDot(thisClipboardDevice()),
+});
 registry.register('clipboard-settings', { render: renderClipboardSettings, soft: true, parent: 'clipboard' });
-registry.register('config', { render: renderConfig, soft: true });
+registry.register('config', {
+  render: renderConfig, soft: true,
+  nav: { label: 'Settings', icon: 'settings', order: 100, section: 'system' },
+});
 registry.register('about', { render: renderAbout, parent: 'config' });
 registry.register('pairing', { render: renderPairing });
 

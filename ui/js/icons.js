@@ -77,6 +77,8 @@ const STROKE_PATHS = {
     '<path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/>',
   pencil:
     '<path d="M14.5 5.5l4 4"/><path d="M4 20l1-4L16 5a2 2 0 0 1 3 3L8 19z"/>',
+  device:
+    '<rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M9 20.5h6M12 17v3.5"/>',
 };
 
 // The brand mark — two interlocking arcs forming a sync loop. A gradient version

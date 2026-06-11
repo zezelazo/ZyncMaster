@@ -106,8 +106,9 @@
    ========================================================= */
 .view {
   flex: 1;
+  min-height: 0;
   position: relative;
-  padding: 8px 18px 60px 18px;
+  padding: var(--s-6);
   overflow-y: auto;
   z-index: 1;
 }
@@ -802,123 +803,6 @@
 }
 
 /* =========================================================
-   BOTTOM NAV — barely-there glass with sliding terra pill
-   ========================================================= */
-.navbar {
-  position: absolute;
-  left: 14px; right: 14px;
-  bottom: 6px;
-  height: 38px;
-  padding: 3px;
-  display: flex;
-  gap: 0;
-  z-index: 4;
-  /* Aero / Apple-style frosted glass: a visible translucent fill + bright hairline edge,
-     with a real backdrop blur. The fill is faint enough to read as glass but present enough
-     to be unmistakably there (the old 0.022 was effectively invisible). Text/icons stay solid. */
-  background: linear-gradient(rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.05));
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: var(--r-pill);
-  backdrop-filter: blur(28px) saturate(200%);
-  -webkit-backdrop-filter: blur(28px) saturate(200%);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.35),
-    inset 0 -1px 0 0 rgba(255, 255, 255, 0.06),
-    0 12px 28px -14px rgba(0, 0, 0, 0.55),
-    0 4px 10px -4px rgba(0, 0, 0, 0.35);
-  animation: nav-in 540ms var(--ease-spring) backwards 280ms;
-}
-[data-theme="light"] .navbar {
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.85),
-    inset 0 -1px 0 0 rgba(17, 24, 39, 0.05),
-    0 10px 24px -12px rgba(20, 28, 50, 0.22),
-    0 3px 8px -3px rgba(20, 28, 50, 0.12);
-}
-@keyframes nav-in {
-  from { opacity: 0; transform: translateY(16px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.navbar__indicator {
-  position: absolute;
-  top: 3px;
-  height: calc(100% - 6px);
-  width: calc((100% - 6px) / var(--nav-count));
-  left: calc(3px + ((100% - 6px) / var(--nav-count)) * var(--nav-idx));
-  border-radius: var(--r-pill);
-  background: var(--terra-soft);
-  border: 1px solid var(--terra-edge);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
-    0 0 18px -2px rgba(217, 119, 87, 0.45),
-    0 4px 12px -4px rgba(217, 119, 87, 0.35);
-  transition:
-    left 380ms var(--ease-spring),
-    background 200ms,
-    box-shadow 200ms;
-  pointer-events: none;
-}
-[data-theme="light"] .navbar__indicator {
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.75),
-    0 0 16px -2px rgba(184, 82, 48, 0.35),
-    0 4px 10px -4px rgba(184, 82, 48, 0.28);
-}
-
-.nav-item {
-  position: relative;
-  flex: 1;
-  display: flex; align-items: center; justify-content: center;
-  gap: 6px;
-  height: 100%;
-  padding: 0 8px;
-  border: 0; background: transparent;
-  border-radius: var(--r-pill);
-  color: var(--ink-2);
-  font-size: 11px; font-weight: 600;
-  letter-spacing: 0.005em;
-  cursor: pointer;
-  z-index: 1;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
-  transition: color 200ms var(--ease-out);
-}
-[data-theme="light"] .nav-item {
-  color: var(--ink-2);
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.85);
-}
-.nav-item svg {
-  width: 14px; height: 14px;
-  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
-  transition: filter var(--d-base);
-}
-[data-theme="light"] .nav-item svg {
-  filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.85));
-}
-/* No icon transform on hover/press — the nav glyph stays put. A soft glow lift only. */
-.nav-item:hover { color: var(--ink-1); }
-.nav-item:hover svg { filter: drop-shadow(0 0 5px rgba(217, 119, 87, 0.45)); }
-.nav-item[aria-current="true"] {
-  color: var(--terra);
-  text-shadow: 0 0 10px rgba(217, 119, 87, 0.55);
-}
-.nav-item[aria-current="true"] svg {
-  filter: drop-shadow(0 0 6px rgba(217, 119, 87, 0.7));
-}
-[data-theme="light"] .nav-item[aria-current="true"] {
-  color: var(--terra);
-  text-shadow: 0 0 8px rgba(255, 255, 255, 0.85);
-}
-[data-theme="light"] .nav-item[aria-current="true"] svg {
-  filter: drop-shadow(0 0 4px rgba(184, 82, 48, 0.45));
-}
-.nav-item span { display: inline; }
-
-@media (prefers-reduced-motion: reduce) { .navbar { animation: none; } }
-
-/* =========================================================
    LAUNCH SCREEN
    ========================================================= */
 .launch {
@@ -1153,25 +1037,3 @@
    the inner .view is the only scroll container, which kills the bounce-to-top. */
 :root[data-transport="web"], :root[data-transport="web"] body { height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg-1); }
 
-/* =========================================================
-   WEB PANEL — bottom nav IN-FLOW (not absolute).
-   In the browser the absolutely-positioned navbar (bottom:6px of .win__body) sat
-   below the fold whenever its entrance transform was mid-flight or a re-render
-   restarted it, so it was effectively invisible and the bottom of the screen got
-   clipped. Making it a normal flex child at the end of the column guarantees it is
-   always inside the viewport and that .view gets exactly the space above it. The
-   App (native-shell) keeps the absolute navbar — it works there and we don't touch it.
-   ========================================================= */
-:root[data-transport="web"] .view {
-  flex: 1 1 auto;
-  min-height: 0;          /* allow the flex item to shrink so overflow-y:auto actually scrolls */
-  padding-bottom: 14px;   /* navbar no longer overlaps the view, so drop the 60px reserve */
-}
-:root[data-transport="web"] .navbar {
-  position: static;
-  flex: 0 0 auto;
-  margin: 0 14px 8px;
-  animation: nav-fade-in 420ms ease backwards 180ms;  /* opacity-only: can never push itself below the fold */
-}
-:root[data-transport="web"] .navbar[hidden] { display: none; }
-@keyframes nav-fade-in { from { opacity: 0; } to { opacity: 1; } }

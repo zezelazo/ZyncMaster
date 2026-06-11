@@ -1,0 +1,126 @@
+/* =========================================================
+   SHELL — sidebar izquierda + view header. Superficies planas,
+   elevación por border-light (spec §3.1). Valores del mock
+   docs/research/mocks/mock-app-shell.html.
+   ========================================================= */
+.shell {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+}
+.shell--collapsed { grid-template-columns: 56px 1fr; }
+.shell--gated { grid-template-columns: 1fr; }
+.shell--gated .sidebar { display: none; }
+.shell--gated .vhead { display: none; }
+
+/* ---- sidebar ---- */
+.sidebar {
+  background: var(--bg-1);
+  border-right: 1px solid var(--border-1);
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-4) var(--s-3);
+  min-height: 0;
+}
+.brand {
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-1) var(--s-2) var(--s-5);
+}
+.brand__mark { width: 22px; height: 22px; display: inline-flex; flex: none; }
+.brand__name {
+  font-size: var(--t-title); line-height: var(--lh-title); font-weight: var(--w-title);
+  white-space: nowrap;
+}
+.shell--collapsed .brand__name { display: none; }
+
+.side-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-item {
+  display: flex; align-items: center; gap: var(--s-3);
+  width: 100%;
+  min-height: 32px;
+  padding: 6px var(--s-2);
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--t-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--d-fast) var(--ease-out);
+}
+.side-item:hover { background: var(--ctrl-hover); color: var(--ink-1); }
+.side-item[aria-current="page"] {
+  background: var(--azure-soft);
+  border-color: var(--azure-edge);
+  color: var(--ink-1);
+}
+.side-item__ico { width: 16px; height: 16px; flex: none; display: inline-flex; opacity: 0.85; }
+.side-item__ico svg { width: 16px; height: 16px; }
+.side-item__lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-item__kbd { font-size: var(--t-micro); color: var(--ink-3); }
+.shell--collapsed .side-item__lbl,
+.shell--collapsed .side-item__kbd { display: none; }
+.shell--collapsed .side-item { justify-content: center; padding: 6px 0; }
+
+.side-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.side-dot--ok { background: var(--ok); }
+.side-dot--warn { background: var(--warn); }
+.side-dot--err { background: var(--err); }
+.side-dot--off { background: var(--ink-4); }
+.shell--collapsed .side-dot { position: absolute; margin-left: 14px; margin-top: -14px; }
+
+.side-nav__sep { height: 1px; background: var(--border-1); margin: var(--s-3) var(--s-2); }
+.side-foot {
+  margin-top: auto;
+  padding: var(--s-3) var(--s-2) 0;
+  border-top: 1px solid var(--border-1);
+  display: flex; align-items: center; gap: var(--s-2);
+  font-size: var(--t-meta); color: var(--ink-3);
+  white-space: nowrap; overflow: hidden;
+}
+.shell--collapsed .side-foot span:not(.side-dot) { display: none; }
+.side-collapse {
+  margin-top: var(--s-2);
+  align-self: flex-start;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border: 1px solid transparent; border-radius: var(--r-xs);
+  background: none; color: var(--ink-3); cursor: pointer;
+}
+.side-collapse:hover { background: var(--ctrl-hover); color: var(--ink-1); }
+.side-collapse svg { width: 14px; height: 14px; }
+.shell--collapsed .side-collapse svg { transform: rotate(180deg); }
+
+/* ---- main + view header ---- */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.vhead {
+  display: flex; align-items: center; gap: var(--s-4);
+  padding: var(--s-3) var(--s-6);
+  border-bottom: 1px solid var(--border-1);
+  flex: none;
+}
+.vhead__title { font-size: var(--t-title); line-height: var(--lh-title); font-weight: var(--w-title); margin: 0; }
+.vhead__meta { font-size: var(--t-meta); color: var(--ink-3); }
+.vhead__spacer { flex: 1; }
+.vhead .btn { height: 30px; font-size: var(--t-meta); border-radius: var(--r-sm); padding: 0 12px; }
+kbd.kbd {
+  font: inherit; font-size: var(--t-micro); color: var(--ink-3);
+  border: 1px solid var(--border-1); border-radius: 4px;
+  padding: 1px 5px; background: var(--bg-2);
+}
+
+/* ---- banner offline no-bloqueante (spec §3.1) ---- */
+.offline-banner {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-2) var(--s-6);
+  background: var(--warn-soft);
+  border-bottom: 1px solid var(--border-1);
+  color: var(--ink-1);
+  font-size: var(--t-meta);
+  flex: none;
+}
+.offline-banner[hidden] { display: none; }
+.offline-banner .side-dot { background: var(--warn); }
+.offline-banner__spacer { flex: 1; }
