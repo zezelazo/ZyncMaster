@@ -26,6 +26,46 @@ and that `Enter` pastes the selected item's id. Run it on its own (it ignores `B
 npx playwright test clipboard-viewer
 ```
 
+### `tests/calendar-app-day.spec.js` — desktop App Calendar v2 day view (self-contained)
+
+Drives the App shell's unified calendar day view in a real Chromium. **No running App or Server
+is needed**: it serves `ui/` from disk via route interception and injects a mock
+`window.chrome.webview` answering the real bridge contract (same technique as
+`clipboard-viewer.spec.js`); every mock mirrors the exact `/api/calendar/day` wire shape and the
+bridge's serialized DTOs. It covers:
+
+- the unified day **grid** (event rendered positioned, COM account degraded with the visible
+  "snapshot unavailable" badge);
+- the **Replicate panel** mask contract (decision D6): checking a destination with a blank mask
+  keeps the CTA disabled ("Type a title for each destination"); typing a mask enables
+  "Create 1 replica"; the `createEventReplicas` payload carries the typed mask and the
+  two-segment event identity, and **never** the origin title;
+- the **Prefix rules panel** listing the rules returned by the bridge.
+
+```
+npx playwright test calendar-app-day
+```
+
+### `tests/web-calendar.spec.js` — Angular web calendar (self-contained, needs a prior build)
+
+Smoke of the Angular web UI. **Requires the production bundle on disk first**:
+
+```
+cd web/zync-web && npx ng build --configuration production
+```
+
+It serves `web/zync-web/dist/zync-web/browser` under `https://web.test/zync-web/` with a
+`try_files`-style index fallback (exercising the `/zync-web/` base-href + client routing via a
+deep link) and mocks the `/zync` API with `page.route`; auth enters through the real route guard
+via a mocked `/identity/refresh`. It covers the unified per-account columns with the COM
+"snapshot unavailable" badge, the event detail's replicas section, respond-to-organizer with a
+message (decline + message posted to the two-segment respond route), and organizer-only cancel
+behind an explicit confirmation.
+
+```
+npx playwright test web-calendar
+```
+
 ### `tests/panel.spec.js` — Server web panel (needs a running Server)
 
 Drives `app.js`'s boot path in a real Chromium:

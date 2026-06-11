@@ -113,3 +113,45 @@ test('day view renders the unified grid with the COM degradation badge', async (
   await expect(page.locator('.calday-ev')).toContainText('Comité de arquitectura');
   await expect(page.getByText('snapshot unavailable')).toBeVisible();
 });
+
+test('replicate panel requires a typed mask title before creating', async ({ page }) => {
+  // gotoDayView (definido en el harness de 6.7): sidebar → Calendar → #openCalendarDay.
+  await gotoDayView(page);
+  await page.locator('.calday-ev').click();
+  await expect(page.getByRole('heading', { name: 'Replicate event' })).toBeVisible();
+
+  const destRow = page.locator('.calday-dest').first();
+  await destRow.locator('input[type="checkbox"]').check();
+  const mask = destRow.locator('input[type="text"]');
+  await expect(mask).toHaveValue('');
+
+  // Decision D6: a blank mask is INVALID — the CTA stays disabled and demands a title.
+  const cta = page.locator('#calDayCreateReplicas');
+  await expect(cta).toBeDisabled();
+  await expect(cta).toHaveText('Type a title for each destination');
+
+  await mask.fill('Busy');
+  await expect(cta).toBeEnabled();
+  await expect(cta).toHaveText('Create 1 replica');
+  await cta.click();
+  await expect.poll(async () =>
+    page.evaluate(() => window.__bridgeCalls.filter((c) => c.action === 'createEventReplicas').length),
+  ).toBe(1);
+
+  // Privacy contract: the origin title never travels in the payload — only the typed mask.
+  const sent = await page.evaluate(() =>
+    window.__bridgeCalls.find((c) => c.action === 'createEventReplicas').payload);
+  expect(sent).toContain('"Busy"');
+  expect(sent).toContain('"eventId":"e1"');
+  expect(sent).not.toContain('Comité');
+});
+
+test('prefix rules panel lists the rules from the bridge', async ({ page }) => {
+  await gotoDayView(page);  // sidebar → Calendar → #openCalendarDay (harness de 6.7)
+  await page.locator('.calday-ev').click();
+  await page.locator('#calDayManageRules').click();
+  await expect(page.getByRole('heading', { name: 'Prefix rules' })).toBeVisible();
+  // exact: the static hint copy also mentions “[Lunch] X”; the rule row from the bridge is the
+  // element whose text is exactly the bracketed prefix.
+  await expect(page.getByText('[Lunch]', { exact: true })).toBeVisible();
+});
