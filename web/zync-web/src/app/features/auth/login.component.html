@@ -1,0 +1,21 @@
+<main class="min-h-dvh grid place-items-center bg-bg-0">
+  <section class="w-full max-w-sm rounded-md border border-border-1 bg-surface p-s6">
+    <h1 class="text-title font-semibold text-ink-1 m-0">Sign in to SyncMaster</h1>
+    @if (sent()) {
+      <p class="text-body text-ink-2 mt-s4" data-testid="sent">
+        Check your email — we sent you a one-time sign-in link.
+      </p>
+    } @else {
+      <p class="text-meta text-ink-3 mt-s2">We email you a one-time sign-in link.</p>
+      <label class="block text-micro font-semibold text-ink-3 mt-s4" for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="email" [(ngModel)]="email"
+             class="mt-s1 w-full rounded-xs border border-ctrl-stroke bg-bg-2 px-s3 py-s2 text-body text-ink-1"
+             data-testid="email" />
+      @if (error(); as err) { <p class="text-micro text-err mt-s2">{{ err }}</p> }
+      <button type="button" (click)="send()" data-testid="send"
+              class="mt-s4 w-full rounded-sm border border-azure-edge bg-azure-soft px-s3 py-s2 text-meta font-medium text-azure-2">
+        Send sign-in link
+      </button>
+    }
+  </section>
+</main>

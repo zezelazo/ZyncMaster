@@ -1,0 +1,7 @@
+<main class="min-h-dvh grid place-items-center bg-bg-0">
+  @if (error(); as err) {
+    <p class="text-body text-err" data-testid="cb-error">{{ err }}</p>
+  } @else {
+    <p class="text-body text-ink-2">Signing you in…</p>
+  }
+</main>
