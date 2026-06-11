@@ -147,7 +147,99 @@ public static class CalendarV2Endpoints
             return Results.NoContent();
         }).RequireIdentityBearer();
 
-        // Task 12: POST /api/calendar/events/{accountId}/{eventId}/respond
+        // Write-back toward the ORIGIN (spec §6): cancel (organizer only), accept, decline
+        // ("will not attend") or tentative, always with an OPTIONAL user-authored message —
+        // the single piece of information that ever crosses to the origin side (§12).
+        // COM origins get the explicit v1.1 deferral (queue + CalExport --respond), never
+        // a silent failure. linkId (optional) closes a broken link once the write-back lands.
+        app.MapPost("/api/calendar/events/{accountId}/{eventId}/respond", async (
+            string accountId,
+            string eventId,
+            RespondRequest? request,
+            ICalendarAccountStore accounts,
+            IReplicaLinkStore links,
+            Func<string, IReplicaGraphClient> clients,
+            Func<string, IEventResponder> responders,
+            TimeProvider clock,
+            CancellationToken ct) =>
+        {
+            var body = request ?? new RespondRequest(null, null, null);
+            var validation = new RespondRequestValidator().Validate(body);
+            if (!validation.IsValid)
+                return Results.ValidationProblem(validation.ToDictionary());
+
+            var account = await accounts.GetAsync(accountId, ct);
+            if (account is null)
+                return Results.NotFound(new { error = "account_not_found" });
+
+            if (account.Kind != AccountKind.Graph)
+            {
+                // Spec §13 deferral, verbatim scope: the COM write-back is v1.1 — a server-side
+                // action queue with TTL drained by the pinned device's App, executed through a
+                // new CalExport --respond verb (AppointmentItem.Respond + Send over COM). Until
+                // then the UI offers only recreate/discard for COM-source broken links.
+                return Results.UnprocessableEntity(new
+                {
+                    error = "com_writeback_deferred",
+                    message = "Write-back to COM origins ships in v1.1 via the CalExport respond queue; v1 supports Graph origins only.",
+                });
+            }
+
+            if (account.Scope != AccountScope.ReadWrite)
+                return Results.Conflict(new
+                {
+                    error = "readwrite_scope_required",
+                    message = "Upgrade the account scope to respond from here.",
+                });
+
+            var snapshot = await clients(accountId).GetEventAsync(eventId, ct);
+            if (snapshot is null)
+                return Results.NotFound(new { error = "event_not_found" });
+
+            var responder = responders(accountId);
+            switch (body.Action!.ToLowerInvariant())
+            {
+                case "cancel":
+                    if (!snapshot.IsOrganizer)
+                        return Results.Conflict(new
+                        {
+                            error = "organizer_required",
+                            message = "Only the organizer can cancel; decline instead.",
+                        });
+                    if (snapshot.HasAttendees)
+                        await responder.CancelMeetingAsync(eventId, body.Message, ct);
+                    else
+                        // A personal appointment has nobody to notify: cancel == clean,
+                        // silent delete (the CalImport rationale, spec §3).
+                        await clients(accountId).DeleteEventAsync(eventId, ct);
+                    break;
+                case "accept":
+                    await responder.RespondAsync(eventId, RespondAction.Accept, body.Message, ct);
+                    break;
+                case "decline":
+                    await responder.RespondAsync(eventId, RespondAction.Decline, body.Message, ct);
+                    break;
+                case "tentative":
+                    await responder.RespondAsync(eventId, RespondAction.Tentative, body.Message, ct);
+                    break;
+            }
+
+            // Broken-link closure (spec §3/§7): confirming the write-back is one of the only
+            // two flows that move broken -> tombstone (the other is discarding the link).
+            if (!string.IsNullOrEmpty(body.LinkId))
+            {
+                var link = await links.GetAsync(body.LinkId, ct);
+                if (link is not null && link.Status == ReplicaLinkStatus.Broken)
+                    await links.UpdateAsync(link with
+                    {
+                        Status = ReplicaLinkStatus.Tombstone,
+                        UpdatedUtc = clock.GetUtcNow(),
+                    }, ct);
+            }
+
+            return Results.Ok(new { status = "ok" });
+        }).RequireIdentityBearer();
+
         // Task 16: GET  /api/calendar/day
     }
 
@@ -260,5 +352,21 @@ public sealed class UpdateReplicaRequestValidator : AbstractValidator<UpdateRepl
             .Must(x => x.Recreate ? string.IsNullOrEmpty(x.Title) : !string.IsNullOrWhiteSpace(x.Title))
             .WithMessage("Provide either a non-empty title, or recreate=true (not both).");
         RuleFor(x => x.Title).MaximumLength(256);
+    }
+}
+
+public sealed record RespondRequest(string? Action, string? Message, string? LinkId);
+
+public sealed class RespondRequestValidator : AbstractValidator<RespondRequest>
+{
+    private static readonly string[] ValidActions = { "cancel", "accept", "decline", "tentative" };
+
+    public RespondRequestValidator()
+    {
+        RuleFor(x => x.Action)
+            .Must(a => !string.IsNullOrWhiteSpace(a) &&
+                ValidActions.Contains(a.ToLowerInvariant()))
+            .WithMessage("action must be one of: cancel, accept, decline, tentative.");
+        RuleFor(x => x.Message).MaximumLength(1024);
     }
 }
