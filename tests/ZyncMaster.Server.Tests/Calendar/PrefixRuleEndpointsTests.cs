@@ -154,8 +154,8 @@ public class PrefixRuleEndpointsTests
         var id = await CreateRuleAsync(client, tokenA);
         var (tokenB, _) = IssueBearer(f, "bob", "bob@test");
 
-        (await client.SendAsync(Bearer(HttpMethod.Get, "/api/calendar/prefix-rules", tokenB)))
-            .Content.ReadAsStringAsync().Result.Should().Be("[]");
+        var listB = await client.SendAsync(Bearer(HttpMethod.Get, "/api/calendar/prefix-rules", tokenB));
+        (await listB.Content.ReadAsStringAsync()).Should().Be("[]");
         (await client.SendAsync(Bearer(HttpMethod.Put, $"/api/calendar/prefix-rules/{id}", tokenB,
             RuleBody()))).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await client.SendAsync(Bearer(HttpMethod.Delete, $"/api/calendar/prefix-rules/{id}", tokenB)))

@@ -156,7 +156,7 @@ public class RespondEndpointTests
             try
             {
                 var links = scope.ServiceProvider.GetRequiredService<IReplicaLinkStore>();
-                var link = links.AddAsync(new ReplicaLink
+                var link = await links.AddAsync(new ReplicaLink
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     SourceAccountId = "acc-1",
@@ -167,7 +167,7 @@ public class RespondEndpointTests
                     DestinationEventId = "gone",
                     MaskTitle = "Busy",
                     Status = ReplicaLinkStatus.Broken,
-                }).GetAwaiter().GetResult();
+                });
                 linkId = link.Id;
             }
             finally { overrideUser.Clear(); http.HttpContext = null; }
@@ -187,7 +187,7 @@ public class RespondEndpointTests
         try
         {
             var links2 = scope2.ServiceProvider.GetRequiredService<IReplicaLinkStore>();
-            links2.GetAsync(linkId).GetAwaiter().GetResult()!
+            (await links2.GetAsync(linkId))!
                 .Status.Should().Be(ReplicaLinkStatus.Tombstone,
                     "confirming the write-back is one of the only two broken->tombstone flows");
         }
