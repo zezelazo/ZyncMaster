@@ -309,8 +309,7 @@ const state = {
   progress: { done: 0, total: 20 },
 };
 
-// ---------------- Aurora + ARIA ----------------
-function setAurora(s) { const w = $('#win'); if (w) w.dataset.aurora = s; }
+// ---------------- ARIA ----------------
 function announce(msg) { const live = $('#liveRegion'); if (live) live.textContent = msg; }
 
 function fmtMMSS(s) {
@@ -3916,8 +3915,7 @@ function renderPairing(root) {
     clearTimeout(pairing.timer);
     pairing.timer = setTimeout(() => {
       if (state.view === 'pairing' && pairing.step === 1) {
-        pairing.step = 2; setAurora('success'); announce('Device paired successfully.'); rerender();
-        setTimeout(() => setAurora('idle'), 2600);
+        pairing.step = 2; announce('Device paired successfully.'); rerender();
       }
     }, 2400);
   } else if (pairing.step === 2) {
@@ -3942,20 +3940,18 @@ function runSync() {
   if (Bridge.available) {
     state.sync = 'syncing';
     state.progress = { done: 0, total: 0 };
-    setAurora('syncing');
     announce('Sync started');
     rerender();
     Bridge.call('syncNow')
       .then(() => Bridge.call('getStatus'))
       .then((s) => applyNativeStatus(s))
-      .catch(() => { state.sync = 'error'; setAurora('error'); announce('Sync failed.'); rerender(); });
+      .catch(() => { state.sync = 'error'; announce('Sync failed.'); rerender(); });
     return;
   }
 
   // Standalone / demo (no host): the mock progress animation.
   state.sync = 'syncing';
   state.progress = { done: 0, total: 20 };
-  setAurora('syncing');
   announce('Sync started');
   rerender();
 
@@ -3965,10 +3961,9 @@ function runSync() {
     if (state.progress.done >= state.progress.total) {
       clearInterval(syncTimer);
       state.sync = 'success';
-      setAurora('success');
       announce('Sync complete. 20 events synchronised.');
       rerender();
-      setTimeout(() => { state.sync = 'ok'; setAurora('idle'); rerender(); }, 1600);
+      setTimeout(() => { state.sync = 'ok'; rerender(); }, 1600);
     } else {
       rerenderInPlace();
     }
@@ -4146,7 +4141,7 @@ function openModal({ title, body, onClose }) {
 
   const closeBtn = el('button', { class: 'modal__close', type: 'button', 'aria-label': 'Close', onclick: close }, iconEl('close', 16, 1.8));
   const head = el('div', { class: 'modal__head' }, el('div', { class: 'modal__title', text: title }), closeBtn);
-  const card = el('div', { class: 'glass glass--card modal__card', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+  const card = el('div', { class: 'glass--overlay modal__card', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
     head, el('div', { class: 'modal__body' }, body));
   card.addEventListener('click', (e) => e.stopPropagation());
 

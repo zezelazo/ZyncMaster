@@ -207,34 +207,12 @@
   font-family: inherit;
   color: var(--ink-1);
 }
-/* Border-light glow that travels the tile edge on hover — decorative, pointer-events:none,
-   behind the content. */
-.module-tile::before {
-  content: "";
-  position: absolute; inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: conic-gradient(from var(--edge-angle, 0deg),
-    transparent 0deg, var(--terra-edge) 45deg, transparent 120deg, transparent 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity var(--d-base) var(--ease-out);
-  pointer-events: none;
-  z-index: 0;
-}
 .module-tile:not([disabled]):hover {
   background: var(--glass-fill);
   border-color: var(--glass-stroke);
 }
-.module-tile:not([disabled]):hover::before { opacity: 0.85; animation: edge-travel 5s linear infinite; }
-.module-tile:not([disabled]):hover .module-tile__title { color: var(--terra); }
+.module-tile:not([disabled]):hover .module-tile__title { color: var(--azure-2); }
 .module-tile[disabled] { cursor: default; opacity: 0.72; }
-@media (prefers-reduced-motion: reduce) {
-  .module-tile:not([disabled]):hover::before { animation: none; }
-}
 .module-tile[data-active="true"] {
   border-color: var(--terra-edge);
   box-shadow:
@@ -414,37 +392,18 @@
   height: 30px;
   padding: 0 12px;
   font-size: 11.5px; font-weight: 600;
-  color: var(--terra);
-  background: var(--terra-soft);
-  border: 1px solid var(--terra-edge);
+  color: var(--azure);
+  background: var(--azure-soft);
+  border: 1px solid var(--azure-edge);
   border-radius: var(--r-pill);
   cursor: pointer;
   isolation: isolate;
   transition: background var(--d-base), border-color var(--d-base);
 }
-/* Border-light glow on the per-pair Sync button — decorative, pointer-events:none, behind
-   the label. No background flicker, no transform: the whole button stays clickable in one go. */
-.pair__sync-btn::before {
-  content: "";
-  position: absolute; inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: conic-gradient(from var(--edge-angle, 0deg),
-    transparent 0deg, var(--terra) 40deg, transparent 110deg, transparent 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity var(--d-base) var(--ease-out);
-  pointer-events: none;
-  z-index: -1;
-}
 /* The icon / spinner / count spans are presentational — never let them eat the click. */
 .pair__sync-btn > span { pointer-events: none; }
 .pair__sync-btn svg { width: 12px; height: 12px; }
-.pair__sync-btn:hover:not([disabled]) { background: rgba(217,119,87,0.22); border-color: var(--terra); }
-.pair__sync-btn:hover:not([disabled])::before { opacity: 0.95; animation: edge-travel 4.5s linear infinite; }
+.pair__sync-btn:hover:not([disabled]) { background: rgba(91,140,255,0.22); border-color: var(--azure); }
 .pair__sync-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 /* Busy (single-flight in progress): readable, calm — not greyed like a hard-disabled control. The
    spinner already conveys progress; keep the surface in the azure accent and a wait cursor. */
@@ -727,7 +686,7 @@
   cursor: pointer;
 }
 .cal-add svg { width: 13px; height: 13px; }
-.cal-add:hover { background: var(--ctrl-hover); color: var(--ink-1); border-color: var(--terra-edge); }
+.cal-add:hover { background: var(--ctrl-hover); color: var(--ink-1); border-color: var(--azure-edge); }
 
 /* Pair preview (step 3) */
 .pair-preview {
@@ -776,7 +735,7 @@
   color: inherit;
 }
 /* No hover transform — only a calm border tint, so the tile never shifts under the cursor. */
-.provider-tile:hover { border-color: var(--terra-edge); }
+.provider-tile:hover { border-color: var(--azure-edge); }
 .provider-tile.is-selected { outline: 1px solid var(--azure-edge); background: var(--azure-soft); }
 .provider-tile.is-disabled,
 .provider-tile:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -997,20 +956,6 @@
 }
 .launch__logo svg { width: 104px; height: 104px; }
 .launch__rings { position: absolute; inset: -8px; pointer-events: none; }
-.launch__rings span {
-  position: absolute; inset: 0;
-  border-radius: 50%;
-  border: 1.5px solid var(--terra);
-  opacity: 0;
-  animation: ring-pulse 2.4s var(--ease-out) infinite;
-}
-.launch__rings span:nth-child(2) { border-color: var(--azure); animation-delay: 0.8s; }
-.launch__rings span:nth-child(3) { border-color: var(--ok);    animation-delay: 1.6s; }
-@keyframes ring-pulse {
-  0%   { transform: scale(0.5); opacity: 0; }
-  20%  { opacity: 0.6; }
-  100% { transform: scale(2.2); opacity: 0; }
-}
 @keyframes logo-in {
   0%   { transform: scale(0.6); opacity: 0; }
   60%  { transform: scale(1.08); opacity: 1; }
@@ -1176,8 +1121,8 @@
 .view.enter > *:nth-child(7) { animation-delay: 390ms; }
 .view.enter > *:nth-child(8) { animation-delay: 440ms; }
 @keyframes card-in {
-  from { opacity: 0; transform: translateY(14px) scale(0.985); filter: blur(6px); }
-  to   { opacity: 1; transform: translateY(0) scale(1);        filter: blur(0); }
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .view.enter > * { animation: none; }

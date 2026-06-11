@@ -58,4 +58,28 @@ test('public token manifest comment present and lists the new tokens', () => {
   }
 });
 
+// ---- pase sustractivo: motion ambiental y terra-en-controles mueren (spec §2/§5) --------
+const components = css('components.css');
+const layout = css('layout.css');
+const glass = css('glass.css');
+
+for (const banned of ['@keyframes pulse', '@keyframes edge-travel', '@keyframes cta-breathe', '@keyframes ring-pulse']) {
+  test(`ambient keyframe gone: ${banned}`, () =>
+    assert.ok(!components.includes(banned) && !layout.includes(banned), `${banned} still present`));
+}
+test('view entrance has no blur keyframe', () => assert.ok(!layout.includes('filter: blur(6px)'), 'card-in still blurs'));
+test('no terra in interactive controls (components.css)', () => {
+  // terra queda SOLO permitido en marca puntual; components.css no estiliza marca.
+  assert.ok(!components.includes('var(--terra'), 'components.css still uses terra');
+});
+test('.glass is flat (no backdrop-filter)', () => {
+  const flat = glass.slice(glass.indexOf('.glass {'), glass.indexOf('.glass--overlay'));
+  assert.ok(!flat.includes('backdrop-filter'), '.glass base recipe still blurs');
+});
+test('.glass--overlay exists with blur <= 16px', () => {
+  const m = glass.match(/\.glass--overlay[\s\S]*?backdrop-filter:\s*blur\((\d+)px\)/);
+  assert.ok(m, '.glass--overlay with backdrop-filter not found');
+  assert.ok(parseInt(m[1], 10) <= 16, `overlay blur ${m[1]}px > 16px`);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ' (with failures)' : ''}`);
