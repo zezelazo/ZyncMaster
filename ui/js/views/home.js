@@ -4,6 +4,7 @@
 
 import { eventRows, clipboardRows } from '../core/board-model.js';
 import { healthRows } from '../core/status-model.js';
+import { showToast } from '../toast.js';
 
 export function registerHomeViews(ctx) {
   const { el, icon, Bridge, live, state, navigate, rerenderInPlace, announce, registry,
@@ -49,7 +50,7 @@ export function registerHomeViews(ctx) {
           const copyBtn = el('button', { class: 'board-copy', type: 'button', 'aria-label': `Copy: ${r.title}` }, 'Copy');
           copyBtn.addEventListener('click', () => {
             Bridge.call('copyClipboardEntry', String(r.id))
-              .then(() => { announce('Copied to clipboard.'); copyBtn.textContent = 'Copied'; setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500); })
+              .then(() => { announce('Copied to clipboard.'); showToast('Copied to clipboard'); copyBtn.textContent = 'Copied'; setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500); })
               .catch(() => announce('Copy failed.'));
           });
           return el('div', { class: 'board-row' },

@@ -14,6 +14,7 @@ import { webRequestFor, statusFromPairs } from './web-transport.js';
 import { createRegistry } from './core/registry.js';
 import { calendarDot, clipboardDot, devicesDot } from './core/status-model.js';
 import { initPalette, registerPaletteSource } from './palette.js';
+import { showToast } from './toast.js';
 import { registerHomeViews } from './views/home.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -1124,7 +1125,18 @@ function pairAccordion(pair) {
         iconEl('pencil', 15, 1.8)));
 
       controls.append(el('button', { class: 'btn btn--ghost pair__ctrl-btn pair__ctrl-btn--danger', 'aria-label': 'Delete', title: 'Delete',
-        onclick: (e) => { e.stopPropagation(); deletePair(pair.id); } },
+        onclick: (e) => {
+          e.stopPropagation();
+          confirmModal({
+            title: 'Delete sync pair',
+            text: `"${pair.name}" will stop syncing and its configuration will be removed. Events already copied to the destination are not deleted.`,
+            confirmLabel: 'Delete pair',
+          }).then((yes) => {
+            if (!yes) return;
+            deletePair(pair.id);
+            showToast('Sync pair deleted');
+          });
+        } },
         iconEl('trash', 15, 1.7)));
 
       body.append(controls);
@@ -3943,6 +3955,21 @@ function openModal({ title, body, onClose }) {
   return { close };
 }
 
+// confirmModal — confirmación destructiva sobre openModal. Resuelve true/false; cerrar
+// con Esc/backdrop cuenta como cancelar.
+function confirmModal({ title, text, confirmLabel = 'Delete' }) {
+  return new Promise((resolve) => {
+    let decided = false;
+    const decide = (v) => { if (!decided) { decided = true; resolve(v); } modal.close(); };
+    const body = el('div', { class: 'confirm' },
+      el('div', { class: 'confirm__text', text }),
+      el('div', { class: 'confirm__actions' },
+        el('button', { class: 'btn btn--ghost', type: 'button', onclick: () => decide(false) }, 'Cancel'),
+        el('button', { class: 'btn btn--danger', type: 'button', onclick: () => decide(true) }, confirmLabel)));
+    const modal = openModal({ title, body, onClose: () => { if (!decided) { decided = true; resolve(false); } } });
+  });
+}
+
 // ---------------- Shell chrome: sidebar + view header ----------------
 const SIDEBAR_KEY = 'zyncmaster.sidebar';
 function sidebarCollapsed() { try { return localStorage.getItem(SIDEBAR_KEY) === 'collapsed'; } catch (_) { return false; } }
@@ -4043,6 +4070,7 @@ function syncAllPairs() {
   const pairs = (live.pairs || []).filter((p) => p && p.state === 'active');
   pairs.forEach((p) => runPairNow(p.id));
   announce(pairs.length ? 'Sync started.' : 'No active sync pairs.');
+  showToast(pairs.length ? 'Sync started' : 'No active sync pairs', { kind: pairs.length ? 'ok' : 'warn' });
 }
 
 function renderShellChrome() {
@@ -4633,7 +4661,7 @@ const ctx = {
   // navegación + repintado
   registry, navigate, rerender, rerenderInPlace, softRepaint,
   // feedback
-  announce, openModal,
+  announce, openModal, confirmModal, showToast,
   // fragments compartidos
   viewHeader, navRow, actionChip, activityRow, pairBadge,
   // datos compartidos
