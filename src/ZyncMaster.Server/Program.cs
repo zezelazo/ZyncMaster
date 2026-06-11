@@ -272,6 +272,7 @@ builder.Services.AddSingleton<Func<string, ZyncMaster.Graph.IEventResponder>>(sp
 builder.Services.AddSingleton<IReplicaLinkStore, EfReplicaLinkStore>();
 builder.Services.AddSingleton<IPrefixRuleStore, EfPrefixRuleStore>();
 builder.Services.AddSingleton<ReplicaService>();
+builder.Services.AddSingleton<PrefixRuleEvaluator>();
 builder.Services.AddSingleton<ProviderRegistry>();
 
 // Modular sync engine seam (Phase 4): a pair's execution lives behind ISyncModule so adding
