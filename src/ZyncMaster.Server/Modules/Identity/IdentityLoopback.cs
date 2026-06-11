@@ -37,6 +37,35 @@ internal static class IdentityLoopback
             $"&nonce={Uri.EscapeDataString(nonce)}";
     }
 
+    // Web-mode variant: same session minting + one-time handle, but the redirect target is the
+    // Angular SPA's fixed origin-relative callback path (served by nginx at /zync-web/). The
+    // path is a constant on purpose — accepting a caller-supplied redirect would be an open
+    // redirect on an endpoint that carries a credential handle.
+    public const string WebCallbackPath = "/zync-web/auth/callback";
+
+    public static async Task<string> IssueWebRedirectAsync(
+        UserRow user,
+        string nonce,
+        IIdentityTokenService identityTokens,
+        IIdentityHandleStore handles,
+        CancellationToken ct)
+    {
+        var access = identityTokens.IssueAccessToken(user);
+        var refresh = await identityTokens.IssueRefreshTokenAsync(user.Id, ct);
+
+        var bundle = JsonSerializer.Serialize(new HandleBundle
+        {
+            AccessToken = access.Token,
+            RefreshToken = refresh,
+        });
+        var handle = handles.IssueHandle(bundle);
+
+        return
+            $"{WebCallbackPath}" +
+            $"?handle={Uri.EscapeDataString(handle)}" +
+            $"&nonce={Uri.EscapeDataString(nonce)}";
+    }
+
     // The JSON wrapped behind the one-time handle and returned on /identity/handle/redeem.
     public sealed class HandleBundle
     {

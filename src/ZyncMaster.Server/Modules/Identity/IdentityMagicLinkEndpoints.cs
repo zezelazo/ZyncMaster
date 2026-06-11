@@ -73,7 +73,10 @@ public static class IdentityMagicLinkEndpoints
             // reflects a malformed App request, not the existence of a user, so it does not leak.
             if (body is null || string.IsNullOrWhiteSpace(body.Email))
                 return Results.BadRequest("Missing email.");
-            if (body.Port < 1024 || body.Port > 65535)
+            // Web mode (the Angular SPA) has no loopback listener: Port is meaningless there and
+            // is stored as 0, which the callback uses as the web-mode marker. Desktop keeps the
+            // strict loopback range.
+            if (!body.Web && (body.Port < 1024 || body.Port > 65535))
                 return Results.BadRequest("Invalid loopback port.");
             if (string.IsNullOrEmpty(body.Nonce))
                 return Results.BadRequest("Missing nonce.");
@@ -105,7 +108,7 @@ public static class IdentityMagicLinkEndpoints
                     Id = Guid.NewGuid().ToString("N"),
                     TokenHash = HashToken(token),
                     Email = normalizedEmail,
-                    Port = body.Port,
+                    Port = body.Web ? 0 : body.Port,
                     Nonce = body.Nonce,
                     CreatedAt = now,
                     ExpiresAt = now.AddMinutes(options.MagicLinkTtlMinutes),
@@ -203,8 +206,14 @@ public static class IdentityMagicLinkEndpoints
                 displayName: row.Email,
                 context.RequestAborted);
 
-            var redirect = await IdentityLoopback.IssueLoopbackRedirectAsync(
-                user, row.Port, row.Nonce, identityTokens, handles, context.RequestAborted);
+            // Port==0 marks a WEB-mode link: the handle lands on the SPA's FIXED same-origin
+            // callback path (never a caller-supplied URL — no open redirect surface). Desktop
+            // links keep the loopback redirect.
+            var redirect = row.Port == 0
+                ? await IdentityLoopback.IssueWebRedirectAsync(
+                    user, row.Nonce, identityTokens, handles, context.RequestAborted)
+                : await IdentityLoopback.IssueLoopbackRedirectAsync(
+                    user, row.Port, row.Nonce, identityTokens, handles, context.RequestAborted);
 
             return Results.Redirect(redirect);
         });
@@ -254,5 +263,8 @@ public static class IdentityMagicLinkEndpoints
 
         [System.Text.Json.Serialization.JsonPropertyName("nonce")]
         public string Nonce { get; set; } = "";
+
+        [System.Text.Json.Serialization.JsonPropertyName("web")]
+        public bool Web { get; set; }
     }
 }
