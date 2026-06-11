@@ -1,7 +1,9 @@
-﻿// app.js — Zync Master UI. Vanilla ES module, no framework, no build step.
-// Reimplements the design handoff (app.jsx) behaviour: launch splash, Home,
-// Calendar Sync accordion, Add Pair / Add Calendar / Pairing wizards, Settings,
-// About, bottom nav with sliding indicator, the sync state machine and motion.
+﻿// app.js — Zync Master UI composition root. Vanilla ES module, no framework, no build step.
+// This file is the shell, NOT the views: it owns the Bridge, the shared state (state/live/
+// settings), theme + boot, the desktop shell chrome (sidebar, view header, offline banner),
+// the view registry, the command-palette sources, the sync state machine, and the shared
+// helpers/fragments. Every screen lives in ui/js/views/<name>.js and is wired in through the
+// shared `ctx` object (no view imports app.js — zero import cycles).
 //
 // Note on innerHTML: it is used ONLY for the static, author-controlled SVG icon
 // strings from icons.js (no external/user input ever flows into them). Every
@@ -18,6 +20,9 @@ import { showToast } from './toast.js';
 import { registerHomeViews } from './views/home.js';
 import { registerCalendarViews } from './views/calendar.js';
 import { registerClipboardViews } from './views/clipboard.js';
+import { registerDevicesViews } from './views/devices.js';
+import { registerSettingsViews } from './views/settings.js';
+import { registerAuthViews } from './views/auth.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -306,9 +311,9 @@ if (mql && mql.addEventListener) {
 
 // ---------------- App state ----------------
 // Product version shown in About + the Settings "About" row. Hardcoded because the web UI has
-// no channel to read the host's .NET assembly version; keep it in step with the published
-// release (currently 0.3.3, beta).
-const VERSION = '0.3.3';
+// no channel to read the host's .NET assembly version.
+// Mantener sincronizado con <Version> en src/ZyncMaster.App/ZyncMaster.App.csproj — ÚNICA otra fuente.
+const VERSION = '0.3.8';
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -903,15 +908,8 @@ const openPairs = new Set(['p1']);
 // name into the real App. Deciding in the render keeps the value impersonal for any real shell.
 const settings = { autoSync: true, startup: true, interval: 15, windowDays: 14, deviceName: '', pastePanelOpacity: 70 };
 
-function toggle(get, set) {
-  const t = el('div', { class: 'toggle', role: 'switch', 'aria-checked': String(get()), tabindex: '0' });
-  const flip = () => { const v = !get(); set(v); t.setAttribute('aria-checked', String(v)); pushConfig(); };
-  t.addEventListener('click', flip);
-  t.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flip(); } });
-  return t;
-}
-
-// Shared section/row builders for the settings screens.
+// Shared section/row builders for the settings screens (consumed by the Settings, Calendar and
+// Clipboard modules through ctx — they stay here as shared fragments).
 function cfgSection(head, ...rows) {
   const s = el('div', { class: 'glass glass--card config-section' }, el('div', { class: 'config-section__hd', text: head }));
   rows.flat().forEach((r) => { if (r) s.append(r); });
@@ -920,233 +918,6 @@ function cfgSection(head, ...rows) {
 function cfgRow(label, hint, control) {
   return el('div', { class: 'cfg-row' },
     el('div', null, el('div', { class: 'cfg-row__label', text: label }), hint || null), control);
-}
-
-// ensureConfigData — coalesced first-load for the Settings hub. Fires every lazy fetch the hub
-// needs (device, auto-start, connected accounts + their calendars) in one batch and triggers a
-// SINGLE softRepaint when the whole batch settles, instead of each fetch repainting on its own.
-// That stops the first open of Settings from flickering as each promise lands. Guarded so the batch
-// runs at most once per session (configDataLoaded); nothing here re-fetches data already cached.
-let configDataLoaded = false;
-let configDataLoading = false;
-function ensureConfigData() {
-  if (!Bridge.available || configDataLoaded || configDataLoading) return;
-  configDataLoading = true;
-
-  const jobs = [];
-
-  // Device record (desktop App). Cached on live.device.
-  if (live.device === null && !live.deviceLoading) {
-    live.deviceLoading = true;
-    jobs.push(Bridge.call('getDevice')
-      .then((d) => { live.device = d || {}; if (d && d.name) settings.deviceName = d.name; })
-      .catch(() => { live.device = {}; })
-      .finally(() => { live.deviceLoading = false; }));
-  }
-
-  // Auto-start preference (desktop App). Cached on live.autoStart.
-  if (live.autoStart === null) {
-    jobs.push(Bridge.call('getAutoStart')
-      .then((r) => { live.autoStart = !!(r && r.enabled); })
-      .catch(() => {}));
-  }
-
-  // Connected accounts + each account's calendars (desktop App only; the web panel has none).
-  if (Bridge.desktopApp && live.accounts === null) {
-    jobs.push(loadAccounts().then((list) => Promise.all(
-      (list || []).map((acc) => (live.calendars[acc.accountRef] ? Promise.resolve() : loadCalendars(acc.accountRef)))
-    )));
-  } else if (Bridge.desktopApp) {
-    (live.accounts || []).forEach((acc) => { if (!live.calendars[acc.accountRef]) jobs.push(loadCalendars(acc.accountRef)); });
-  }
-
-  Promise.all(jobs).finally(() => {
-    configDataLoaded = true;
-    configDataLoading = false;
-    if (state.view === 'config') softRepaint();
-  });
-}
-
-// resetSessionState — clear every per-session cache the Settings hub relies on so the next sign-in
-// (possibly a DIFFERENT identity on the same machine without restarting the App) reloads fresh data
-// instead of showing the previous user's device name, auto-start toggle and account count. Without
-// this, ensureConfigData()'s once-per-session guard (configDataLoaded) would short-circuit and the
-// hub would render stale values. Called on sign-out.
-function resetSessionState() {
-  configDataLoaded = false;
-  configDataLoading = false;
-  live.device = null;
-  live.deviceLoading = false;
-  live.autoStart = null;
-  live.accounts = null;
-  live.calendars = {};
-  live.me = null;
-  live.clipboardDevices = null;
-  live.clipboardDevicesLoading = false;
-  live.clipboardHistory = null;
-  live.clipboardHistoryLoading = false;
-  // El estado de vista módulo-local (accordion abierto, overlay/filter) vive ahora en
-  // views/clipboard.js; ese módulo expone su reset en ctx.
-  if (ctx.resetClipboardViewState) ctx.resetClipboardViewState();
-}
-
-// ---------------- Screen: Settings hub ----------------
-// The hub separates the three concepts the user kept conflating: IDENTITY (who signed in),
-// DEVICE (this machine), and CALENDAR ACCOUNTS (OAuth grants). Identity + device live together in
-// one "Account & device" card; everything calendar-shaped (accounts, target, schedule, tools) is
-// behind the navigable "Calendar" row that opens its own module. About sits behind a matching
-// nav-row so its chevron lines up.
-function renderConfig(root) {
-  // Web panel: keep the lean panel-appropriate hub (identity + appearance + about). It has no
-  // device and no desktop Calendar module, so it never shows those.
-  if (Bridge.webPanel) {
-    const email = (live.me && live.me.email) || 'Signed in';
-    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutWeb() });
-    root.append(cfgSection('Account',
-      cfgRow('Signed in as', el('div', { class: 'cfg-row__hint', text: email }), signOutBtn)));
-    root.append(appearanceSection());
-    root.append(aboutSection());
-    return;
-  }
-
-  // Coalesced first-load: kick every lazy fetch this hub needs (device, auto-start, accounts +
-  // their calendars) in ONE batch and repaint ONCE when the batch settles, instead of each fetch
-  // firing its own softRepaint (which made the first open of Settings flicker repeatedly). The
-  // section builders below only READ from `live`; they no longer trigger their own loads.
-  ensureConfigData();
-
-  // Account & device — identity (who) + this device (where), consolidated into one card.
-  root.append(accountAndDeviceSection());
-
-  // Calendar — navigable module. Desktop App only: renderCalendarSettings bounces back to the hub
-  // unless Bridge.desktopApp, so showing the row in mock/web would be a dead-end (a flash that
-  // navigates and immediately returns). Show a live summary value (account count) when known.
-  if (Bridge.desktopApp) {
-    const accounts = live.accounts || [];
-    let calValue = '';
-    if (live.accounts === null) calValue = '';
-    else if (accounts.length === 0) calValue = 'Not connected';
-    else calValue = `${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}`;
-    root.append(el('div', { class: 'glass glass--card config-section' },
-      navRow({ label: 'Calendar', sublabel: 'Calendar accounts', value: calValue, onClick: () => navigate('calendar-settings') })));
-
-    // Clipboard — navigable module (desktop App only). Shows a live device-count summary once the
-    // device list has loaded; blank until then (never a fabricated number).
-    const devs = live.clipboardDevices;
-    let clipValue = '';
-    if (devs && Array.isArray(devs.devices)) {
-      const n = devs.devices.length;
-      clipValue = `${n} ${n === 1 ? 'device' : 'devices'}`;
-    }
-    root.append(el('div', { class: 'glass glass--card config-section' },
-      navRow({ label: 'Clipboard', sublabel: 'Sync across your devices', value: clipValue, onClick: () => navigate('clipboard-settings') })));
-  }
-
-  // Appearance.
-  root.append(appearanceSection());
-
-  // About — same nav-row component so the chevron aligns.
-  root.append(aboutSection());
-}
-
-// accountAndDeviceSection — identity row + device-name row + status row, plus (desktop App only)
-// the device-only "Run at startup" app preference. Honest across transports: mock seeds demo
-// strings, the real desktop App reads identity + device live.
-function accountAndDeviceSection() {
-  const rows = [];
-
-  // Identity row: name (displayName||email) on top, a "Signed in" chip + email/plan hint below,
-  // and Sign out on the right. This single row IS the session representation — the old separate
-  // "Status" row ("This device is signed in as X") was redundant with it and has been removed.
-  // identityRow(primary, email, plan) builds the consolidated row.
-  const identityRow = (primary, email, plan) => {
-    const hint = el('div', { class: 'cfg-row__hint identity-hint' });
-    hint.append(el('span', { class: 'chip chip--ok identity-signed', style: 'margin-right:6px' }, iconEl('check', 9, 2.4), 'Signed in'));
-    if (email) hint.append(el('span', { class: 'identity-hint__email', text: email }));
-    if (plan) hint.append(el('span', { class: 'chip chip--ok', style: 'margin-left:8px;height:18px;font-size:9.5px', text: String(plan) }));
-    const signOutBtn = el('button', { class: 'btn btn--ghost', style: 'color:var(--err)', text: 'Sign out', onclick: () => signOutApp() });
-    return cfgRow(primary, hint, signOutBtn);
-  };
-
-  if (Bridge.desktopApp && identityAuth.signedIn) {
-    const me = identityAuth.me || {};
-    rows.push(identityRow(me.displayName || me.email || 'Signed in', (me.displayName && me.email) ? me.email : '', me.plan));
-  } else if (!Bridge.available) {
-    // Mock-only walkthrough identity.
-    rows.push(identityRow('Daniel López', 'daniel@outlook.com', null));
-  }
-
-  // Device name row — the REAL registered device name (getDevice / live.device) on the desktop App,
-  // a hot rename via renameDevice on change. Mock seeds a demo name.
-  if (Bridge.available) {
-    const currentName = (live.device && live.device.name) || settings.deviceName || '';
-    const nameInput = el('input', { class: 'field-input', value: currentName, placeholder: 'Name this device' });
-    const feedback = el('span', { class: 'cfg-row__hint', style: 'margin-left:10px' });
-    // Live ✓/✗ availability indicator, like an email-signup "this name is taken" hint. Sits inside
-    // the input wrapper so the glyph overlays the right edge of the field.
-    const indicator = el('span', { class: 'name-check' });
-    const inputWrap = el('div', { class: 'name-field' }, nameInput, indicator);
-
-    nameInput.addEventListener('input', () => {
-      settings.deviceName = nameInput.value;
-      scheduleDeviceNameCheck(nameInput, indicator, feedback);
-    });
-    nameInput.addEventListener('change', () => saveDeviceName(nameInput, feedback, indicator));
-    // (The device record is fetched by the coalesced ensureConfigData() batch — this builder only
-    // reads live.device so the first open of Settings repaints once, not once per lazy load.)
-    rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint' }, document.createTextNode('Visible to your other devices'), feedback), inputWrap));
-  } else {
-    if (!settings.deviceName) settings.deviceName = "Daniel's MacBook";
-    const nameInput = el('input', { class: 'field-input', value: settings.deviceName, placeholder: 'Name this device' });
-    nameInput.addEventListener('input', () => { settings.deviceName = nameInput.value; });
-    rows.push(cfgRow('Device name', el('div', { class: 'cfg-row__hint', text: 'Visible to your other devices' }), nameInput));
-  }
-
-  // (The standalone "Status" row was merged into the identity row above — the "Signed in" chip
-  // now lives there, next to the name/email, instead of duplicating the identity in its own row.)
-
-  // Run at startup — a device/app preference (NOT calendar), so it lives here. Native/loopback
-  // only; backed by the host auto-start manager.
-  if (Bridge.available) {
-    const startupToggle = toggle(
-      () => (live.autoStart !== null) ? live.autoStart : settings.startup,
-      (v) => { settings.startup = v; live.autoStart = v; Bridge.call('setAutoStart', v ? 'true' : 'false').catch(() => {}); });
-    // (auto-start is fetched by the coalesced ensureConfigData() batch — read-only here.)
-    rows.push(cfgRow('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }), startupToggle));
-  } else {
-    rows.push(cfgRow('Run at startup', el('div', { class: 'cfg-row__hint', text: 'Launch Zync Master when you sign in' }),
-      toggle(() => settings.startup, (v) => { settings.startup = v; })));
-  }
-
-  return cfgSection('Account & device', ...rows);
-}
-
-// appearanceSection — Dark / Light / Auto segmented. The theme handler updates aria-pressed on the
-// buttons directly (no full rerender) so toggling the theme never flickers the screen.
-function appearanceSection() {
-  const seg = el('div', { class: 'segmented' });
-  const buttons = [];
-  ['Dark', 'Light', 'Auto'].forEach((opt) => {
-    const val = opt.toLowerCase();
-    const b = el('button', { class: 'segmented__item', 'aria-pressed': String(storedTheme() === val), text: opt,
-      onclick: () => {
-        applyTheme(val);
-        pushConfig();
-        buttons.forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.val === val)));
-      } });
-    b.dataset.val = val;
-    buttons.push(b);
-    seg.append(b);
-  });
-  return cfgSection('Appearance',
-    cfgRow('Theme', el('div', { class: 'cfg-row__hint', text: 'Auto follows your system' }), seg));
-}
-
-// aboutSection — the navigable About row (nav-row component, so the chevron is centred and the
-// version sits to its left).
-function aboutSection() {
-  return el('div', { class: 'glass glass--card config-section' },
-    navRow({ label: 'About Zync Master', sublabel: 'Version, credits, links', value: VERSION, onClick: () => navigate('about') }));
 }
 
 // ---------------- Screen: Clipboard module ----------------
@@ -1224,22 +995,6 @@ function persistClipboardSettings(dev) {
     showHints: !!s.showHints,
   };
   return Bridge.call('updateClipboardSettings', JSON.stringify(payload)).catch(() => {});
-}
-
-// ---------------- Screen: Sign in (web panel gate) ----------------
-// Shown only in web mode when /api/me reported 401. The button starts the server's OAuth
-// flow; after the callback signs in the cookie and redirects to returnTo=/, the panel reloads
-// authenticated and the gate clears. Styled with the existing glass tokens.
-function renderSignIn(root) {
-  const card = el('div', { class: 'glass glass--card pair-card', style: 'margin-top:14px' },
-    el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
-    el('div', { class: 'pair-title', text: 'Sign in to Zync Master' }),
-    el('div', { class: 'pair-sub', text: 'Connect your Microsoft account to manage your calendar sync pairs from the web panel.' }),
-    el('button', { class: 'btn btn--primary ms-signin', style: 'align-self:stretch',
-      onclick: () => { window.location.href = '/connect?returnTo=/'; } },
-      el('span', { class: 'ms-signin__logo', html: microsoftLogo({ size: 18 }) }),
-      el('span', { class: 'ms-signin__label', text: 'Sign in with Microsoft' })));
-  root.append(card);
 }
 
 // signOutWeb — clears the panel session cookie on the server and returns to the sign-in gate.
@@ -1381,220 +1136,11 @@ function signOutApp() {
       identityAuth.me = null;
       identityAuth.magicLinkSent = false;
       identityAuth.error = null;
-      resetSessionState();
+      // resetSessionState vive en views/settings.js (owner del Settings hub); re-expuesto en ctx.
+      if (ctx.resetSessionState) ctx.resetSessionState();
       state.view = 'home';
       rerender();
     });
-}
-
-// renderIdentitySignIn — the desktop App identity gate. Liquid Glass card with the Microsoft
-// 4-square button and an email magic-link form. States: idle, loading (login in flight), error,
-// and the "magic-link sent" confirmation. Decorative glow lives on the buttons' own
-// border-light; nothing here moves the hit area or flickers on hover.
-function renderIdentitySignIn(root) {
-  // Magic-link sent confirmation — replaces the form until the round-trip completes. The user
-  // still has to click the emailed link (which opens the browser), so we also nudge them to
-  // continue in the browser and give a Cancel/Back path (cancelLogin) for the closed-tab case.
-  if (identityAuth.magicLinkSent) {
-    const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' },
-      el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
-      el('div', { class: 'pair-title', text: 'Check your email' }),
-      el('div', { class: 'pair-sub' },
-        'We sent a sign-in link to ',
-        el('b', { style: 'color:var(--ink-1)', text: identityAuth.magicLinkEmail || 'your inbox' }),
-        '. Open it on this device to finish signing in — this screen updates automatically.'),
-      el('div', { class: 'identity-waiting' },
-        el('span', { class: 'spinner', style: 'width:14px;height:14px;border-color:var(--azure-edge);border-top-color:var(--azure)' }),
-        el('span', { class: 'identity-waiting__txt', text: 'Continue in your browser to finish signing in…' })),
-      el('button', { class: 'btn btn--ghost', text: 'Cancel and use a different email',
-        onclick: () => cancelAppLogin() }),
-    );
-    root.append(card);
-    return;
-  }
-
-  // Login in flight (Microsoft, or magic-link request before it lands) — the host has opened the
-  // system browser and is waiting on the loopback callback. Replace the form with a clear
-  // "continue in your browser" panel plus a Cancel button so a closed tab is recoverable without
-  // restarting the App (cancelLogin frees the port and resets the attempt).
-  if (identityAuth.loading) {
-    const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' },
-      el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
-      el('div', { class: 'pair-title', text: 'Continue in your browser' }),
-      el('div', { class: 'pair-sub', text: 'We opened your browser to finish signing in. Come back here once you are done — this screen updates on its own.' }),
-      el('div', { class: 'identity-waiting' },
-        el('span', { class: 'spinner', style: 'width:14px;height:14px;border-color:var(--azure-edge);border-top-color:var(--azure)' }),
-        el('span', { class: 'identity-waiting__txt', text: 'Waiting for the browser…' })));
-
-    // After a while with no callback, hint at the common corporate-network cause: a firewall/proxy
-    // that resets the FIRST OAuth connection (ERR_CONNECTION_RESET). Retrying usually works because
-    // the proxy session is then established. The retry button frees the port and starts a fresh attempt
-    // in one click, so the user does not have to Cancel and re-open the form.
-    if (identityAuth.slowHint) {
-      card.append(el('div', { class: 'identity-error identity-error--warn', role: 'alert', style: 'margin-top:2px' },
-        iconEl('alert', 13, 1.8),
-        el('span', { text: 'Taking longer than usual. If your browser shows “ERR_CONNECTION_RESET” (common on work/corporate networks), just try again — the second attempt usually goes through.' })));
-      card.append(el('button', { class: 'btn btn--primary', style: 'align-self:stretch',
-        onclick: () => retryMicrosoftLogin() },
-        iconEl('sync', 14, 1.8), el('span', { text: 'Cancel and try again' })));
-    }
-
-    card.append(el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => cancelAppLogin() }));
-    root.append(card);
-    return;
-  }
-
-  const loading = identityAuth.loading;
-  const card = el('div', { class: 'glass glass--card pair-card identity-card', style: 'margin-top:14px' });
-  card.append(
-    el('div', { class: 'about-logo', style: 'margin:4px auto 0', html: logoSvg({ size: 56 }) }),
-    el('div', { class: 'pair-title', text: 'Sign in to Zync Master' }),
-    el('div', { class: 'pair-sub', text: 'Sign in to mirror your calendars across your accounts and devices.' }),
-  );
-
-  // Error banner (login failure). Calm, no flicker; cleared on the next attempt.
-  if (identityAuth.error) {
-    card.append(el('div', { class: 'identity-error', role: 'alert' },
-      iconEl('alert', 13, 1.8), el('span', { text: identityAuth.error })));
-  }
-
-  // Microsoft — official 4-square logo + label, on the primary glass button.
-  const msBtn = el('button', { class: 'btn btn--primary ms-signin', style: 'align-self:stretch',
-    disabled: loading, onclick: () => startMicrosoftLogin() },
-    loading
-      ? el('span', { class: 'spinner', style: 'width:16px;height:16px' })
-      : el('span', { class: 'ms-signin__logo', html: microsoftLogo({ size: 18 }) }),
-    el('span', { class: 'ms-signin__label', text: loading ? 'Signing in…' : 'Sign in with Microsoft' }));
-  card.append(msBtn);
-
-  // Divider between the providers.
-  card.append(el('div', { class: 'identity-divider' },
-    el('span', { class: 'identity-divider__line' }),
-    el('span', { class: 'identity-divider__txt', text: 'or' }),
-    el('span', { class: 'identity-divider__line' })));
-
-  // Magic-link — email input + send button.
-  const emailInput = el('input', {
-    class: 'field-input identity-email', type: 'email', inputmode: 'email',
-    autocomplete: 'email', placeholder: 'you@example.com', 'aria-label': 'Email address',
-  });
-  const submit = () => startMagicLinkLogin(emailInput.value);
-  emailInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
-  emailInput.disabled = loading;
-  const sendBtn = el('button', { class: 'btn identity-email__send', disabled: loading, onclick: submit },
-    iconEl('arrowright', 14, 1.8), el('span', { text: 'Sign in with email' }));
-  card.append(el('div', { class: 'identity-email-row' }, emailInput, sendBtn));
-  card.append(el('div', { class: 'identity-foot', text: 'We will email you a one-time sign-in link. No password needed.' }));
-
-  root.append(card);
-}
-
-// ---------------- Screen: About ----------------
-// External destinations. The landing is the product's website/source; release notes ("What's
-// new") live on the GitHub Releases page. Rendered as real <a target="_blank"> links so the
-// browser panel / standalone demo open them in a new tab natively. In the native WebView2 shell
-// the host would need a NewWindowRequested->shell-open handler for these to open the system
-// browser (out of scope here); the links are never dead — the href always points somewhere real.
-const ABOUT_WEBSITE_URL = 'https://zyncmaster.azurewebsites.net';
-const ABOUT_RELEASES_URL = 'https://github.com/zezelazo/ZyncMaster/releases';
-// Company site (DevLab-Pe), distinct from the product landing above.
-const ABOUT_COMPANY_URL = 'https://devlabperu.com';
-
-function renderAbout(root) {
-  root.append(viewHeader('About', { onBack: () => navigate('config') }));
-  const link = (ic, label, href) => el('a', {
-    class: 'about-link', href, target: '_blank', rel: 'noopener noreferrer',
-  }, iconEl(ic, 13, 1.6), label);
-
-  // The open-source notices live in a file bundled next to the desktop exe; opening it is a
-  // desktop-only bridge action (openLicenses) that hands the file to the system's default viewer.
-  // In the web panel / standalone mock there is no such file, so the row is desktop-app only.
-  const links = el('div', { class: 'about-links' },
-    link('link', 'Website', ABOUT_WEBSITE_URL),
-    link('sparkle', "What's new", ABOUT_RELEASES_URL));
-  if (Bridge.desktopApp) {
-    links.append(el('button', {
-      class: 'about-link', type: 'button',
-      style: 'grid-column:1 / -1',
-      onclick: () => { Bridge.call('openLicenses').catch(() => {}); },
-    }, iconEl('note', 13, 1.6), 'Open-source notices'));
-  }
-
-  root.append(el('div', { class: 'glass glass--card about-card' },
-    el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
-    el('div', { class: 'about-name', text: 'Zync Master' }),
-    // Version is hardcoded: the web UI has no channel to read the .NET assembly version of the
-    // host. Keep this in step with the published release (currently 0.3.3, beta). No build number.
-    el('div', { class: 'about-version num', text: 'VERSION 0.3.3 · BETA' }),
-    el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
-    links,
-  ));
-  root.append(el('div', { class: 'glass glass--card about-credits' },
-    el('div', { class: 'about-credits__hd', text: 'Made by DevLab-Pe' }),
-    el('div', { class: 'about-credits__txt', text: 'For people who are tired of keeping things in sync across their devices — PCs, Macs and phones — by hand, over and over.' }),
-    el('a', { class: 'about-credits__link', href: ABOUT_COMPANY_URL, target: '_blank', rel: 'noopener noreferrer' },
-      iconEl('link', 12, 1.6), el('span', { text: 'devlabperu.com' })),
-    el('div', { class: 'about-sys', text: '© 2026 DevLab-Pe · still in beta' }),
-  ));
-}
-
-// ---------------- Screen: Pairing (MOCK-ONLY) ----------------
-// Legacy manual pairing-by-key walkthrough. A device now registers as part of the identity
-// sign-in, so this screen is unreachable in every real transport: navItems() drops the "Pair"
-// tab and navigate() bounces 'pairing' to Settings whenever Bridge.available. It survives only in
-// the standalone mock (file://) demo, so the data below — the demo name, the fabricated link, the
-// timer that auto-advances — is fixed mock content that never runs against a real host.
-const pairing = { step: 0, name: '', timer: null };
-
-function renderPairing(root) {
-  const labels = ['Name', 'Approve', 'Done'];
-  const stepper = el('div', { class: 'stepper' });
-  labels.forEach((lab, i) => {
-    const st = i < pairing.step ? 'done' : i === pairing.step ? 'active' : null;
-    stepper.append(el('div', { class: 'stepper__dot', dataset: st ? { state: st } : {}, html: i < pairing.step ? icon('check', { size: 11, stroke: 2.4 }) : '' }, i < pairing.step ? '' : String(i + 1)));
-    if (i < labels.length - 1) stepper.append(el('div', { class: 'stepper__line', dataset: st ? { state: st } : {} }));
-  });
-  root.append(el('div', { class: 'glass glass--card', style: 'margin-top:6px;padding:0' }, stepper));
-
-  if (pairing.step === 0) {
-    // Mock-only demo name for the standalone walkthrough (this screen never renders with a bridge).
-    if (!pairing.name) pairing.name = "Daniel's MacBook";
-    const nameInput = el('input', { class: 'field-input', value: pairing.name, placeholder: 'Name this device', style: 'width:100%;height:36px;margin-top:4px' });
-    nameInput.addEventListener('input', () => { pairing.name = nameInput.value; });
-    root.append(el('div', { class: 'glass glass--card pair-card', style: 'margin-top:14px' },
-      el('div', { style: 'width:56px;height:56px;margin:4px auto 0;border-radius:14px;display:grid;place-items:center;background:var(--azure-soft);color:var(--azure);border:1px solid var(--azure-edge)', html: icon('link', { size: 26, stroke: 1.6 }) }),
-      el('div', { class: 'pair-title', text: 'Name this device' }),
-      el('div', { class: 'pair-sub', text: 'So you can recognise it from other devices in your account.' }),
-      nameInput,
-      el('div', { style: 'display:flex;gap:10px;align-self:stretch' },
-        el('button', { class: 'btn btn--ghost', style: 'flex:none', text: 'Cancel', onclick: () => { pairing.step = 0; navigate('home'); } }),
-        el('button', { class: 'btn btn--primary', style: 'flex:1', onclick: () => { pairing.step = 1; rerender(); } },
-          el('span', { text: 'Continue' }), iconEl('arrowright', 14, 1.8)))));
-    clearTimeout(pairing.timer);
-  } else if (pairing.step === 1) {
-    root.append(el('div', { class: 'glass glass--card pair-card', style: 'margin-top:14px' },
-      el('div', { style: 'width:56px;height:56px;margin:4px auto 0;border-radius:50%;display:grid;place-items:center;background:var(--terra-soft);color:var(--terra);border:1px solid var(--terra-edge);position:relative' },
-        el('span', { class: 'spinner', style: 'width:26px;height:26px;border-width:2px;border-color:var(--terra-edge);border-top-color:var(--terra)' })),
-      el('div', { class: 'pair-title', text: 'Approve in your browser' }),
-      el('div', { class: 'pair-sub' }, 'We opened a sign-in page. Approve ', el('b', { style: 'color:var(--ink-1)', text: pairing.name }), ' there to finish pairing.'),
-      el('button', { class: 'pair-link', onclick: copyPairLink }, iconEl('copy', 13, 1.6), el('span', { text: 'zyncmaster.app/pair/8h3-4f2a' })),
-      el('button', { class: 'btn btn--ghost', text: 'Cancel', onclick: () => { pairing.step = 0; rerender(); } })));
-    clearTimeout(pairing.timer);
-    pairing.timer = setTimeout(() => {
-      if (state.view === 'pairing' && pairing.step === 1) {
-        pairing.step = 2; announce('Device paired successfully.'); rerender();
-      }
-    }, 2400);
-  } else if (pairing.step === 2) {
-    root.append(el('div', { class: 'glass glass--card pair-card', style: 'margin-top:14px' },
-      el('div', { class: 'big-check', html: icon('check', { size: 28, stroke: 2.6 }) }),
-      el('div', { class: 'pair-title', text: 'Paired!' }),
-      el('div', { class: 'pair-sub' }, el('b', { style: 'color:var(--ink-1)', text: pairing.name }), ' is now mirroring your calendar. First sync starts in a moment.'),
-      el('button', { class: 'btn btn--primary', style: 'align-self:stretch', text: 'Open dashboard', onclick: () => { state.sync = 'ok'; pairing.step = 0; navigate('home'); } })));
-  }
-}
-async function copyPairLink() {
-  try { await navigator.clipboard.writeText('https://zyncmaster.app/pair/8h3-4f2a'); } catch (_) {}
 }
 
 // ---------------- Sync state machine ----------------
@@ -2011,7 +1557,7 @@ function rerender() {
   // Web panel sign-in gate: until the session resolves as signed-in, the only screen is the
   // sign-in card and the shell chrome collapses (renderShellChrome applies .shell--gated).
   if (Bridge.webPanel && webAuth.resolved && !webAuth.signedIn) {
-    renderSignIn(root);
+    ctx.gates.renderSignIn(root);
     void root.offsetWidth;
     root.classList.add('enter');
     return;
@@ -2021,7 +1567,7 @@ function rerender() {
   // only screen is the identity sign-in card (Microsoft / magic-link). The web panel and the mock
   // demo do NOT use this gate.
   if (Bridge.desktopApp && identityAuth.resolved && !identityAuth.signedIn) {
-    renderIdentitySignIn(root);
+    ctx.gates.renderIdentitySignIn(root);
     void root.offsetWidth;
     root.classList.add('enter');
     return;
@@ -2067,133 +1613,7 @@ function navigate(view) {
   rerender();
 }
 
-// ---------------- Device-name live availability (✓/✗) ----------------
-// Tracks the latest known availability so saveDeviceName can refuse a name we already know is
-// taken without a round-trip. { name, state } where state is 'available' | 'taken' | 'invalid'.
-const deviceNameCheck = { name: null, state: null };
-let deviceNameCheckTimer = null;
-let deviceNameCheckSeq = 0;
-
-const DEVICE_NAME_DEBOUNCE_MS = 400;
-const DEVICE_NAME_MAX = 100;
-
-// Paints the indicator span: ✓ (available, aqua/ok), ✗ (taken/invalid, err), a subtle dot while
-// checking, or nothing when the field is empty / unchanged. `hint` (the row hint span) carries a
-// short message for the taken/invalid states.
-function renderNameCheck(indicator, hint, st) {
-  if (!indicator) return;
-  indicator.innerHTML = '';
-  indicator.className = 'name-check';
-  const setHint = (text, color) => { if (hint) { hint.textContent = text; hint.style.color = color || ''; } };
-
-  if (st === 'available') {
-    indicator.classList.add('name-check--ok');
-    indicator.innerHTML = icon('check', { size: 15, stroke: 2.4 });
-    setHint('', '');
-  } else if (st === 'taken') {
-    indicator.classList.add('name-check--err');
-    indicator.innerHTML = icon('close', { size: 15, stroke: 2.4 });
-    setHint('Name already used', 'var(--err)');
-  } else if (st === 'invalid') {
-    indicator.classList.add('name-check--err');
-    indicator.innerHTML = icon('close', { size: 15, stroke: 2.4 });
-    setHint(`Use 1–${DEVICE_NAME_MAX} characters`, 'var(--err)');
-  } else if (st === 'checking') {
-    indicator.classList.add('name-check--busy');
-    indicator.innerHTML = '<span class="name-check__dot"></span>';
-    setHint('', '');
-  } else {
-    setHint('', '');
-  }
-}
-
-// Debounced live check as the user types: ~400ms after the last keystroke, ask the host whether
-// the trimmed name is free (excluding this device). Mock has no bridge, so the caller never wires
-// this in mock mode. Empty / unchanged names clear the indicator; over-long names flag invalid
-// without a round-trip.
-function scheduleDeviceNameCheck(input, indicator, hint) {
-  if (!Bridge.available || !input) return;
-  const name = (input.value || '').trim();
-
-  if (deviceNameCheckTimer) { clearTimeout(deviceNameCheckTimer); deviceNameCheckTimer = null; }
-
-  // Empty, or unchanged from the device's current name → no indicator (nothing to validate).
-  if (!name || (live.device && live.device.name === name)) {
-    deviceNameCheck.name = name; deviceNameCheck.state = null;
-    renderNameCheck(indicator, hint, null);
-    return;
-  }
-  if (name.length > DEVICE_NAME_MAX) {
-    deviceNameCheck.name = name; deviceNameCheck.state = 'invalid';
-    renderNameCheck(indicator, hint, 'invalid');
-    return;
-  }
-
-  renderNameCheck(indicator, hint, 'checking');
-  const seq = ++deviceNameCheckSeq;
-  deviceNameCheckTimer = setTimeout(() => {
-    Bridge.call('checkDeviceName', JSON.stringify({ name }))
-      .then((r) => {
-        if (seq !== deviceNameCheckSeq) return; // a newer keystroke superseded this check
-        const st = (r && r.available) ? 'available' : 'taken';
-        deviceNameCheck.name = name; deviceNameCheck.state = st;
-        renderNameCheck(indicator, hint, st);
-      })
-      .catch(() => {
-        if (seq !== deviceNameCheckSeq) return;
-        deviceNameCheck.name = name; deviceNameCheck.state = null;
-        renderNameCheck(indicator, hint, null); // a transient failure: clear, don't block save
-      });
-  }, DEVICE_NAME_DEBOUNCE_MS);
-}
-
 // ---------------- Config push to host ----------------
-// Renames the current device in place (hot rename) through the host. Shows inline feedback next
-// to the input: "Saving…", then "Saved" or an error. A no-op when the name is unchanged or blank.
-// On success live.device is updated so a later render keeps showing the real name. If the name is
-// known-taken (or the server returns name_taken) the rename is refused with an inline ✗.
-function saveDeviceName(input, feedback, indicator) {
-  if (!Bridge.available || !input) return;
-  const name = (input.value || '').trim();
-  const setMsg = (text, color) => { if (feedback) { feedback.textContent = text; feedback.style.color = color || ''; } };
-
-  if (!name) { setMsg('Name cannot be empty', 'var(--err)'); return; }
-  if (live.device && live.device.name === name) { setMsg(''); return; }
-  if (name.length > DEVICE_NAME_MAX) {
-    renderNameCheck(indicator, feedback, 'invalid');
-    return;
-  }
-  // Already known to be taken (from the live check): don't even try to rename.
-  if (deviceNameCheck.name === name && deviceNameCheck.state === 'taken') {
-    renderNameCheck(indicator, feedback, 'taken');
-    return;
-  }
-
-  setMsg('Saving…', 'var(--ink-2)');
-  Bridge.call('renameDevice', JSON.stringify({ name }))
-    .then((d) => {
-      const saved = (d && d.name) || name;
-      live.device = Object.assign({}, live.device, { name: saved });
-      settings.deviceName = saved;
-      input.value = saved;
-      deviceNameCheck.name = saved; deviceNameCheck.state = null;
-      renderNameCheck(indicator, feedback, null);
-      setMsg('Saved', 'var(--ok)');
-      setTimeout(() => { if (feedback) feedback.textContent = ''; }, 2000);
-    })
-    .catch((err) => {
-      const msg = (err && err.message) ? err.message : '';
-      // The server rejects a duplicate with a 409 carrying "name_taken"; show the inline ✗ instead
-      // of a generic error so it reads like the live indicator.
-      if (/name_taken/i.test(msg)) {
-        deviceNameCheck.name = name; deviceNameCheck.state = 'taken';
-        renderNameCheck(indicator, feedback, 'taken');
-        return;
-      }
-      setMsg(msg || 'Could not rename', 'var(--err)');
-    });
-}
-
 function pushConfig() {
   if (!Bridge.available) return;
   // The host's SaveConfig is a WHOLESALE replace: it deserializes this object straight into a fresh
@@ -2338,24 +1758,29 @@ const ctx = {
   // clipboard module (extraído a views/clipboard.js): el módulo re-expone loadClipboardHistory
   // en ctx (lo consumen home/palette) y resetClipboardViewState (lo invoca resetSessionState).
   clipboardStatusDot: () => clipboardDot(thisClipboardDevice()),
+  // devices module (views/devices.js)
+  devicesStatusDot: () => devicesDot((live.clipboardDevices && live.clipboardDevices.devices) || []),
+  // settings module (views/settings.js): pushConfig + sign-out helpers se quedan en app.js.
+  // El módulo re-expone resetSessionState en ctx (lo invoca signOutApp arriba).
+  pushConfig, signOutApp, signOutWeb,
+  // auth module (views/auth.js): los helpers de sesión se quedan en app.js (boot/gates) y entran
+  // aquí; el módulo re-expone ctx.gates.{renderSignIn,renderIdentitySignIn} para los gates.
+  startMicrosoftLogin, retryMicrosoftLogin, cancelAppLogin, startMagicLinkLogin,
   // tema + versión
   applyTheme, storedTheme, resolveTheme, VERSION,
 };
 
-// ---------------- View registry (fase de transición) ----------------
-// Las render functions siguen viviendo en este archivo; cada tarea de extracción las muda
-// a ui/js/views/<name>.js conservando estos ids. El sidebar se construye desde nav/statusDot.
-// Clipboard primero: re-expone ctx.loadClipboardHistory antes de que registerHomeViews lo
-// destructure de ctx (home pinta el clipboard reciente del tablero today).
+// ---------------- View registry ----------------
+// Cada vista vive en ui/js/views/<name>.js y registra sus ids vía register<Name>Views(ctx).
+// El sidebar se construye desde nav/statusDot. Clipboard primero: re-expone ctx.loadClipboardHistory
+// antes de que registerHomeViews lo destructure de ctx (home pinta el clipboard reciente del tablero
+// today). Settings/Auth re-exponen ctx.resetSessionState / ctx.gates para los helpers compartidos.
 registerClipboardViews(ctx);
 registerHomeViews(ctx);
 registerCalendarViews(ctx);
-registry.register('config', {
-  render: renderConfig, soft: true,
-  nav: { label: 'Settings', icon: 'settings', order: 100, section: 'system' },
-});
-registry.register('about', { render: renderAbout, parent: 'config' });
-registry.register('pairing', { render: renderPairing });
+registerDevicesViews(ctx);
+registerSettingsViews(ctx);
+registerAuthViews(ctx);
 
 // ---------------- Palette sources (v1: navegación + acciones + pairs + clipboard) ----------------
 registerPaletteSource(() => registry.navItems().map((v, i) => ({

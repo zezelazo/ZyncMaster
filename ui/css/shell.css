@@ -215,3 +215,14 @@ kbd.kbd {
 .board-stat--ok { color: var(--ok); }
 .board-stat--warn { color: var(--warn); }
 .board-stat--err { color: var(--err); }
+
+/* ---- devices view ---- */
+.device-list { display: grid; gap: 10px; }
+.device-card { display: flex; align-items: center; gap: var(--s-3); }
+.device-card__body { flex: 1; min-width: 0; }
+.device-card__name { font-weight: var(--w-title); }
+.device-card__rename { margin-top: var(--s-3); }
+.device-card__rename-lbl {
+  display: flex; align-items: center;
+  font-size: var(--t-meta); color: var(--ink-3); margin-bottom: 6px;
+}
