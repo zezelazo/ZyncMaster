@@ -543,6 +543,7 @@ app.MapIdentityConnectEndpoints();
 app.MapIdentityMagicLinkEndpoints();
 app.MapCalendarConnectEndpoints();
 app.MapCalendarV2Endpoints();
+app.MapPrefixRuleEndpoints();
 app.MapSyncEndpoints();
 app.MapSyncRunDueEndpoints();
 app.MapPanelEndpoints();
