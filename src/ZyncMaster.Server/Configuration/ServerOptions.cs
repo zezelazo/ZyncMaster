@@ -44,6 +44,12 @@ public sealed class ServerOptions
     public int SyncRunLockTtlMinutes { get; set; } = 8;
     public string ExtendedPropertyGuid { get; set; } = "6f0e7f2c-3b1a-4e8d-9c2f-7a5b1d9e4c30";
 
+    // Extended-property GUID for the calendar v2 replica engine marks (ZmReplicaOf /
+    // ZmRuleProcessed). FIXED project constant, DISTINCT from ExtendedPropertyGuid
+    // (CalImport's): the engine separation of spec §7 relies on the two never colliding.
+    // Never change it — every existing replica would stop being recognized.
+    public string ReplicaPropertyGuid { get; set; } = "3d5a8f21-7b4e-4c96-9e1a-d2b6c0f47a83";
+
     // Identity access token (internal Server<->App bearer) lifetime. Short by design: the
     // token is a master key that registers devices and connects calendars, so it is renewed
     // via the long-lived refresh token rather than being long-lived itself (plan v2 §A-1).

@@ -246,6 +246,31 @@ builder.Services.AddSingleton<Func<string?, MicrosoftGraphProvider>>(sp => accou
     var target = new ZyncMaster.Graph.GraphCalendarTarget(http, tokenProvider, Guid.Parse(opts.ExtendedPropertyGuid));
     return new MicrosoftGraphProvider(readHttp, tokenProvider, target);
 });
+
+// Calendar v2 — per-account replica client + responder. Keyed by the pool accountId; the
+// adapter-backed token provider resolves it to the right refresh token (same seam as the
+// pair factories above). The replica GUID is its own constant: ZmReplicaOf events and
+// CalImportSourceId events are disjoint by construction (engine separation, spec §7).
+builder.Services.AddSingleton<Func<string, ZyncMaster.Graph.IReplicaGraphClient>>(sp => accountId =>
+{
+    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("graph");
+    var tokens = sp.GetRequiredService<IMicrosoftTokenService>();
+    var adapter = sp.GetRequiredService<ILegacyConnectedAccountAdapter>();
+    var opts = sp.GetRequiredService<IOptions<ServerOptions>>().Value;
+    var provider = new AccountAwareGraphTokenProvider(tokens, adapter, accountId);
+    return new ZyncMaster.Graph.GraphReplicaClient(
+        http, provider, Guid.Parse(opts.ReplicaPropertyGuid), Guid.Parse(opts.ExtendedPropertyGuid));
+});
+builder.Services.AddSingleton<Func<string, ZyncMaster.Graph.IEventResponder>>(sp => accountId =>
+{
+    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("graph");
+    var tokens = sp.GetRequiredService<IMicrosoftTokenService>();
+    var adapter = sp.GetRequiredService<ILegacyConnectedAccountAdapter>();
+    var provider = new AccountAwareGraphTokenProvider(tokens, adapter, accountId);
+    return new ZyncMaster.Graph.GraphEventResponder(http, provider);
+});
+builder.Services.AddSingleton<IReplicaLinkStore, EfReplicaLinkStore>();
+builder.Services.AddSingleton<IPrefixRuleStore, EfPrefixRuleStore>();
 builder.Services.AddSingleton<ProviderRegistry>();
 
 // Modular sync engine seam (Phase 4): a pair's execution lives behind ISyncModule so adding
