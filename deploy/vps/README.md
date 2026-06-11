@@ -106,6 +106,26 @@ Sin esto, login/calendar OAuth falla con `AADSTS50011 (redirect mismatch)`.
 
 ---
 
+## Web (zync-web)
+
+La web Angular se sirve como estático puro desde `https://api.devlabperu.com/zync-web/`
+(sin SSR, sin Node en el VPS):
+
+- **Docroot:** `/var/www/devlabperu.com/zync-web/`. El CD compila `web/zync-web` con
+  `ng build --configuration production`, sube `dist/zync-web/browser/` a
+  `~/syncmaster-staging/zync-web/` y `deploy-syncmaster.sh` hace el swap (`rsync --delete`)
+  hacia el docroot.
+- **Bloque nginx nuevo** en `deploy/vps/nginx-syncmaster.conf` (`location /zync-web/`):
+  `try_files $uri $uri/ /zync-web/index.html` para el routing client-side, bundles hasheados
+  con `Cache-Control: immutable`, `index.html` con `no-cache`, y CSP estricta. Se pega a mano
+  en el mismo `server` block de `api.devlabperu.com` y se recarga con
+  `sudo nginx -t && sudo systemctl reload nginx`.
+- **Health check del CD:** además de `/zync/health`, el workflow pide el deep-link
+  `https://api.devlabperu.com/zync-web/calendar` y exige `200` — eso valida que el
+  `try_files` de nginx resuelve rutas internas de la SPA hacia `index.html`.
+
+---
+
 ## Deploy
 
 Manual: GitHub → Actions → **Deploy SyncMaster (VPS)** → Run workflow. El job compila, genera el

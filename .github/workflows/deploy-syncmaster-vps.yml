@@ -47,6 +47,19 @@ jobs:
             --project src/ZyncMaster.Server/ZyncMaster.Server.csproj \
             --output "$BUNDLE"
 
+      - name: Setup Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/zync-web/package-lock.json
+
+      - name: Build web (Angular, static)
+        working-directory: web/zync-web
+        run: |
+          npm ci
+          npx ng build --configuration production
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -62,6 +75,8 @@ jobs:
             "$PUBLISH_DIR/" "$VPS_USER@$VPS_HOST:~/syncmaster-staging/publish/"
           scp -i ~/.ssh/deploy_key -P "$VPS_PORT" "$BUNDLE" \
             "$VPS_USER@$VPS_HOST:~/syncmaster-staging/efbundle"
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -p $VPS_PORT" \
+            web/zync-web/dist/zync-web/browser/ "$VPS_USER@$VPS_HOST:~/syncmaster-staging/zync-web/"
 
       - name: Deploy (swap, migrate, restart) on VPS
         run: |
@@ -70,10 +85,14 @@ jobs:
 
       - name: Health check
         run: |
+          ok=0
           for i in $(seq 1 12); do
             code=$(curl -s -o /dev/null -w '%{http_code}' https://api.devlabperu.com/zync/health || true)
             echo "attempt $i -> $code"
-            [ "$code" = "200" ] && exit 0
+            if [ "$code" = "200" ]; then ok=1; break; fi
             sleep 6
           done
-          echo "health check failed after deploy"; exit 1
+          [ "$ok" = "1" ] || { echo "health check failed after deploy"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://api.devlabperu.com/zync-web/calendar || true)
+          echo "web deep link -> $code"
+          [ "$code" = "200" ] || { echo "web deep link failed"; exit 1; }
