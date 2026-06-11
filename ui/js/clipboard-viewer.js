@@ -215,6 +215,7 @@ function filterMatch(item, filter) {
 // ===================== state =====================
 const state = {
   items: [],
+  loading: false,         // true mientras la primera hidratación de getClipboardHistory está en vuelo
   filter: 'all',          // all | text | image | file (rich only)
   density: 'rich',        // rich | mini
   showHints: true,        // rich only
@@ -327,7 +328,7 @@ function render() {
   const items = visibleItems();
 
   if (!items.length) {
-    list.append(el('div', { class: 'cb-empty', text: count === 0 ? 'Nothing copied yet' : 'No items match this filter' }));
+    list.append(el('div', { class: 'cb-empty', text: state.loading ? 'Loading…' : count === 0 ? 'Nothing copied yet' : 'No items match this filter' }));
   } else {
     items.forEach((item, i) => {
       // Group separators every GROUP_SIZE: a labelled header in rich, a subtle centred indicator
@@ -477,6 +478,7 @@ async function boot() {
       .catch(() => {});
   });
 
+  state.loading = Bridge.available; // sin bridge (standalone) no hay nada que cargar
   // First paint immediately (empty/loading), then hydrate from the bridge.
   render();
   focusCard();
@@ -503,8 +505,9 @@ async function boot() {
       .catch(() => {});
 
     Bridge.call('getClipboardHistory')
-      .then((items) => { state.items = Array.isArray(items) ? items : []; state.sel = 0; render(); })
-      .catch(() => {});
+      .then((items) => { state.items = Array.isArray(items) ? items : []; state.sel = 0; })
+      .catch(() => {})
+      .finally(() => { state.loading = false; render(); });
   }
 
   // Global key handling for navigation + paste + close (works regardless of focus).
