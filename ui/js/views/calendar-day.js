@@ -6,10 +6,7 @@
 import {
   accountColorClass, clampBlock, localMinutes, replicateButtonLabel,
   maskedTitle, weekDates, shiftDate, freshnessLabel, replicateRequest, prefixRulePayload,
-  // La tarea 9 AÑADE aquí, cuando exista, el export que crea:
-  //   tarea 9 → newEventPayload.
-  // NO importarlos antes de que existan: un import de un export inexistente rompe el módulo
-  // ES (node --check/--test fallan). Cada tarea extiende esta línea cuando crea su helper.
+  newEventPayload,
 } from '../calendar-day.js';
 
 export function registerCalendarDayView(ctx) {
@@ -354,9 +351,122 @@ export function registerCalendarDayView(ctx) {
     }));
   }
 
-  // Temporary stub so the module loads before task 9 lands its panel. Task 9 REPLACES it;
-  // it may not survive past task 9.
-  function renderNewEventPanel(p) { p.innerHTML = ''; }
+  // ---------------- Calendar v2: New event with replicate-on-create (task 9) ----------------
+  function renderNewEventPanel(panel) {
+    // REAL bridge shapes (see 6.3): CalendarAccountSummary {id, accountEmail, scope, displayName,
+    // ...} + .calendars CalendarInfo[]; scope compared case-insensitively ("ReadWrite").
+    const writable = (calDay.accounts || []).filter((a) => (a.scope || '').toLowerCase() === 'readwrite');
+    panel.innerHTML = `
+      <header><h2>New event</h2>
+        <button class="x btn" id="calDayNewClose" aria-label="Close">✕</button></header>
+      <div class="calday-sect calday-form">
+        <label for="evtCalendar">Calendar</label>
+        <select id="evtCalendar"></select>
+        <label for="evtTitle">Title</label>
+        <input id="evtTitle" type="text" placeholder="Use [Prefix] Title to trigger a prefix rule">
+        <label for="evtDate">Date</label>
+        <input id="evtDate" type="date" value="${calDay.date}">
+        <label for="evtStart">Start</label>
+        <input id="evtStart" type="time" value="09:00">
+        <label for="evtDuration">Duration (minutes)</label>
+        <input id="evtDuration" type="number" min="5" step="5" value="60">
+        <label for="evtShowAs">Show as</label>
+        <select id="evtShowAs">
+          <option value="busy" selected>Busy</option>
+          <option value="free">Free</option>
+          <option value="tentative">Tentative</option>
+          <option value="oof">Out of office</option>
+        </select>
+      </div>
+      <div class="calday-sect"><h3>Replicate on create</h3>
+        <p class="calday-hint">Optional: create masked replicas in other calendars in the same step.
+          Only time and availability cross — pick the visible title per destination.</p>
+        <div id="evtReplicas"></div>
+      </div>
+      <div class="calday-sect">
+        <p class="calday-hint" id="evtError" style="color:var(--err)" hidden></p>
+      </div>
+      <div class="calday-actions">
+        <button class="btn" id="evtCancel">Cancel</button>
+        <button class="btn primary" id="evtCreate">Create event</button>
+      </div>`;
+
+    // Calendar select: one option per writable account/calendar (creating needs readwrite on the
+    // account the event LIVES in — calendar-v2 spec §4; read accounts are not offered at all).
+    const calSel = panel.querySelector('#evtCalendar');
+    writable.forEach((acct) => {
+      (acct.calendars || []).forEach((cal) => {
+        const opt = document.createElement('option');
+        opt.value = `${acct.id}|${cal.id}`;
+        opt.textContent = `${cal.displayName || 'Calendar'} — ${acct.accountEmail || acct.displayName || ''}`;
+        calSel.appendChild(opt);
+      });
+    });
+    if (!calSel.options.length) {
+      panel.querySelector('.calday-form').innerHTML =
+        '<p class="calday-empty">Connect a readwrite calendar account to create events.</p>';
+    }
+
+    // Replicate-on-create rows: same row contract as the Replicate panel (task 7).
+    const replicaRows = [];
+    const repEl = panel.querySelector('#evtReplicas');
+    writable.forEach((acct) => {
+      (acct.calendars || []).forEach((cal) => {
+        const row = { checked: false, accountId: acct.id, calendarId: cal.id, title: '' };
+        const div = document.createElement('div');
+        div.className = 'calday-dest';
+        div.innerHTML = `
+          <div class="head"><input type="checkbox" aria-label="Replicate here">
+            <span class="name">${escapeHtml(cal.displayName || 'Calendar')}</span>
+            <span class="acct">${escapeHtml(acct.accountEmail || '')}</span></div>
+          <div class="mask" hidden>
+            <label>Visible title in destination</label>
+            <input type="text" placeholder="Busy">
+            <div class="calday-hint">Required — the event title never crosses accounts.</div>
+          </div>`;
+        const cb = div.querySelector('input[type="checkbox"]');
+        const maskWrap = div.querySelector('.mask');
+        const maskInput = div.querySelector('.mask input');
+        cb.onchange = () => { row.checked = cb.checked; div.classList.toggle('on', cb.checked); maskWrap.hidden = !cb.checked; };
+        maskInput.oninput = () => { row.title = maskInput.value; };
+        replicaRows.push(row);
+        repEl.appendChild(div);
+      });
+    });
+
+    const close = () => { calDay.panel = null; rerenderInPlace(); };
+    panel.querySelector('#calDayNewClose').onclick = close;
+    panel.querySelector('#evtCancel').onclick = close;
+    panel.querySelector('#evtCreate').onclick = () => {
+      const [accountId, calendarId] = (calSel.value || '|').split('|');
+      const errEl = panel.querySelector('#evtError');
+      const payload = newEventPayload({
+        accountId, calendarId,
+        title: panel.querySelector('#evtTitle').value,
+        date: panel.querySelector('#evtDate').value,
+        startTime: panel.querySelector('#evtStart').value,
+        durationMinutes: panel.querySelector('#evtDuration').value,
+        showAs: panel.querySelector('#evtShowAs').value,
+      }, replicaRows);
+      if (typeof payload === 'string') { errEl.textContent = payload; errEl.hidden = false; return; }
+      errEl.hidden = true;
+      const btn = panel.querySelector('#evtCreate');
+      btn.disabled = true; btn.textContent = 'Creating…';
+      Bridge.call('createCalendarEvent', JSON.stringify(payload))
+        .then(() => {
+          announce('Event created');
+          calDay.panel = null;
+          delete calDay.days[payload.start.slice(0, 10)];
+          delete calDay.days[calDay.date];
+          loadCalendarDay();
+          rerenderInPlace();
+        })
+        .catch((err) => {
+          btn.disabled = false; btn.textContent = 'Create event';
+          errEl.textContent = err.message; errEl.hidden = false;
+        });
+    };
+  }
 
   // ---------------- Calendar v2: Prefix rules panel (task 8) ----------------
   function renderPrefixRulesPanel(panel) {

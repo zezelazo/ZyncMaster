@@ -112,6 +112,28 @@ test('prefixRulePayload validates and normalises the rule form', async () => {
   assert.equal(typeof prefixRulePayload({ prefix: 'A', maskTitle: 'X', destinations: [] }), 'string');
 });
 
+test('newEventPayload builds the createCalendarEvent body with optional replicas', async () => {
+  const { newEventPayload } = await import('../../ui/js/calendar-day.js');
+  const p = newEventPayload({
+    accountId: 'a1', calendarId: 'c1', title: ' Dentista ',
+    date: '2026-06-10', startTime: '16:00', durationMinutes: 60, showAs: 'busy',
+  }, [{ checked: true, accountId: 'a2', calendarId: 'c2', title: 'Busy' }]);
+  assert.equal(p.title, 'Dentista'); // wire field is title (CreateEventRequest), not subject
+  assert.equal(p.accountId, 'a1');
+  assert.equal(p.showAs, 'busy');
+  // start/end are real instants exactly 60 minutes apart (same-duration invariant)
+  assert.equal(new Date(p.end) - new Date(p.start), 60 * 60 * 1000);
+  assert.deepEqual(p.replicas, [{ accountId: 'a2', calendarId: 'c2', title: 'Busy' }]);
+  // Decision D6: a checked replica row with a blank mask is INVALID — it never falls back
+  // to the event title.
+  assert.equal(typeof newEventPayload(
+    { accountId: 'a1', calendarId: 'c1', title: 'X', date: '2026-06-10', startTime: '09:30', durationMinutes: 30, showAs: 'free' },
+    [{ checked: true, accountId: 'a2', calendarId: 'c2', title: ' ' }]), 'string');
+  // invalid form → error string
+  assert.equal(typeof newEventPayload({ title: '', date: '2026-06-10', startTime: '09:00', durationMinutes: 30 }, []), 'string');
+  assert.equal(typeof newEventPayload({ accountId: 'a', calendarId: 'c', title: 'X', date: '', startTime: '09:00', durationMinutes: 30 }, []), 'string');
+});
+
 test('the origin title never appears in a replicate payload unless the user typed it', async () => {
   // Privacy contract (calendar-v2 spec §12.1): replicateRequest does not even RECEIVE the
   // origin title, so no code path can copy it. Typing it is the only way it travels.

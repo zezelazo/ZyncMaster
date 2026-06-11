@@ -106,6 +106,44 @@ export function shiftDate(dateIso, days) {
   return dt.toISOString().slice(0, 10);
 }
 
+// Builds the createCalendarEvent body from the New-event form (+ replicate-on-create rows),
+// or returns a human error STRING when invalid. startTime is local 'HH:mm' on the local
+// 'date'; the wire carries instants in start/end (server CreateEventRequest: accountId,
+// calendarId, title, start, end, showAs, replicas). Replica rows reuse the replicate-panel
+// semantics: only checked rows travel and every checked row REQUIRES a typed title — a blank
+// mask NEVER falls back to the event title (decision D6).
+export function newEventPayload(form, replicaRows) {
+  const title = (form.title || '').trim();
+  if (!form.accountId || !form.calendarId) return 'Pick the calendar the event lives in.';
+  if (!title) return 'The title is required.';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date || '')) return 'Pick a date.';
+  if (!/^\d{2}:\d{2}$/.test(form.startTime || '')) return 'Pick a start time.';
+  const duration = Number(form.durationMinutes);
+  if (!Number.isFinite(duration) || duration < 5) return 'Duration must be at least 5 minutes.';
+
+  const replicas = [];
+  for (const r of (replicaRows || []).filter((x) => x && x.checked)) {
+    const mask = maskedTitle(r.title);
+    if (!mask) return 'Type a visible title for every replica destination.';
+    replicas.push({ accountId: r.accountId, calendarId: r.calendarId, title: mask });
+  }
+
+  const [y, m, d] = form.date.split('-').map(Number);
+  const [hh, mm] = form.startTime.split(':').map(Number);
+  const startLocal = new Date(y, m - 1, d, hh, mm);
+  const endLocal = new Date(startLocal.getTime() + duration * 60 * 1000);
+
+  return {
+    accountId: form.accountId,
+    calendarId: form.calendarId,
+    title,
+    start: startLocal.toISOString(),
+    end: endLocal.toISOString(),
+    showAs: form.showAs || 'busy',
+    replicas,
+  };
+}
+
 // Honest-freshness badge from the per-account freshness STRING (backend decision 3): "live"
 // (Graph) renders no badge; "snapshot_unavailable" (COM — the v1 server persists no snapshots)
 // renders an explicit degradation badge. The minutes/device variant arrives in a later backend
