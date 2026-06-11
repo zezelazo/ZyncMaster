@@ -11,6 +11,7 @@
 
 import { icon, logoSvg, microsoftLogo, hydrateIcons } from './icons.js';
 import { webRequestFor, statusFromPairs } from './web-transport.js';
+import { createRegistry } from './core/registry.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -308,6 +309,8 @@ const state = {
   sync: 'ok',            // ok | syncing | success | error | offline | unpaired | paused
   progress: { done: 0, total: 20 },
 };
+
+const registry = createRegistry();
 
 // ---------------- ARIA ----------------
 function announce(msg) { const live = $('#liveRegion'); if (live) live.textContent = msg; }
@@ -4463,19 +4466,8 @@ function rerender() {
   const nav = $('#navbar');
   if (nav) nav.hidden = false;
 
-  switch (state.view) {
-    case 'home': renderHome(root); break;
-    case 'calendar': renderCalendar(root); break;
-    case 'add-pair': renderAddPair(root); break;
-    case 'add-calendar': renderAddCalendar(root); break;
-    case 'config': renderConfig(root); break;
-    case 'calendar-settings': renderCalendarSettings(root); break;
-    case 'clipboard': renderClipboard(root); break;
-    case 'clipboard-settings': renderClipboardSettings(root); break;
-    case 'about': renderAbout(root); break;
-    case 'pairing': renderPairing(root); break;
-    default: renderHome(root);
-  }
+  const def = registry.get(state.view) || registry.get('home');
+  def.render(root);
   // retrigger the staggered card entrance
   void root.offsetWidth;
   root.classList.add('enter');
@@ -4486,10 +4478,9 @@ function rerender() {
 // flicker the whole screen. Covers the dashboard views (home/calendar) used during the syncing
 // tick AND the settings views (config/calendar-settings) so toggling interval/theme/select on
 // those screens is a smooth repaint instead of a full re-entrance via rerender().
-const SOFT_REPAINT_VIEWS = { home: renderHome, calendar: renderCalendar, config: renderConfig, 'calendar-settings': renderCalendarSettings, clipboard: renderClipboard, 'clipboard-settings': renderClipboardSettings };
 function rerenderInPlace() {
-  const render = SOFT_REPAINT_VIEWS[state.view];
-  if (!render) return;
+  const def = registry.get(state.view);
+  if (!def || !def.soft) return;
   // The sign-in gate owns the screen: a stale background repaint (e.g. a late loadPairs)
   // must never paint the dashboard over the sign-in card and leave the nav hidden.
   if (Bridge.webPanel && webAuth.resolved && !webAuth.signedIn) return;
@@ -4499,7 +4490,7 @@ function rerenderInPlace() {
   if (!root) return;
   const prevScroll = root.scrollTop;   // a tick/refresh repaint must not snap the user back to the top
   root.replaceChildren();
-  render(root);
+  def.render(root);
   root.scrollTop = prevScroll;
   const nav = $('#navbar');
   if (nav) nav.hidden = false;          // a real view is up → the bottom nav must be visible
@@ -4826,6 +4817,20 @@ async function boot() {
   // this keeps the demo splash short instead of waiting on playLaunch's hard cap.
   if (!Bridge.available) maybeDismissLaunch(450);
 }
+
+// ---------------- View registry (fase de transición) ----------------
+// Las render functions siguen viviendo en este archivo; cada tarea de extracción las muda
+// a ui/js/views/<name>.js conservando estos ids. nav/statusDot llegan en la tarea del shell.
+registry.register('home', { render: renderHome, soft: true });
+registry.register('calendar', { render: renderCalendar, soft: true, parent: 'home' });
+registry.register('add-pair', { render: renderAddPair, parent: 'calendar' });
+registry.register('add-calendar', { render: renderAddCalendar, parent: 'calendar' });
+registry.register('calendar-settings', { render: renderCalendarSettings, soft: true, parent: 'calendar' });
+registry.register('clipboard', { render: renderClipboard, soft: true, parent: 'home' });
+registry.register('clipboard-settings', { render: renderClipboardSettings, soft: true, parent: 'clipboard' });
+registry.register('config', { render: renderConfig, soft: true });
+registry.register('about', { render: renderAbout, parent: 'config' });
+registry.register('pairing', { render: renderPairing });
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
 else boot();
