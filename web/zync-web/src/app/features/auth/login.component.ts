@@ -25,4 +25,11 @@ export class LoginComponent {
       this.error.set('Could not send the sign-in link. Try again.');
     }
   }
+
+  // Leaves the SPA for the server's web-mode OAuth start; the flow returns to
+  // /auth/callback with a one-time handle, exactly like the magic link.
+  signInWithMicrosoft(): void {
+    this.error.set(null);
+    this.auth.signInWithMicrosoft();
+  }
 }

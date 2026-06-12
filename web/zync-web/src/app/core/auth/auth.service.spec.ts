@@ -33,6 +33,14 @@ describe('AuthService', () => {
     await done;
   });
 
+  it('microsoftSignInUrl points at the web-mode OAuth start with a stored nonce', () => {
+    const url = service.microsoftSignInUrl();
+    const nonce = sessionStorage.getItem('zw.nonce');
+    expect(nonce).toBeTruthy();
+    expect(url).toBe(
+      `/zync/identity/connect/microsoft?mode=web&nonce=${encodeURIComponent(nonce!)}`);
+  });
+
   it('redeemHandle verifies the nonce and stores the session', async () => {
     sessionStorage.setItem('zw.nonce', 'n-1');
     const done = service.redeemHandle('h-1', 'n-1');

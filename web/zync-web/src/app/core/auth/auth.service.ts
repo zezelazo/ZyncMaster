@@ -15,10 +15,29 @@ export class AuthService {
   private readonly tokens = inject(TokenStore);
 
   async requestMagicLink(email: string): Promise<void> {
-    const nonce = crypto.randomUUID();
-    try { sessionStorage.setItem(NONCE_KEY, nonce); } catch { /* storage blocked */ }
+    const nonce = this.issueNonce();
     await firstValueFrom(
       this.http.post(`${API_BASE}/identity/magic-link`, { email, web: true, nonce }));
+  }
+
+  // Builds the web-mode Microsoft OAuth start URL with a freshly stored nonce. The server
+  // carries mode=web through the signed OAuth state and lands the one-time handle back on
+  // /zync-web/auth/callback?handle&nonce — the same callback + redeem the magic link uses.
+  microsoftSignInUrl(): string {
+    const nonce = this.issueNonce();
+    return `${API_BASE}/identity/connect/microsoft?mode=web&nonce=${encodeURIComponent(nonce)}`;
+  }
+
+  // Full-page navigation on purpose: the OAuth dance leaves the SPA and returns via the
+  // server redirect to /zync-web/auth/callback.
+  signInWithMicrosoft(): void {
+    window.location.assign(this.microsoftSignInUrl());
+  }
+
+  private issueNonce(): string {
+    const nonce = crypto.randomUUID();
+    try { sessionStorage.setItem(NONCE_KEY, nonce); } catch { /* storage blocked */ }
+    return nonce;
   }
 
   // True when the handle redeemed into a session. A nonce mismatch (link opened in another

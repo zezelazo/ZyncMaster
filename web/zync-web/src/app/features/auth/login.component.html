@@ -16,6 +16,15 @@
               class="mt-s4 w-full rounded-sm border border-azure-edge bg-azure-soft px-s3 py-s2 text-meta font-medium text-azure-2">
         Send sign-in link
       </button>
+      <div class="mt-s4 flex items-center gap-s3" aria-hidden="true">
+        <span class="flex-1 border-t border-border-1"></span>
+        <span class="text-micro text-ink-3">or</span>
+        <span class="flex-1 border-t border-border-1"></span>
+      </div>
+      <button type="button" (click)="signInWithMicrosoft()" data-testid="microsoft"
+              class="mt-s4 w-full rounded-sm border border-ctrl-stroke bg-bg-2 px-s3 py-s2 text-meta font-medium text-ink-2">
+        Sign in with Microsoft
+      </button>
     }
   </section>
 </main>
