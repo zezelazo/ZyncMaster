@@ -295,7 +295,10 @@ const mql = typeof window !== 'undefined' && window.matchMedia
   ? window.matchMedia('(prefers-color-scheme: light)') : null;
 
 function storedTheme() {
-  try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch (_) { return 'auto'; }
+  // Dark is the product default (brand: dark surfaces + aqua/cyan accents). 'auto' (follow the
+  // OS) and 'light' exist only as explicit user choices from Settings — a fresh profile must
+  // never boot into the light/terra palette just because the OS prefers light (VDI browsers do).
+  try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch (_) { return 'dark'; }
 }
 // resolve auto -> the concrete dark/light the OS asks for.
 function resolveTheme(mode) {
