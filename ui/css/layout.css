@@ -811,7 +811,7 @@
    the fold and made the page (not the inner .view) scroll/bounce. Filling the
    viewport makes the navbar always visible and confines scrolling to .view.
    ========================================================= */
-.native-shell .stage { padding: 0; background: none; }
+.native-shell .stage { padding: 0; background: none; height: 100dvh; display: flex; flex-direction: column; }
 /* Web panel: fill the stage with the window's own base colour (not `none`) so that if the
    viewport and the 100dvh window ever disagree by a pixel on resize, the seam matches the
    app instead of flashing the light page background — that was the "ugly border" on resize. */
@@ -824,8 +824,13 @@
   max-height: 100dvh;
   border-radius: 0;
   box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-/* Belt-and-suspenders: never let the page itself scroll in the web panel —
-   the inner .view is the only scroll container, which kills the bounce-to-top. */
+/* Belt-and-suspenders: never let the page itself scroll — the inner .view is the only
+   scroll container, which kills the bounce-to-top. The web panel adds the window's base
+   colour so a resize seam matches the app; the native shell paints its own background. */
+:root.native-shell, :root.native-shell body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 :root[data-transport="web"], :root[data-transport="web"] body { height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg-1); }
 

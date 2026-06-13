@@ -3,6 +3,19 @@
    elevación por border-light (spec §3.1). Valores del mock
    docs/research/mocks/mock-app-shell.html.
    ========================================================= */
+
+/* Window body: the height chain's missing link. Without a rule here this box is
+   display:block / height:auto, so .shell{flex:1} is inert (non-flex parent) and the
+   document scrolls instead of .view. Re-establish a full-height flex column from the
+   window down to the single scroller. */
+.win__body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .shell {
   flex: 1;
   min-height: 0;
