@@ -110,6 +110,12 @@ public interface IEngineActions
     //     "magic-link" → email a sign-in link to the given address (email required).
     //   SignOutAsync — clear the cached identity tokens.
     Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default);
+    //   HasIdentityAsync — a CHEAP, network-free check of whether a usable identity token is present
+    //     on disk (the SAME store GetIdentityStateAsync / EnsureDeviceRegisteredAsync read). Returns
+    //     true only when an access token is cached. Used to gate boot-time device-key work (the
+    //     clipboard pipeline) BEFORE sign-in so it never throws/log-storms the "no identity present"
+    //     warning per tick. Never throws — a read failure is reported as "no identity".
+    Task<bool> HasIdentityAsync(CancellationToken ct = default);
     Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default);
     //   CancelLoginAsync — abort the sign-in attempt currently in flight (user closed the browser
     //     tab / hit Cancel) and free the loopback port so a new login() can start right away.

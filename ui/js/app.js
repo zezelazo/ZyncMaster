@@ -1050,6 +1050,41 @@ async function refreshIdentity() {
   }
 }
 
+// --- Identity re-resolution (focus / light poll) ---------------------------------------------
+// The signed-in panel renders from the IN-MEMORY identityAuth snapshot, but the truth is the
+// on-disk token store the host reads (FileIdentityTokenCache) — the SAME store getIdentityState
+// resolves. Those can drift: a sign-out/expiry/refresh on the host side, or a sign-in that
+// completed in another window, leaves the snapshot stale (the "SIGNED IN but not registered"
+// contradiction). So re-resolve against the store when the window regains focus / becomes visible,
+// and on a light background poll, instead of trusting the snapshot. refreshIdentity() repaints only
+// when the signed-in flag actually flips, so a no-change re-resolve is silent (no flicker).
+const IDENTITY_RERESOLVE_POLL_MS = 60000;
+let identityReResolvePoll = null;
+
+// Re-pull identity from the host UNLESS a sign-in is mid-flight (a login()/magic-link round-trip
+// owns the gate then — refreshIdentity already runs on its own completion path, and re-resolving
+// here would race it). Desktop App only; a no-op until the boot identity gate has resolved once.
+function reResolveIdentity() {
+  if (!Bridge.desktopApp || !identityAuth.resolved) return;
+  if (identityAuth.loading || identityAuth.magicLinkSent) return;
+  refreshIdentity();
+}
+
+// Wire the focus / visibility / poll re-resolution. Idempotent guard via the poll handle so a
+// double boot (defensive) never stacks intervals. Called from boot() in the desktop App only.
+function startIdentityReResolution() {
+  if (!Bridge.desktopApp || identityReResolvePoll) return;
+  // Window regained focus or tab became visible: cheap to re-check, catches an out-of-band sign-out
+  // / expiry / sibling-window sign-in the moment the user returns to the panel.
+  window.addEventListener('focus', reResolveIdentity);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reResolveIdentity();
+  });
+  // Light steady poll so a change is reflected even while the window stays focused (e.g. the host
+  // refreshed/rotated the token, or it expired). 60s is well inside the token lifetime.
+  identityReResolvePoll = setInterval(reResolveIdentity, IDENTITY_RERESOLVE_POLL_MS);
+}
+
 // startMicrosoftLogin — kick the host's Microsoft sign-in. The host opens its own browser/flow;
 // on success getIdentityState flips to signedIn and we enter the dashboard. We poll once the
 // login() promise resolves (the host may resolve immediately and complete asynchronously).
@@ -1710,6 +1745,10 @@ async function boot() {
     // identity call is no longer kicked directly here so a sleeping server never stalls login.
     if (Bridge.desktopApp) {
       probeServerHealth();
+      // Keep the signed-in panel honest: re-resolve identity against the host's on-disk token store
+      // on focus / visibility / a light poll, instead of trusting the in-memory snapshot. This is
+      // what corrects a stale "SIGNED IN" after an out-of-band sign-out / expiry / sibling sign-in.
+      startIdentityReResolution();
     }
 
     // First status settle. In the web panel getStatus IS the sign-in gate, so it resolves

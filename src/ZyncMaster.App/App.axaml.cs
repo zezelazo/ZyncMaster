@@ -329,6 +329,18 @@ public partial class App : Application
     {
         try
         {
+            // 1) Gate on a confirmed identity. The clipboard pipeline's first step (GetDeviceAsync)
+            //    is device-key-gated: with no signed-in identity it self-heals into a registration
+            //    attempt that can't run, then THROWS "Sign in to register this device" and logs a
+            //    Warning — once here at boot, and again on every retry. Booting this before sign-in
+            //    is what produced the daily "no identity present" Warning storm. So wait quietly for
+            //    sign-in first: one Info line, then a light poll of the SAME on-disk token store the
+            //    engine reads. Returns false only on shutdown; otherwise it returns once an identity
+            //    appears (boot-already-signed-in, or a fresh sign-in mid-session), and the pipeline
+            //    comes online on its own without an app restart.
+            if (!await WaitForIdentityAsync(engine, ct))
+                return; // shutdown before sign-in — nothing to start.
+
             // 2) Resolve this device + its settings. GetDeviceAsync self-heals/awaits registration via
             //    the engine's WithDeviceKeyAsync, so a key is present by the time it returns.
             var device = await engine.Actions.GetDeviceAsync(ct);
@@ -379,6 +391,41 @@ public partial class App : Application
             else
                 engine.Logger.Log(LogLevel.Warning, "Clipboard module failed to start; it will be unavailable this session.", ex);
         }
+    }
+
+    // How often the clipboard boot re-checks for a signed-in identity while it waits. Cheap (a local
+    // DPAPI read of identity.token, no network) so a short cadence keeps the pipeline coming online
+    // promptly after sign-in without busy-spinning.
+    private static readonly TimeSpan IdentityWaitPollInterval = TimeSpan.FromSeconds(3);
+
+    // Waits — quietly — until a signed-in identity is present (the SAME on-disk token the engine's
+    // device-registration path reads), or shutdown is requested. Returns true once an identity exists,
+    // false if cancellation fired first. The FIRST absence logs a single Info "waiting for sign-in"
+    // line; subsequent polls are silent, so a long signed-out session never floods the log. This is
+    // the gate that replaces the old "call GetDeviceAsync and let it throw per tick" boot behaviour.
+    private static async Task<bool> WaitForIdentityAsync(EngineHost engine, CancellationToken ct)
+    {
+        // Fast path: already signed in at boot (the common "already logged in" case) — no wait, no log.
+        if (await engine.Actions.HasIdentityAsync(ct))
+            return true;
+
+        engine.Logger.Log(LogLevel.Info,
+            "Clipboard module is waiting for sign-in before it starts (no identity present yet).");
+
+        using var timer = new PeriodicTimer(IdentityWaitPollInterval);
+        // WaitForNextTickAsync throws OperationCanceledException on shutdown (caught by the caller's
+        // shutdown handler) and returns false only if the timer is disposed; either way the loop ends
+        // without starting the pipeline. It returns true after every interval, when we re-check.
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            if (await engine.Actions.HasIdentityAsync(ct))
+            {
+                engine.Logger.Log(LogLevel.Info, "Identity detected; starting the clipboard module.");
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Tears down the clipboard pipeline at Exit: unsubscribe, stop OS capture, unregister the hotkey,

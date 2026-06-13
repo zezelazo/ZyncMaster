@@ -91,6 +91,16 @@ public class UnconfiguredEngineActionsTests
     }
 
     [Fact]
+    public async Task HasIdentity_is_false_when_unconfigured()
+    {
+        // No engine → no identity can be in use, so the cheap presence gate reports false (the
+        // clipboard boot then quietly waits for sign-in instead of throwing).
+        var engine = Build();
+
+        (await engine.HasIdentityAsync(CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetClipboardDevices_surfaces_persisted_opacity_when_unconfigured()
     {
         var repo = new Mock<ISettingsRepository<AppSettings>>();

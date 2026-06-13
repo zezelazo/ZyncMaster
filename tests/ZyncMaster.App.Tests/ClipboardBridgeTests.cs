@@ -114,6 +114,7 @@ public class ClipboardBridgeTests
         public Task<bool> GetAutoStartAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task SetAutoStartAsync(bool enabled, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> HasIdentityAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default) => throw new NotImplementedException();
         public Task CancelLoginAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task SignOutAsync(CancellationToken ct = default) => throw new NotImplementedException();

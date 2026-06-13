@@ -317,6 +317,15 @@ public class UiBridgeTests
             return IdentityStateToReturn;
         }
 
+        public int HasIdentityCalls;
+        public bool HasIdentityToReturn = false;
+        public async Task<bool> HasIdentityAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            HasIdentityCalls++;
+            return HasIdentityToReturn;
+        }
+
         public async Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default)
         {
             if (Throw != null) await Throw();

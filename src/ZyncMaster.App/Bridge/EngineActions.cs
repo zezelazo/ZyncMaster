@@ -812,6 +812,30 @@ public sealed class EngineActions : IEngineActions, IDisposable
     public Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default)
         => _identity.GetIdentityStateAsync(ct);
 
+    // Cheap, network-free "is anyone signed in?" check against the SAME on-disk identity cache the
+    // device-registration / RequireKey paths read. The clipboard boot uses this to wait for sign-in
+    // instead of calling device-key-gated actions before an identity exists — which is exactly what
+    // produced the per-tick "no identity present" Warning storm. Reads only the local token: a usable
+    // identity is one with an access token. Never throws (a read failure reports "no identity") so a
+    // gate built on it can never crash the boot path.
+    public async Task<bool> HasIdentityAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var tokens = await _identityCache.LoadAsync(ct);
+            return tokens is not null && !string.IsNullOrEmpty(tokens.AccessToken);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Warning, "Could not read the identity cache; treating as signed-out.", ex);
+            return false;
+        }
+    }
+
     public async Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default)
     {
         switch ((provider ?? "").Trim().ToLowerInvariant())

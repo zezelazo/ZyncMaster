@@ -145,6 +145,11 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<IdentityState> GetIdentityStateAsync(CancellationToken ct = default)
         => Task.FromResult(IdentityState.SignedOut);
 
+    // No engine → no identity can be in use yet, so the cheap presence check is always false. Mirrors
+    // GetIdentityStateAsync's signed-out stub; the clipboard boot gate then quietly waits for sign-in.
+    public Task<bool> HasIdentityAsync(CancellationToken ct = default)
+        => Task.FromResult(false);
+
     public Task<LoginOutcome> LoginAsync(string provider, string? email, CancellationToken ct = default)
         => Task.FromResult(LoginOutcome.Fail("Set the server URL in Settings before signing in."));
 
