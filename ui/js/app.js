@@ -399,6 +399,13 @@ const live = {
   deviceLoading: false,  // a getDevice call is in flight
   loadedPairs: false,
   loadingPairs: false,
+  // Honest three-state load model for the pairs fetch (see loadPairs). A render must distinguish:
+  //   loaded-with-pairs  — loadedPairs true, pairs.length > 0
+  //   loaded-empty       — loadedPairs true, pairs.length 0, pairsError false  ("No sync pairs yet")
+  //   load-FAILED        — pairsError true                                     (honest error + Retry)
+  // pairsError is true ONLY when the listPairs call threw (401/expired/network), NEVER on a 200 empty
+  // array. It must NOT be conflated with loadedPairs: a failed fetch is not "loaded", it FAILED.
+  pairsError: false,
   pairsAttempted: false,  // web panel: home auto-loads pairs at most once (a 401 must not loop)
   // Device capabilities (getCapabilities), loaded once at boot. Until it resolves we ASSUME
   // COM is unavailable (the safer default: COM affordances stay disabled until confirmed).
@@ -629,6 +636,9 @@ async function loadPairs() {
     const list = await Bridge.call('listPairs');
     live.pairs = Array.isArray(list) ? list : [];
     live.loadedPairs = true;
+    // A successful fetch clears any prior failure: a 200 (even an empty array) is the genuine-empty
+    // state, never the error state. This is what lets a Retry recover the view.
+    live.pairsError = false;
     // Track B — the dashboard needs THIS device's id to tell "Source is on this PC" from "Runs on
     // <device>" for COM-pinned pairs. Lazy-load it once alongside the pairs (the Settings hub also
     // loads it, but the calendar view renders first), best-effort; a failure just hides the badge.
@@ -640,7 +650,12 @@ async function loadPairs() {
     ensurePairCalendarNames();
     return live.pairs;
   } catch (_) {
+    // The fetch FAILED (401/expired/network). Do NOT mark loadedPairs — that would let the view
+    // render the genuine-empty "No sync pairs yet" message, which is a lie when we never actually
+    // got a list. Flag the error so the view shows an honest, retryable message instead. Keep any
+    // previously loaded pairs in place so a transient failure doesn't blank a working screen.
     live.pairs = live.pairs || [];
+    live.pairsError = true;
     return live.pairs;
   } finally {
     live.loadingPairs = false;

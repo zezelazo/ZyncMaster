@@ -303,19 +303,51 @@ export function registerCalendarViews(ctx) {
       : PAIRS;
 
     const list = el('div', { class: 'pair-list' });
+    // Honest three-state empty rendering (diagnosis §1.2, fix #3). Only when there is nothing to
+    // show do we pick between the three states; when there ARE pairs we render them (a transient
+    // refresh failure must not blank a working screen). The states are mutually exclusive:
+    //   load-FAILED   — the listPairs fetch threw (401/expired/network): show an honest, actionable
+    //                   message + Retry, NOT the lying "No sync pairs yet".
+    //   loaded-empty  — the server returned 200 with an empty array: genuinely no pairs yet.
+    //   loading       — no result yet (and no error): the fetch is still in flight.
     if (Bridge.available && pairs.length === 0) {
-      list.append(el('div', { class: 'glass glass--card', style: 'padding:18px;text-align:center;color:var(--ink-3)' },
-        el('div', { text: live.loadedPairs ? 'No sync pairs yet.' : 'Loading sync pairs…' })));
+      if (live.pairsError) {
+        list.append(pairsLoadErrorCard());
+      } else {
+        list.append(el('div', { class: 'glass glass--card', style: 'padding:18px;text-align:center;color:var(--ink-3)' },
+          el('div', { text: live.loadedPairs ? 'No sync pairs yet.' : 'Loading sync pairs…' })));
+      }
     } else {
       pairs.forEach((p) => list.append(pairAccordion(p)));
     }
     root.append(list);
 
     // Kick a one-shot background refresh the first time we open this screen; repaint when it
-    // lands. Live actions (run/pause/delete) refresh explicitly, so we don't poll on paint.
-    if (Bridge.available && !live.loadedPairs && !live.loadingPairs) {
+    // lands. Live actions (run/pause/delete) refresh explicitly, so we don't poll on paint. After a
+    // failure we DON'T auto-retry (pairsError gates it) — a 401/expired fetch would loop forever;
+    // the user drives recovery with the Retry button in pairsLoadErrorCard().
+    if (Bridge.available && !live.loadedPairs && !live.loadingPairs && !live.pairsError) {
       loadPairs().then(() => { if (state.view === 'calendar') rerenderInPlace(); });
     }
+  }
+
+  // pairsLoadErrorCard — the load-FAILED state for the pairs list: an honest message plus a Retry
+  // button that re-runs loadPairs and repaints. Retry clears live.pairsError on success (loadPairs
+  // sets pairsError=false on a 200), so a recovered fetch drops straight back to the real list or
+  // the genuine-empty message. While the retry is in flight the button is disabled to single-flight.
+  function pairsLoadErrorCard() {
+    const retryBtn = el('button', { class: 'btn btn--primary', type: 'button' },
+      iconEl('sync', 13, 1.8), el('span', { text: 'Reintentar' }));
+    retryBtn.addEventListener('click', () => {
+      if (live.loadingPairs) return;             // single-flight: ignore stacked clicks
+      retryBtn.disabled = true;
+      const span = retryBtn.querySelector('span'); if (span) span.textContent = 'Cargando…';
+      loadPairs().then(() => { if (state.view === 'calendar') rerenderInPlace(); });
+    });
+    return el('div', { class: 'glass glass--card', style: 'padding:18px;text-align:center;color:var(--ink-3)' },
+      el('div', { style: 'color:var(--ink-1);font-weight:600;margin-bottom:4px', text: 'No pudimos cargar tus pares' }),
+      el('div', { style: 'margin-bottom:12px', text: 'Revisa tu conexión o vuelve a iniciar sesión, y reintenta.' }),
+      el('div', { style: 'display:flex;justify-content:center' }, retryBtn));
   }
 
   // ---------------- Wizard stepper (shared) ----------------
