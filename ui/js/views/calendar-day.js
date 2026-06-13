@@ -6,7 +6,7 @@
 import {
   accountColorClass, clampBlock, localMinutes, replicateButtonLabel,
   maskedTitle, weekDates, shiftDate, freshnessLabel, replicateRequest, prefixRulePayload,
-  newEventPayload,
+  newEventPayload, formatDayLabel, formatWeekday, formatShortDate,
 } from '../calendar-day.js';
 
 export function registerCalendarDayView(ctx) {
@@ -17,24 +17,9 @@ export function registerCalendarDayView(ctx) {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
-  // Parse a YYYY-MM-DD ISO day string into a LOCAL Date (no timezone shift). Passing the raw ISO to
-  // `new Date('2026-06-13')` parses it as UTC midnight, which renders the previous day in negative
-  // offsets — so build the date from its parts to keep the weekday/label honest everywhere.
-  function isoToLocalDate(iso) {
-    const [y, m, d] = String(iso).split('-').map(Number);
-    return new Date(y, (m || 1) - 1, d || 1);
-  }
-  // "Wed, June 13" — weekday + month + day, matching the mock's date label (mock line 127).
-  function formatDayLabel(iso) {
-    return isoToLocalDate(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric' });
-  }
-  // Per-column header in week mode: "Wed" over "Jun 13" so a 7-wide row stays readable.
-  function formatWeekday(iso) {
-    return isoToLocalDate(iso).toLocaleDateString(undefined, { weekday: 'short' });
-  }
-  function formatShortDate(iso) {
-    return isoToLocalDate(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
+  // formatDayLabel / formatWeekday / formatShortDate (and their isoToLocalDate base) are PURE,
+  // DOM-free helpers and live in ../calendar-day.js so plain `node --test` can freeze them against
+  // regression (tests/js-unit/calendar-day.test.mjs). They are imported above, not inlined here.
   const calDay = {
     date: todayIso(),
     mode: 'day',            // 'day' | 'week'
@@ -100,6 +85,11 @@ export function registerCalendarDayView(ctx) {
   // at module scope and guarded on the active view so it never leaks onto other screens or stacks.
   function onCalDayKeydown(e) {
     if (e.key !== 'Escape') return;
+    // An overlay open OVER the calendar-day view (command palette via Ctrl+K, or a modal) registers
+    // its own Escape handler in the CAPTURE phase and calls e.preventDefault() before this bubble
+    // handler runs. Bail when the event was already consumed so a single Escape that closes the
+    // overlay does NOT also close the calendar's detail panel or navigate the view back.
+    if (e.defaultPrevented) return;
     if (state.view !== 'calendar-day') return;
     if (calDay.panel) {
       e.preventDefault();
@@ -634,7 +624,8 @@ export function registerCalendarDayView(ctx) {
                             // abierta (registry.activeNavId), sin entrada de nav propia
     // header opcional: el shell pinta #vhead desde def.header(). Esta vista ya trae su PROPIO
     // header in-view (.calday-head, fiel al mock: Day/Week, ‹Today›, leyenda, +New). El título
-    // cae al label de nav del parent "Calendar"; la fecha viaja como meta en #vhead.
-    header: () => ({ title: 'Calendar', meta: calDay.date }),
+    // cae al label de nav del parent "Calendar"; la fecha viaja como meta en #vhead, FORMATEADA
+    // ("Wed, June 13") igual que el banner in-view — nunca la ISO cruda.
+    header: () => ({ title: 'Calendar', meta: formatDayLabel(calDay.date) }),
   });
 }

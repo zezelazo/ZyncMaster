@@ -36,6 +36,39 @@ export function localMinutes(iso) {
   return d.getHours() * 60 + d.getMinutes();
 }
 
+// Parse a 'yyyy-mm-dd' day string into a LOCAL Date (no timezone shift). Passing the raw ISO to
+// `new Date('2026-06-13')` parses it as UTC midnight, which renders the PREVIOUS day in negative
+// UTC offsets — so build the date from its parts to keep the weekday/label honest everywhere.
+// A malformed/empty value degrades to an Invalid Date rather than throwing; the formatters below
+// then return '' so the UI shows a blank label instead of crashing or "Invalid Date".
+export function isoToLocalDate(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return new Date(NaN);
+  return new Date(y, m - 1, d);
+}
+
+// "Wed, June 13" — weekday + month + day, matching the mock's date label (mock line 127). The
+// sticky day banner and the #vhead meta both use this so the topbar and the in-view banner agree.
+export function formatDayLabel(iso) {
+  const d = isoToLocalDate(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric' });
+}
+
+// Per-column header in week mode: "Wed" over "Jun 13" so a 7-wide row stays readable.
+export function formatWeekday(iso) {
+  const d = isoToLocalDate(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { weekday: 'short' });
+}
+
+// "Jun 13" — the short month + day under the weekday in a week column.
+export function formatShortDate(iso) {
+  const d = isoToLocalDate(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 // CTA label for the Replicate panel: reflects how many destinations are checked and whether
 // any checked destination still misses its REQUIRED masked title (decision D6).
 export function replicateButtonLabel(count, missingTitles = false) {

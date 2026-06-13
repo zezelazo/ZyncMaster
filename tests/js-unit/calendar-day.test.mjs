@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   accountColorClass, clampBlock, localMinutes, replicateButtonLabel,
   maskedTitle, weekDates, shiftDate, freshnessLabel,
+  isoToLocalDate, formatDayLabel, formatWeekday, formatShortDate,
 } from '../../ui/js/calendar-day.js';
 
 test('accountColorClass cycles az/aq/cy per account index', () => {
@@ -147,4 +148,46 @@ test('the origin title never appears in a replicate payload unless the user type
     { checked: true, accountId: 'a1', calendarId: 'c1', title: origin },
   ]);
   assert.equal(typed.destinations[0].title, origin);
+});
+
+test('isoToLocalDate parses a yyyy-mm-dd string into a LOCAL date with no off-by-one shift', () => {
+  // Regression guard: `new Date('2026-06-13')` parses as UTC midnight, which in a negative UTC
+  // offset renders as 2026-06-12. isoToLocalDate builds the date from its parts so the calendar
+  // weekday/label stays honest in every timezone — assert the LOCAL y/m/d match the input exactly.
+  const d = isoToLocalDate('2026-06-13');
+  assert.equal(d.getFullYear(), 2026);
+  assert.equal(d.getMonth(), 5); // June, 0-based
+  assert.equal(d.getDate(), 13); // never 12 — that was the negative-offset bug
+});
+
+test('isoToLocalDate degrades a malformed or empty value to an Invalid Date instead of throwing', () => {
+  assert.ok(Number.isNaN(isoToLocalDate('').getTime()));
+  assert.ok(Number.isNaN(isoToLocalDate('not-a-date').getTime()));
+  assert.ok(Number.isNaN(isoToLocalDate(undefined).getTime()));
+  assert.ok(Number.isNaN(isoToLocalDate(null).getTime()));
+});
+
+test('formatDayLabel renders a human weekday + month + day, not the raw ISO', () => {
+  const label = formatDayLabel('2026-06-13'); // a Saturday
+  assert.notEqual(label, '2026-06-13'); // never the raw ISO string the bug leaked
+  assert.match(label, /Sat/); // weekday: short
+  assert.match(label, /June/); // month: long
+  assert.match(label, /13/); // day: numeric
+});
+
+test('formatWeekday and formatShortDate produce the per-column week headers', () => {
+  assert.match(formatWeekday('2026-06-13'), /Sat/); // "Sat"
+  const short = formatShortDate('2026-06-13');
+  assert.match(short, /Jun/); // month: short
+  assert.match(short, /13/); // day: numeric
+  assert.ok(!/2026/.test(short)); // no year, no raw ISO
+});
+
+test('the date formatters return an empty string for malformed input instead of "Invalid Date"', () => {
+  // A blank/garbage ISO must not paint "Invalid Date" into the banner, the column header or #vhead.
+  for (const bad of ['', 'garbage', undefined, null]) {
+    assert.equal(formatDayLabel(bad), '');
+    assert.equal(formatWeekday(bad), '');
+    assert.equal(formatShortDate(bad), '');
+  }
 });
