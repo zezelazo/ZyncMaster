@@ -17,6 +17,24 @@ export function registerCalendarDayView(ctx) {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
+  // Parse a YYYY-MM-DD ISO day string into a LOCAL Date (no timezone shift). Passing the raw ISO to
+  // `new Date('2026-06-13')` parses it as UTC midnight, which renders the previous day in negative
+  // offsets — so build the date from its parts to keep the weekday/label honest everywhere.
+  function isoToLocalDate(iso) {
+    const [y, m, d] = String(iso).split('-').map(Number);
+    return new Date(y, (m || 1) - 1, d || 1);
+  }
+  // "Wed, June 13" — weekday + month + day, matching the mock's date label (mock line 127).
+  function formatDayLabel(iso) {
+    return isoToLocalDate(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric' });
+  }
+  // Per-column header in week mode: "Wed" over "Jun 13" so a 7-wide row stays readable.
+  function formatWeekday(iso) {
+    return isoToLocalDate(iso).toLocaleDateString(undefined, { weekday: 'short' });
+  }
+  function formatShortDate(iso) {
+    return isoToLocalDate(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
   const calDay = {
     date: todayIso(),
     mode: 'day',            // 'day' | 'week'
@@ -70,6 +88,31 @@ export function registerCalendarDayView(ctx) {
   // ---------------- Calendar v2: unified day/week view ----------------
   const CALDAY_START_HOUR = 7, CALDAY_END_HOUR = 21, CALDAY_PX_PER_HOUR = 66;
 
+  // Leave the day/week view. The sidebar highlights the PARENT nav entry while this sub-route is
+  // open (registry.activeNavId), so routing back to that parent returns the user to the screen the
+  // sidebar is pointing at; if the view is ever registered without a parent, fall back to 'home'.
+  function goBack() {
+    navigate(registry.activeNavId('calendar-day') || 'home');
+  }
+
+  // Escape: close any open detail panel FIRST (so the first press dismisses Replicate/New event/
+  // Rules without leaving the view), and only navigate back once nothing is open. Registered once
+  // at module scope and guarded on the active view so it never leaks onto other screens or stacks.
+  function onCalDayKeydown(e) {
+    if (e.key !== 'Escape') return;
+    if (state.view !== 'calendar-day') return;
+    if (calDay.panel) {
+      e.preventDefault();
+      calDay.panel = null;
+      calDay.selected = null;
+      rerenderInPlace();
+      return;
+    }
+    e.preventDefault();
+    goBack();
+  }
+  document.addEventListener('keydown', onCalDayKeydown);
+
   function renderCalendarDay(root) {
     const wrap = document.createElement('section');
     wrap.className = 'view-calday';
@@ -77,6 +120,7 @@ export function registerCalendarDayView(ctx) {
     const head = document.createElement('div');
     head.className = 'calday-head';
     head.innerHTML = `
+      <button class="btn calday-back" id="calDayBack" aria-label="Back">‹ Back</button>
       <h1>Calendar</h1>
       <div class="calday-seg" role="tablist">
         <button id="calDayModeDay" class="${calDay.mode === 'day' ? 'on' : ''}">Day</button>
@@ -102,7 +146,8 @@ export function registerCalendarDayView(ctx) {
     wrap.appendChild(body);
     root.appendChild(wrap);
 
-    head.querySelector('#calDayLabel').textContent = calDay.date;
+    head.querySelector('#calDayLabel').textContent = formatDayLabel(calDay.date);
+    head.querySelector('#calDayBack').onclick = goBack;
     head.querySelector('#calDayModeDay').onclick = () => { calDay.mode = 'day'; loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayModeWeek').onclick = () => { calDay.mode = 'week'; loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayPrev').onclick = () => { calDay.date = shiftDate(calDay.date, calDay.mode === 'week' ? -7 : -1); loadCalendarDay(); rerenderInPlace(); };
@@ -113,7 +158,7 @@ export function registerCalendarDayView(ctx) {
     const data = calDay.days[calDay.date];
     if (calDay.loading && !data) { gridWrap.innerHTML = '<p class="calday-empty">Loading the day…</p>'; }
     else if (calDay.error) { gridWrap.innerHTML = `<p class="calday-empty">${escapeHtml(calDay.error)}</p>`; }
-    else if (calDay.mode === 'day') renderCalDayGrid(gridWrap, head.querySelector('#calDayLegend'), data);
+    else if (calDay.mode === 'day') renderCalDayGrid(gridWrap, head.querySelector('#calDayLegend'), data, calDay.date, true);
     else renderCalWeekGrid(gridWrap, head.querySelector('#calDayLegend'));
 
     renderCalDayPanel(panel);
@@ -121,7 +166,10 @@ export function registerCalendarDayView(ctx) {
   }
 
   // One day: a column per ACCOUNT inside one hour grid (the mock's layered day view).
-  function renderCalDayGrid(container, legendEl, data) {
+  // `dateIso` drives the sticky date header; pass showDateHeader=true (day mode) for the full
+  // "Wed, June 13" banner above the columns, false (week mode, where each cell already carries its
+  // own weekday+date header) to skip it.
+  function renderCalDayGrid(container, legendEl, data, dateIso, showDateHeader) {
     const accounts = (data && data.accounts) || [];
     if (legendEl) {
       legendEl.replaceChildren(...accounts.map((a, i) => {
@@ -149,7 +197,19 @@ export function registerCalendarDayView(ctx) {
     cols.style.gridTemplateColumns = `repeat(${Math.max(accounts.length, 1)}, 1fr)`;
     accounts.forEach((account, i) => cols.appendChild(buildCalDayColumn(account, i)));
     grid.appendChild(cols);
-    container.replaceChildren(grid);
+
+    // Sticky date banner above the grid so "what day is this?" is answered without reading the head
+    // (day mode). It scrolls with the grid wrapper but pins to the top on overflow (CSS position:
+    // sticky). Week mode renders its own per-column headers instead, so it skips this banner.
+    const children = [];
+    if (showDateHeader && dateIso) {
+      const dateHead = document.createElement('div');
+      dateHead.className = 'calday-datehead';
+      dateHead.textContent = formatDayLabel(dateIso);
+      children.push(dateHead);
+    }
+    children.push(grid);
+    container.replaceChildren(...children);
   }
 
   function buildCalDayColumn(account, index) {
@@ -191,14 +251,19 @@ export function registerCalendarDayView(ctx) {
     row.style.display = 'grid';
     row.style.gridTemplateColumns = 'repeat(7, 1fr)';
     row.style.gap = 'var(--s-2)';
+    const todayKey = todayIso();
     days.forEach((d) => {
       const cell = document.createElement('div');
+      // Per-column weekday + date header (sticky) instead of the raw ISO string, so each week
+      // column says "Wed / Jun 13" at a glance; the current/today columns get a highlight.
       const title = document.createElement('div');
-      title.className = 'num';
-      title.style.cssText = 'font-size:var(--t-micro);color:var(--ink-3);margin-bottom:4px;';
-      title.textContent = d;
+      title.className = 'calday-colhead'
+        + (d === calDay.date ? ' on' : '')
+        + (d === todayKey ? ' today' : '');
+      title.innerHTML = `<span class="calday-colhead-wd">${escapeHtml(formatWeekday(d))}</span>`
+        + `<span class="calday-colhead-dt num">${escapeHtml(formatShortDate(d))}</span>`;
       cell.appendChild(title);
-      renderCalDayGrid(cell, d === calDay.date ? legendEl : null, calDay.days[d]);
+      renderCalDayGrid(cell, d === calDay.date ? legendEl : null, calDay.days[d], d, false);
       row.appendChild(cell);
     });
     container.replaceChildren(row);

@@ -3,6 +3,11 @@
 .calday-head { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-5);
   border-bottom: 1px solid var(--border-1); flex-wrap: wrap; }
 .calday-head h1 { font-size: var(--t-title); line-height: var(--lh-title); font-weight: var(--w-title); margin: 0; }
+/* Back: leaves the day/week sub-route. Sits first in the head, separated from the title by a hairline. */
+.calday-back { font-size: var(--t-meta); font-weight: var(--w-meta); color: var(--ink-2);
+  padding-right: var(--s-3); margin-right: var(--s-1); border-right: 1px solid var(--border-1);
+  border-radius: var(--r-xs); }
+.calday-back:hover { color: var(--azure-2); }
 .calday-seg { display: flex; border: 1px solid var(--ctrl-stroke); border-radius: var(--r-sm); overflow: hidden; }
 .calday-seg button { font: inherit; font-size: var(--t-meta); font-weight: var(--w-meta); color: var(--ink-3);
   background: none; border: 0; padding: 5px 14px; cursor: pointer; }
@@ -14,6 +19,21 @@
   color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn);
   border-radius: var(--r-pill); padding: 0 7px; margin-left: 4px; }
 .calday-grid-wrap { overflow: auto; padding: var(--s-5); }
+/* Day mode: sticky weekday + date banner pinned above the hour grid as the wrapper scrolls. */
+.calday-datehead { position: sticky; top: 0; z-index: 2; margin: 0 0 var(--s-3);
+  padding: var(--s-2) var(--s-3); font-size: var(--t-meta); font-weight: var(--w-title);
+  color: var(--ink-1); background: var(--bg-1); border: 1px solid var(--border-1);
+  border-radius: var(--r-sm); border-left: 3px solid var(--azure); }
+/* Week mode: per-column weekday + date header, sticky to the top of the scrolling row. */
+.calday-colhead { position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline;
+  gap: 5px; margin-bottom: var(--s-2); padding: var(--s-2) var(--s-2);
+  background: var(--bg-1); border-bottom: 1px solid var(--border-1); border-radius: var(--r-xs) var(--r-xs) 0 0; }
+.calday-colhead-wd { font-size: var(--t-meta); font-weight: var(--w-title); color: var(--ink-2);
+  text-transform: uppercase; letter-spacing: .04em; }
+.calday-colhead-dt { font-size: var(--t-micro); color: var(--ink-3); }
+.calday-colhead.on { border-bottom-color: var(--azure-edge); }
+.calday-colhead.on .calday-colhead-wd { color: var(--azure-2); }
+.calday-colhead.today .calday-colhead-dt { color: var(--aqua); font-weight: var(--w-micro); }
 .calday-grid { position: relative; border: 1px solid var(--border-1); border-radius: var(--r-md);
   background: var(--surface-solid); }
 .calday-hour { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border-1);
