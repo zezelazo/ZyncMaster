@@ -155,6 +155,9 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
             Subject = identity.Subject,
             Email = identity.Email,
             DisplayName = identity.DisplayName,
+            EmailVerified = identity.EmailVerified,
+            TenantId = identity.TenantId,
+            EmailDomainOwnerVerified = identity.EmailDomainOwnerVerified,
         };
     }
 
@@ -221,13 +224,16 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
             ? el.GetString()
             : null;
 
-    private readonly record struct IdTokenIdentity(string? Subject, string? Email, string? DisplayName, string? Upn);
+    private readonly record struct IdTokenIdentity(
+        string? Subject, string? Email, string? DisplayName, string? Upn,
+        bool? EmailVerified, string? TenantId, bool? EmailDomainOwnerVerified);
 
     // Best-effort: decode the JWT payload of an id_token and read the identity claims.
     // Subject = oid (stable per-tenant object id) falling back to sub; email/upn from the
-    // usual username-like claims; name from the "name" claim. Returns all-null on any
-    // malformed input; callers tolerate nulls (the connected-account store falls back to a
-    // "default" key for the single-user scenario).
+    // usual username-like claims; name from the "name" claim. Also lifts the account-linking
+    // trust signals: email_verified, the tenant id (tid), and xms_edov (AAD email-domain-owner
+    // -verified). Returns all-null on any malformed input; callers tolerate nulls (the
+    // connected-account store falls back to a "default" key for the single-user scenario).
     private static IdTokenIdentity ParseIdToken(string? idToken)
     {
         if (string.IsNullOrWhiteSpace(idToken))
@@ -247,7 +253,11 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
                 ?? GetString(root, "upn")
                 ?? GetString(root, "email");
             var name = GetString(root, "name");
-            return new IdTokenIdentity(subject, email, name, email);
+            return new IdTokenIdentity(
+                subject, email, name, email,
+                GetBool(root, "email_verified"),
+                GetString(root, "tid"),
+                GetBool(root, "xms_edov"));
         }
         catch (FormatException)
         {
@@ -257,6 +267,22 @@ public sealed class MicrosoftTokenService : IMicrosoftTokenService
         {
             return default;
         }
+    }
+
+    // Reads a claim that may be emitted as a JSON boolean OR as the string "true"/"false"
+    // (different IdPs/Microsoft account types render email_verified either way). Returns null
+    // when the claim is absent or unparseable, so the endpoint layer can apply its own default.
+    private static bool? GetBool(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var el))
+            return null;
+        return el.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(el.GetString(), out var b) => b,
+            _ => null,
+        };
     }
 
     private static byte[] Base64UrlDecode(string input)

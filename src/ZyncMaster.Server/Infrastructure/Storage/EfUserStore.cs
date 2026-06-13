@@ -76,6 +76,40 @@ public sealed class EfUserStore : IUserStore
         {
             login.Email = email;
             login.EmailVerified = emailVerified;
+
+            // (a.1) Orphan-repoint migration. Before the email-link branch existed, a Microsoft
+            // sign-in was forced to emailVerified:false and minted its OWN empty user, distinct
+            // from the magic-link/web user that owns the same verified email (and the pairs /
+            // devices). Now that the email is verified, repoint this login at the canonical
+            // verified-email user so the session resolves to the account that actually owns the
+            // data — instead of stranding it on the empty orphan forever.
+            //
+            // Idempotent + safe:
+            //   * only runs when emailVerified is true (an unverified login is never repointed,
+            //     and two different subjects sharing an UNVERIFIED email never merge);
+            //   * the target is the SINGLE other user that owns a verified login for this email;
+            //     if more than one exists the email is ambiguous and we leave the login where it
+            //     is (the conflict is surfaced elsewhere, never silently merged);
+            //   * if the login already points at that user it is a no-op (idempotent);
+            //   * the vacated orphan user is deleted ONLY when it owns nothing — never when it
+            //     still owns pairs/devices/accounts/etc.
+            if (emailVerified)
+            {
+                var target = await ResolveVerifiedEmailTargetAsync(db, email, login.UserId, ct);
+                if (target is not null)
+                {
+                    var orphanId = login.UserId;
+                    login.UserId = target.Id;
+                    target.DisplayName = displayName;
+                    target.PrimaryEmail = email;
+                    await db.SaveChangesAsync(ct);
+                    await DeleteUserIfOwnsNothingAsync(db, orphanId, ct);
+                    await db.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                    return target;
+                }
+            }
+
             var owner = await db.Users.FirstAsync(u => u.Id == login.UserId, ct);
             owner.DisplayName = displayName;
             owner.PrimaryEmail = email;
@@ -124,6 +158,69 @@ public sealed class EfUserStore : IUserStore
         db.Users.Add(user);
         db.IdentityLogins.Add(NewLogin(user.Id, provider, providerSubject, email, emailVerified));
         return await CommitOrReconcileAsync(db, tx, provider, providerSubject, ct);
+    }
+
+    // Resolves the canonical user a login should be repointed to when its email is verified:
+    // the SINGLE user — other than the login's current owner — that already owns a verified
+    // login with this email. Returns null when there is no such user (nothing to migrate) or
+    // when the current owner is itself the (or a) verified-email owner (already canonical).
+    // Throws on ambiguity (the same verified email owned by more than one OTHER user), so the
+    // store never silently merges an ambiguous identity.
+    private static async Task<UserRow?> ResolveVerifiedEmailTargetAsync(
+        ZyncMasterDbContext db, string email, string currentOwnerId, CancellationToken ct)
+    {
+        var otherUserIds = await db.IdentityLogins
+            .Where(l => l.Email == email && l.EmailVerified && l.UserId != currentOwnerId)
+            .Select(l => l.UserId).Distinct().ToListAsync(ct);
+
+        if (otherUserIds.Count == 0)
+            return null;
+        if (otherUserIds.Count > 1)
+        {
+            throw new InvalidOperationException(
+                $"Identity conflict: multiple users share verified email '{email}'.");
+        }
+
+        return await db.Users.FirstAsync(u => u.Id == otherUserIds[0], ct);
+    }
+
+    // Deletes a vacated orphan user ONLY when it owns no domain data. The orphan's own identity
+    // rows (its logins/tokens, now detached because the repointed login moved away) are cleaned
+    // up alongside it; any row that represents real user-owned data (devices, pairs, calendar
+    // accounts, clipboard, sync state, toggles, prefix rules, replica links) blocks the delete so
+    // a user with data is NEVER removed. No-op when the id no longer resolves (idempotent).
+    private static async Task DeleteUserIfOwnsNothingAsync(
+        ZyncMasterDbContext db, string userId, CancellationToken ct)
+    {
+        var orphan = await db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (orphan is null)
+            return;
+
+        var ownsData =
+            await db.Devices.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.SyncPairs.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.CalendarAccounts.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.ConnectedAccounts.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.PendingPairings.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.SyncStates.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.UserToggles.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.ClipboardItems.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.ClipboardDeviceSettings.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.ReplicaLinks.AnyAsync(r => r.UserId == userId, ct) ||
+            await db.PrefixRules.AnyAsync(r => r.UserId == userId, ct);
+
+        if (ownsData)
+            return;
+
+        // Remove the orphan's leftover identity rows (logins still pointing at it, plus its
+        // issued/refresh token ledgers) so no dangling FK remains, then the user itself.
+        var staleLogins = await db.IdentityLogins.Where(l => l.UserId == userId).ToListAsync(ct);
+        db.IdentityLogins.RemoveRange(staleLogins);
+        var accessTokens = await db.IdentityAccessTokens.Where(t => t.UserId == userId).ToListAsync(ct);
+        db.IdentityAccessTokens.RemoveRange(accessTokens);
+        var refreshTokens = await db.IdentityRefreshTokens.Where(t => t.UserId == userId).ToListAsync(ct);
+        db.IdentityRefreshTokens.RemoveRange(refreshTokens);
+        db.Users.Remove(orphan);
     }
 
     // SECURITY: emailVerified trust policy + proof-of-possession enforced at the endpoint

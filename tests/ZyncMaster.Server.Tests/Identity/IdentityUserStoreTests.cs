@@ -255,4 +255,202 @@ public class IdentityUserStoreTests
         second.Email.Should().Be("b@test");
         second.DisplayName.Should().Be("Bob");
     }
+
+    // ----- Orphan-repoint migration (the already-created split user) -----------------------
+
+    [Fact]
+    public async Task UpsertByLogin_repoints_orphan_microsoft_login_to_verified_email_user_and_removes_empty_orphan()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        // U1: the magic-link user that owns the data, with a verified local login.
+        var u1 = await store.UpsertByLoginAsync("local", "owner@test", "owner@test", true, "Owner");
+        // A device U1 owns, so U1 is clearly the canonical, data-owning user.
+        await using (var seed = h.NewContext())
+        {
+            seed.Devices.Add(NewDevice(u1.Id));
+            await seed.SaveChangesAsync();
+        }
+
+        // U2: the empty orphan minted by the OLD Microsoft flow (emailVerified:false back then).
+        await using (var seed = h.NewContext())
+        {
+            var u2 = NewUser("owner@test");
+            seed.Users.Add(u2);
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "microsoft", "ms-oid", "owner@test", false));
+            await seed.SaveChangesAsync();
+        }
+
+        // The Microsoft sign-in now arrives verified: the existing login must repoint to U1.
+        var resolved = await store.UpsertByLoginAsync("microsoft", "ms-oid", "owner@test", true, "Owner MS");
+
+        resolved.Id.Should().Be(u1.Id);
+
+        await using var db = h.NewContext();
+        // The Microsoft login now points at U1.
+        var msLogin = await db.IdentityLogins.SingleAsync(l => l.Provider == "microsoft" && l.ProviderSubject == "ms-oid");
+        msLogin.UserId.Should().Be(u1.Id);
+        msLogin.EmailVerified.Should().BeTrue();
+        // U1 now owns both logins.
+        (await db.IdentityLogins.CountAsync(l => l.UserId == u1.Id)).Should().Be(2);
+        // The empty orphan user is gone.
+        (await db.Users.AnyAsync(u => u.PrimaryEmail == "owner@test" && u.Id != u1.Id)).Should().BeFalse();
+        // U1 keeps its device.
+        (await db.Devices.CountAsync(d => d.UserId == u1.Id)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task UpsertByLogin_repoint_is_idempotent_on_a_second_signin()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        var u1 = await store.UpsertByLoginAsync("local", "owner@test", "owner@test", true, "Owner");
+        await using (var seed = h.NewContext())
+        {
+            var u2 = NewUser("owner@test");
+            seed.Users.Add(u2);
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "microsoft", "ms-oid", "owner@test", false));
+            await seed.SaveChangesAsync();
+        }
+
+        var first = await store.UpsertByLoginAsync("microsoft", "ms-oid", "owner@test", true, "Owner MS");
+        var second = await store.UpsertByLoginAsync("microsoft", "ms-oid", "owner@test", true, "Owner MS Again");
+
+        first.Id.Should().Be(u1.Id);
+        second.Id.Should().Be(u1.Id);
+
+        await using var db = h.NewContext();
+        (await db.IdentityLogins.CountAsync(l => l.UserId == u1.Id)).Should().Be(2);
+        (await db.Users.CountAsync(u => u.Id != DefaultCurrentUserAccessor.DefaultUserId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task UpsertByLogin_does_not_remove_orphan_that_still_owns_data()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        var u1 = await store.UpsertByLoginAsync("local", "owner@test", "owner@test", true, "Owner");
+
+        // The orphan still owns a device — repoint the login but KEEP the user.
+        string orphanId;
+        await using (var seed = h.NewContext())
+        {
+            var u2 = NewUser("owner@test");
+            orphanId = u2.Id;
+            seed.Users.Add(u2);
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "microsoft", "ms-oid", "owner@test", false));
+            seed.Devices.Add(NewDevice(u2.Id));
+            await seed.SaveChangesAsync();
+        }
+
+        var resolved = await store.UpsertByLoginAsync("microsoft", "ms-oid", "owner@test", true, "Owner MS");
+
+        resolved.Id.Should().Be(u1.Id);
+
+        await using var db = h.NewContext();
+        // The login moved to U1.
+        (await db.IdentityLogins.SingleAsync(l => l.ProviderSubject == "ms-oid")).UserId.Should().Be(u1.Id);
+        // But the data-owning user is preserved (its device blocks deletion).
+        (await db.Users.AnyAsync(u => u.Id == orphanId)).Should().BeTrue();
+        (await db.Devices.CountAsync(d => d.UserId == orphanId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task UpsertByLogin_does_NOT_repoint_when_incoming_microsoft_email_is_unverified()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        var u1 = await store.UpsertByLoginAsync("local", "owner@test", "owner@test", true, "Owner");
+        string orphanId;
+        await using (var seed = h.NewContext())
+        {
+            var u2 = NewUser("owner@test");
+            orphanId = u2.Id;
+            seed.Users.Add(u2);
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "microsoft", "ms-oid", "owner@test", false));
+            await seed.SaveChangesAsync();
+        }
+
+        // SECURITY: an UNVERIFIED incoming email must never repoint/merge.
+        var resolved = await store.UpsertByLoginAsync("microsoft", "ms-oid", "owner@test", false, "Owner MS");
+
+        resolved.Id.Should().Be(orphanId);
+        resolved.Id.Should().NotBe(u1.Id);
+
+        await using var db = h.NewContext();
+        (await db.IdentityLogins.SingleAsync(l => l.ProviderSubject == "ms-oid")).UserId.Should().Be(orphanId);
+    }
+
+    [Fact]
+    public async Task UpsertByLogin_does_NOT_repoint_when_target_email_login_is_unverified()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        // The other user's login on the same email is UNVERIFIED, so there is no verified
+        // target to repoint to — the orphan login stays put even though the incoming is verified.
+        string u1Id;
+        string orphanId;
+        await using (var seed = h.NewContext())
+        {
+            var u1 = NewUser("owner@test");
+            var u2 = NewUser("owner@test");
+            u1Id = u1.Id;
+            orphanId = u2.Id;
+            seed.Users.AddRange(u1, u2);
+            seed.IdentityLogins.Add(NewLoginRow(u1.Id, "local", "owner@test", "owner@test", false));
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "microsoft", "ms-oid", "owner@test", false));
+            await seed.SaveChangesAsync();
+        }
+
+        var resolved = await store.UpsertByLoginAsync("microsoft", "ms-oid", "owner@test", true, "Owner MS");
+
+        resolved.Id.Should().Be(orphanId);
+        resolved.Id.Should().NotBe(u1Id);
+    }
+
+    [Fact]
+    public async Task UpsertByLogin_throws_on_ambiguous_repoint_when_two_other_users_share_verified_email()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        // Two OTHER users each own a verified login on the same email — repointing is ambiguous
+        // and must be refused, never silently merged.
+        await using (var seed = h.NewContext())
+        {
+            var u1 = NewUser("owner@test");
+            var u2 = NewUser("owner@test");
+            var orphan = NewUser("owner@test");
+            seed.Users.AddRange(u1, u2, orphan);
+            seed.IdentityLogins.Add(NewLoginRow(u1.Id, "local", "owner@test", "owner@test", true));
+            seed.IdentityLogins.Add(NewLoginRow(u2.Id, "google", "g-1", "owner@test", true));
+            seed.IdentityLogins.Add(NewLoginRow(orphan.Id, "microsoft", "ms-oid", "owner@test", false));
+            await seed.SaveChangesAsync();
+        }
+
+        var act = () => store.UpsertByLoginAsync("microsoft", "ms-oid", "owner@test", true, "Owner MS");
+
+        await act.Should().ThrowAsync<System.InvalidOperationException>()
+            .WithMessage("*multiple users share verified email*");
+    }
+
+    private static ZyncMaster.Server.Data.DeviceRow NewDevice(string userId)
+    {
+        var suffix = System.Guid.NewGuid().ToString("N")[..6];
+        return new()
+        {
+            Id = System.Guid.NewGuid().ToString("N"),
+            UserId = userId,
+            Name = "Box-" + suffix,
+            NameLower = ("box-" + suffix).ToLowerInvariant(),
+            ApiKeyHash = System.Guid.NewGuid().ToString("N"),
+            CreatedUtc = System.DateTimeOffset.UtcNow,
+            LastSeenUtc = System.DateTimeOffset.UtcNow,
+        };
+    }
 }

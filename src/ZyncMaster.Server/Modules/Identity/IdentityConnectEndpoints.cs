@@ -179,15 +179,28 @@ public static class IdentityConnectEndpoints
             var email = result.Email ?? result.UserPrincipalName ?? "";
             var displayName = result.DisplayName ?? email;
 
-            // SECURITY (plan v2 §A-4): Microsoft is NOT trusted for auto-linking by email, so
-            // we pass emailVerified:false on purpose. This guarantees a Microsoft sign-in
-            // never silently merges into a pre-existing local account that happens to share
-            // the same email — which would be an account-takeover vector. Explicit
-            // cross-provider linking with proof-of-possession (a confirmation magic-link to
-            // the email) is a later feature; until then a Microsoft login only ever resolves
-            // to its own (provider, subject) user or creates a fresh one.
+            // SECURITY (identity-link decision, nOAuth-aware): link a Microsoft sign-in to the
+            // existing user that owns the same VERIFIED email instead of minting a separate
+            // empty user per (provider, subject) — but ONLY when Microsoft actually vouches for
+            // the email. Trusting the raw email/preferred_username claim from any AAD tenant is
+            // the nOAuth account-takeover vector (CVE-2023, "nOAuth"): an attacker can set an
+            // arbitrary, unowned email on a user in a free Entra tenant, so that claim is NOT
+            // proof of mailbox ownership. The email is treated as verified only with an
+            // authoritative Microsoft issuer signal the tenant cannot forge for a domain it does
+            // not own:
+            //   * a Microsoft personal account (MSA) — tenant
+            //     9188040d-6c67-4c5b-b112-36a304b66dad — where the email IS the account's own
+            //     verified sign-in identity and cannot be spoofed; OR
+            //   * a work/school (AAD) account that carries xms_edov == true, Microsoft's explicit
+            //     "email domain owner verified" mitigation for exactly this attack.
+            // A bare email_verified == true is NOT trusted on its own (an attacker tenant can emit
+            // it); an explicit email_verified == false always blocks linking. Anything else (AAD
+            // without xms_edov, or an empty email) is treated as UNVERIFIED: the login resolves
+            // to its own (provider, subject) user and never merges by email. See
+            // IsMicrosoftEmailVerified.
+            var emailVerified = IsMicrosoftEmailVerified(result, email);
             var user = await users.UpsertByLoginAsync(
-                "microsoft", subject, email, emailVerified: false, displayName, context.RequestAborted);
+                "microsoft", subject, email, emailVerified, displayName, context.RequestAborted);
 
             // Mint the internal identity session and wrap it behind a one-time handle.
             // NOTE: the calendar refresh token (result.RefreshToken) is NOT persisted here — this
@@ -294,6 +307,41 @@ public static class IdentityConnectEndpoints
                 plan = user.Plan,
             });
         }).RequireIdentityBearer();
+    }
+
+    // The fixed Microsoft tenant id used by ALL Microsoft personal accounts (MSA / "consumers",
+    // i.e. outlook.com / hotmail.com / live.com / msn.com sign-ins). For these accounts the email
+    // is the account's own login identity and cannot be spoofed, so it is safe to trust for
+    // account-linking even when the explicit email_verified claim is absent.
+    private const string MicrosoftConsumerTenantId = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+    // Decides whether a Microsoft sign-in's email may be trusted to LINK into an existing account
+    // that owns the same email. This is the nOAuth account-takeover boundary, so it is deliberately
+    // strict:
+    //   * An empty email is never trusted (nothing to link on).
+    //   * An explicit email_verified:false is a hard NO.
+    //   * The email is trusted ONLY with a Microsoft-controlled issuer signal that a tenant cannot
+    //     forge for an address it does not own: the MSA consumer tenant (personal account — the
+    //     email IS the account identity), or AAD's xms_edov ("email domain owner verified") claim.
+    //   * A bare email_verified:true is NOT sufficient on its own. An attacker can stand up a free
+    //     AAD tenant, set a victim's address as a user's `email`, and the raw email/email_verified
+    //     claims are NOT authoritative there — so email_verified must be paired with the issuer
+    //     signal, never trusted alone. (For MSA, email_verified is commonly absent; the issuer
+    //     check covers it.)
+    private static bool IsMicrosoftEmailVerified(TokenResult result, string email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return false;
+
+        // An explicit email_verified:false always blocks linking, regardless of issuer.
+        if (result.EmailVerified == false)
+            return false;
+
+        // Trust the email only with an authoritative, unspoofable Microsoft issuer signal:
+        //   * MSA consumer tenant — personal account whose email is its own login identity; or
+        //   * AAD xms_edov — Microsoft vouches the issuing tenant owns the email's domain.
+        return string.Equals(result.TenantId, MicrosoftConsumerTenantId, StringComparison.OrdinalIgnoreCase)
+            || result.EmailDomainOwnerVerified == true;
     }
 
     private static IdentityOAuthState? TryReadState(IDataProtectionProvider dp, string? stateText)
