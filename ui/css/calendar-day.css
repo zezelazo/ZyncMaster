@@ -89,3 +89,24 @@
   color: var(--ink-1); background: var(--bg-2); border: 1px solid var(--ctrl-stroke);
   border-radius: var(--r-xs); padding: 7px 10px; }
 .calday-empty { color: var(--ink-3); font-size: var(--t-meta); padding: var(--s-4) var(--s-5); }
+
+/* Header gear: square icon-only button opening the pairs/accounts config sub-route. */
+.calday-gear { padding: 5px; line-height: 0; display: inline-flex; align-items: center; justify-content: center; }
+.calday-gear:hover { color: var(--azure-2); }
+
+/* Read-only Status popup (Sync status modal): one card per active pair, A->B + counts + Force-sync. */
+.calday-status { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
+.calday-status-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-4); }
+.calday-status-route { display: flex; align-items: center; gap: var(--s-2); min-width: 0; flex: 1 1 100%; }
+.calday-status-name { font-size: var(--t-meta); font-weight: var(--w-title); color: var(--ink-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.calday-status-arrow { color: var(--ink-3); display: inline-flex; flex: none; }
+.calday-status-stats { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); flex: 1 1 auto; }
+.calday-status-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.calday-status-stat-lbl { font-size: var(--t-micro); font-weight: var(--w-micro); letter-spacing: .04em;
+  text-transform: uppercase; color: var(--ink-3); }
+.calday-status-stat-val { font-size: var(--t-meta); color: var(--ink-1); }
+.calday-status-act { flex: none; margin-left: auto; }
+.calday-status-force { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  font-size: var(--t-meta); }

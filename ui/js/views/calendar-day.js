@@ -10,7 +10,12 @@ import {
 } from '../calendar-day.js';
 
 export function registerCalendarDayView(ctx) {
-  const { Bridge, state, navigate, rerenderInPlace, announce, registry } = ctx;
+  const {
+    Bridge, state, navigate, rerenderInPlace, announce, registry,
+    // Status popup (read-only) + config gear deps. The popup reuses the SAME pair shapes + run-now
+    // bridge actions the pairs screen uses, so a Force-sync here behaves exactly like "Sync now" there.
+    live, openModal, el, iconEl, icon, pairViewModel, runPairNow, syncPairRemote, fmtMMSS, loadPairs,
+  } = ctx;
 
   // ---------------- Calendar v2: unified day/week view state ----------------
   function todayIso() {
@@ -73,22 +78,17 @@ export function registerCalendarDayView(ctx) {
   // ---------------- Calendar v2: unified day/week view ----------------
   const CALDAY_START_HOUR = 7, CALDAY_END_HOUR = 21, CALDAY_PX_PER_HOUR = 66;
 
-  // Leave the day/week view. The sidebar highlights the PARENT nav entry while this sub-route is
-  // open (registry.activeNavId), so routing back to that parent returns the user to the screen the
-  // sidebar is pointing at; if the view is ever registered without a parent, fall back to 'home'.
-  function goBack() {
-    navigate(registry.activeNavId('calendar-day') || 'home');
-  }
-
-  // Escape: close any open detail panel FIRST (so the first press dismisses Replicate/New event/
-  // Rules without leaving the view), and only navigate back once nothing is open. Registered once
-  // at module scope and guarded on the active view so it never leaks onto other screens or stacks.
+  // Escape: close any open detail panel (Replicate / New event / Rules). This view is a top-level
+  // sidebar destination now (the "Calendar" nav lands here), so there is nothing to navigate "back"
+  // to when no panel is open — Escape on a bare grid is a no-op, the sidebar drives navigation.
+  // Registered once at module scope and guarded on the active view so it never leaks onto other
+  // screens or stacks.
   function onCalDayKeydown(e) {
     if (e.key !== 'Escape') return;
-    // An overlay open OVER the calendar-day view (command palette via Ctrl+K, or a modal) registers
-    // its own Escape handler in the CAPTURE phase and calls e.preventDefault() before this bubble
-    // handler runs. Bail when the event was already consumed so a single Escape that closes the
-    // overlay does NOT also close the calendar's detail panel or navigate the view back.
+    // An overlay open OVER the calendar-day view (command palette via Ctrl+K, or a modal — including
+    // the Status popup) registers its own Escape handler in the CAPTURE phase and calls
+    // e.preventDefault() before this bubble handler runs. Bail when the event was already consumed so
+    // a single Escape that closes the overlay does NOT also close the calendar's detail panel.
     if (e.defaultPrevented) return;
     if (state.view !== 'calendar-day') return;
     if (calDay.panel) {
@@ -96,10 +96,7 @@ export function registerCalendarDayView(ctx) {
       calDay.panel = null;
       calDay.selected = null;
       rerenderInPlace();
-      return;
     }
-    e.preventDefault();
-    goBack();
   }
   document.addEventListener('keydown', onCalDayKeydown);
 
@@ -109,8 +106,11 @@ export function registerCalendarDayView(ctx) {
 
     const head = document.createElement('div');
     head.className = 'calday-head';
+    // This view is the top-level "Calendar" sidebar destination (consume + trigger): the day/week
+    // grid first, then the Day/Week toggle + date nav, a Status button (read-only run state +
+    // Force-sync), and a gear that opens the pairs/accounts CONFIGURATION sub-route. There is no
+    // Back button — the sidebar is the navigation; nothing sits "above" this screen to return to.
     head.innerHTML = `
-      <button class="btn calday-back" id="calDayBack" aria-label="Back">‹ Back</button>
       <h1>Calendar</h1>
       <div class="calday-seg" role="tablist">
         <button id="calDayModeDay" class="${calDay.mode === 'day' ? 'on' : ''}">Day</button>
@@ -121,7 +121,10 @@ export function registerCalendarDayView(ctx) {
       <button class="btn" id="calDayNext" aria-label="Next">›</button>
       <span class="num" id="calDayLabel"></span>
       <span class="calday-legend" id="calDayLegend"></span>
+      <button class="btn" id="calDayStatus" aria-label="Sync status">Status</button>
+      <button class="btn calday-gear" id="calDayConfig" aria-label="Calendar sync settings" title="Sync settings"></button>
       <button class="btn primary" id="calDayNew">+ New event</button>`;
+    head.querySelector('#calDayConfig').appendChild(iconEl('settings', 15, 1.7));
     wrap.appendChild(head);
 
     const body = document.createElement('div');
@@ -137,13 +140,16 @@ export function registerCalendarDayView(ctx) {
     root.appendChild(wrap);
 
     head.querySelector('#calDayLabel').textContent = formatDayLabel(calDay.date);
-    head.querySelector('#calDayBack').onclick = goBack;
     head.querySelector('#calDayModeDay').onclick = () => { calDay.mode = 'day'; loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayModeWeek').onclick = () => { calDay.mode = 'week'; loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayPrev').onclick = () => { calDay.date = shiftDate(calDay.date, calDay.mode === 'week' ? -7 : -1); loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayNext').onclick = () => { calDay.date = shiftDate(calDay.date, calDay.mode === 'week' ? 7 : 1); loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayToday').onclick = () => { calDay.date = todayIso(); loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayNew').onclick = () => { calDay.panel = 'new-event'; rerenderInPlace(); };
+    // Gear -> the pairs/accounts CONFIGURATION sub-route (unchanged content, just relocated here from
+    // the old "Calendar Sync" landing). Status -> read-only run-state popup with per-pair Force-sync.
+    head.querySelector('#calDayConfig').onclick = () => navigate('calendar');
+    head.querySelector('#calDayStatus').onclick = openStatusPopup;
 
     const data = calDay.days[calDay.date];
     if (calDay.loading && !data) { gridWrap.innerHTML = '<p class="calday-empty">Loading the day…</p>'; }
@@ -616,15 +622,132 @@ export function registerCalendarDayView(ctx) {
     };
   }
 
+  // ---------------- Calendar v2: read-only Status popup (run state + Force-sync) ----------------
+  // A minimal, READ-ONLY overview of the active sync pairs reached from the "Status" button in the
+  // header. It surfaces, per active pair: the A->B route, synced + new counts, last-run and next-run
+  // ETA, and a per-pair Force-sync (run-now) button. It deliberately does NOT add / edit / pause /
+  // configure anything — that all lives behind the gear (the 'calendar' config sub-route). The popup
+  // reuses the SAME shapes the pairs screen uses: pairViewModel for labels/state/ETA, the raw pair's
+  // lastResult/lastRunUtc for counts, and runPairNow / syncPairRemote (via requestPairSync) for the
+  // run-now bridge action — so a Force-sync here behaves identically to "Sync now" on the pairs card.
+
+  // statusPopup holds the live modal handle + a repaint hook so a completed Force-sync can refresh
+  // the rows in place (counts / last-run) without the user reopening the popup.
+  let statusPopup = null;
+
+  // Build one read-only row for an ACTIVE pair. `vm` is the pairViewModel; `raw` is the underlying
+  // live pair (for the per-run created/updated/skipped counts the view model folds into a total).
+  function statusPairRow(vm, raw) {
+    const lr = (raw && raw.lastResult) || null;
+    const syncedCount = lr ? (lr.created + lr.updated + lr.skipped) : 0;  // events the last run touched/kept
+    const newCount = lr ? (lr.created || 0) : 0;                          // events the last run created
+    const lastRun = raw && raw.lastRunUtc
+      ? new Date(raw.lastRunUtc).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : 'never';
+    // Next-run ETA: offline / mid-sync have no meaningful countdown (em dash), otherwise mm:ss to the
+    // next scheduled tick — same fmtMMSS the pairs card uses.
+    const busy = !!vm.inFlight;
+    const nextStr = (vm.state === 'offline' || busy) ? '—' : fmtMMSS(vm.nextSync);
+    const dotState = busy ? 'sync' : vm.state === 'error' ? 'error' : vm.state === 'offline' ? 'offline' : 'ok';
+
+    const row = el('div', { class: 'calday-status-row glass glass--card' });
+
+    // Route A -> B (read-only).
+    row.append(el('div', { class: 'calday-status-route' },
+      el('span', { class: 'status-dot', dataset: { state: dotState }, style: 'width:7px;height:7px' }),
+      el('span', { class: 'calday-status-name', text: `${vm.src.svc} · ${vm.src.acct}` }),
+      el('span', { class: 'calday-status-arrow', html: icon('arrowright', { size: 11, stroke: 1.8 }) }),
+      el('span', { class: 'calday-status-name', text: `${vm.dst.svc} · ${vm.dst.acct}` })));
+
+    // Stats: synced / new / last-run / next ETA.
+    const stat = (label, value) => el('span', { class: 'calday-status-stat' },
+      el('span', { class: 'calday-status-stat-lbl', text: label }),
+      el('span', { class: 'calday-status-stat-val num', text: String(value) }));
+    row.append(el('div', { class: 'calday-status-stats' },
+      stat('Synced', syncedCount),
+      stat('New', newCount),
+      stat('Last run', lastRun),
+      stat('Next', nextStr)));
+
+    // Force-sync (run-now). Routes exactly like the pairs card: a COM source on ANOTHER device signals
+    // the origin (syncPairRemote -> requestPairSync), otherwise a local run (runPairNow). Disabled
+    // while a run is in flight (single-flight) or when the origin device is offline / unclaimed, with
+    // the same honest reasons the pairs card surfaces.
+    const comBlocked = vm.comOffline || vm.comUnclaimed;
+    const disabledReason = vm.state === 'offline'
+      ? 'Force-sync unavailable — the app is offline'
+      : vm.comOffline
+        ? `Force-sync unavailable — origin device ${vm.pinnedDeviceName || 'is'} is offline`
+        : vm.comUnclaimed
+          ? 'Force-sync unavailable — no source device has claimed this sync yet'
+          : '';
+    const forceBtn = el('button', {
+      class: 'btn btn--ghost calday-status-force', type: 'button',
+      disabled: vm.state === 'offline' || comBlocked || busy,
+      title: busy ? 'Sync in progress…' : (disabledReason || 'Force-sync now'),
+      'aria-label': busy ? 'Sync in progress' : (disabledReason || 'Force-sync now'),
+      onclick: () => {
+        if (busy) return;                          // single-flight guard at the click site
+        if (vm.comRemote) syncPairRemote(raw); else runPairNow(vm.id);
+        // Reflect the run immediately, then refresh counts/last-run when it lands. loadPairs() resolves
+        // after the run-now bridge call completes (runPairNow/syncPairRemote both loadPairs on finish),
+        // so a single deferred refresh repaints the popup with the new lastResult.
+        refreshStatusRows();
+        loadPairs().then(refreshStatusRows);
+      },
+    },
+      busy
+        ? el('span', { class: 'spinner', style: 'width:12px;height:12px;border-width:1.6px' })
+        : el('span', { style: 'display:inline-flex', html: icon('sync', { size: 12, stroke: 1.8 }) }),
+      el('span', { text: busy ? 'Syncing…' : 'Force-sync' }));
+    row.append(el('div', { class: 'calday-status-act' }, forceBtn));
+    return row;
+  }
+
+  // Paint the popup rows into `container` from the CURRENT live pairs snapshot. Active pairs only
+  // (paused/disabled are a config concern, not a run-state concern). Falls back to honest empty /
+  // non-bridge messages. Used for both the initial body and the in-place refresh.
+  function fillStatusBody(container) {
+    if (!Bridge.available) {
+      container.replaceChildren(el('p', { class: 'calday-empty', text: 'Sync status is available in the desktop app.' }));
+      return;
+    }
+    const raws = (live.pairs || []).filter((p) => p && p.state === 'active');
+    if (!raws.length) {
+      container.replaceChildren(el('p', { class: 'calday-empty', text: 'No active sync pairs. Open the gear to add or resume a pair.' }));
+      return;
+    }
+    const children = [el('p', { class: 'calday-hint', style: 'padding:0 0 var(--s-2)', text: 'Read-only overview. Use the gear to add, edit or pause pairs.' })];
+    raws.forEach((raw) => children.push(statusPairRow(pairViewModel(raw), raw)));
+    container.replaceChildren(...children);
+  }
+
+  // Re-render the popup body in place (after a Force-sync starts/completes) without reopening it.
+  function refreshStatusRows() {
+    if (statusPopup && statusPopup.bodyEl) fillStatusBody(statusPopup.bodyEl);
+  }
+
+  function openStatusPopup() {
+    const body = el('div', { class: 'calday-status' });
+    fillStatusBody(body);
+    const modal = openModal({ title: 'Sync status', body, onClose: () => { statusPopup = null; } });
+    // Keep a handle to the rendered body node so refreshStatusRows can repaint it in place.
+    statusPopup = { modal, bodyEl: body };
+  }
+
   // ======== registry ========
+  // IA: this day/week view IS the "Calendar" sidebar entry now — it owns the nav: block (and the
+  // sidebar status dot). The pairs/accounts CONFIGURATION screen ('calendar') degrades to a sub-route
+  // reached from the gear in this view's header (parent:'calendar-day', no nav of its own). Clicking
+  // "Calendar" in the sidebar lands here (consume + trigger), config lives behind the gear.
   registry.register('calendar-day', {
     render: renderCalendarDay,
     soft: true,             // participa en rerenderInPlace (repaints sin animación de entrada)
-    parent: 'calendar',     // sub-ruta de Calendar: el sidebar resalta "Calendar" mientras está
-                            // abierta (registry.activeNavId), sin entrada de nav propia
+    nav: { label: 'Calendar', icon: 'calendar', order: 2, section: 'modules' },
+    statusDot: () => ctx.calendarStatusDot(),
     // header opcional: el shell pinta #vhead desde def.header(). Esta vista ya trae su PROPIO
     // header in-view (.calday-head, fiel al mock: Day/Week, ‹Today›, leyenda, +New). El título
-    // cae al label de nav del parent "Calendar"; la fecha viaja como meta en #vhead, FORMATEADA
+    // viaja desde el nav label "Calendar"; la fecha viaja como meta en #vhead, FORMATEADA
     // ("Wed, June 13") igual que el banner in-view — nunca la ISO cruda.
     header: () => ({ title: 'Calendar', meta: formatDayLabel(calDay.date) }),
   });

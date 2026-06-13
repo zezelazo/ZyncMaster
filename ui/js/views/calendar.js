@@ -288,14 +288,16 @@ export function registerCalendarViews(ctx) {
   function renderCalendar(root) {
     const addPairBtn = el('button', { class: 'btn btn--ghost', style: 'height:28px;padding:0 8px', onclick: () => navigate('add-pair') },
       iconEl('plus', 12, 2), el('span', { style: 'font-size:12px', text: 'Add pair' }));
-    // Calendar v2 — entry to the unified day/week view (a sub-route of Calendar, no nav entry).
+    // IA: this is the pairs/accounts CONFIGURATION sub-route now, reached from the gear in the
+    // day/week view. "Day view" routes back to that view (the "Calendar" sidebar destination), and so
+    // does Back — the config screen sits BELOW the day view in the tree, not above it.
     const dayViewBtn = el('button',
       { class: 'btn btn--ghost', style: 'height:28px;padding:0 8px', id: 'openCalendarDay',
         onclick: () => navigate('calendar-day') },
       iconEl('calendar', 12, 2), el('span', { style: 'font-size:12px', text: 'Day view' }));
     // viewHeader takes a single `action`; group both buttons in one container.
     const headerActions = el('div', { style: 'display:flex;gap:8px' }, dayViewBtn, addPairBtn);
-    root.append(viewHeader('Calendar Sync', { onBack: () => navigate('home'), action: headerActions }));
+    root.append(viewHeader('Calendar Sync', { onBack: () => navigate('calendar-day'), action: headerActions }));
     root.append(calendarTabs('pairs'));
 
     // Bridge: render the live pairs snapshot (refreshing in the background). Browser: mock.
@@ -1501,7 +1503,9 @@ export function registerCalendarViews(ctx) {
 
   // ---------------- Calendar · Accounts (internal tab) ----------------
   function renderCalendarSettings(root) {
-    root.append(viewHeader('Calendar', { onBack: () => navigate('home') }));
+    // Back returns to the day/week view (the "Calendar" sidebar destination), matching the Pairs tab —
+    // both tabs are the config sub-route reached from the gear, which sits below the day view.
+    root.append(viewHeader('Calendar', { onBack: () => navigate('calendar-day') }));
     root.append(calendarTabs('accounts'));
 
     if (!Bridge.desktopApp) {
@@ -1875,10 +1879,14 @@ export function registerCalendarViews(ctx) {
   }
 
   // ======== registry ========
+  // IA: the sidebar "Calendar" entry now opens the day/week view (registered in calendar-day.js with
+  // the nav: block). This pairs/accounts CONFIGURATION screen degrades to a sub-route of that view,
+  // reached from the gear in the calendar header — it has NO nav of its own. activeNavId walks
+  // 'calendar' -> parent 'calendar-day' so the sidebar still highlights "Calendar" while config is
+  // open, and add-pair/add-calendar/calendar-settings (parent:'calendar') chain up to it transitively.
   registry.register('calendar', {
     render: renderCalendar, soft: true,
-    nav: { label: 'Calendar', icon: 'calendar', order: 2, section: 'modules' },
-    statusDot: () => ctx.calendarStatusDot(),
+    parent: 'calendar-day',
   });
   registry.register('add-pair', { render: renderAddPair, parent: 'calendar' });
   registry.register('add-calendar', { render: renderAddCalendar, parent: 'calendar' });

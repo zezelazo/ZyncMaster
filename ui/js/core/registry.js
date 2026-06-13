@@ -33,12 +33,19 @@ export function createRegistry() {
     get(id) { return views.get(id) || null; },
     has(id) { return views.has(id); },
     ids() { return [...views.keys()]; },
-    // La entrada del sidebar que debe marcarse activa para la vista `viewId`.
+    // La entrada del sidebar que debe marcarse activa para la vista `viewId`. Sube por la cadena de
+    // `parent` hasta el ANCESTRO más cercano con `nav` (no solo un nivel): así una sub-ruta cuyo
+    // padre es a su vez una sub-ruta sin nav —p. ej. add-pair -> calendar (sin nav) -> calendar-day
+    // (con nav)— resuelve igualmente a la entrada del sidebar. Guarda contra ciclos con un set visto.
     activeNavId(viewId) {
-      const v = views.get(viewId);
-      if (!v) return null;
-      if (v.nav) return v.id;
-      return v.parent && views.has(v.parent) ? v.parent : null;
+      const seen = new Set();
+      let v = views.get(viewId);
+      while (v && !seen.has(v.id)) {
+        if (v.nav) return v.id;
+        seen.add(v.id);
+        v = v.parent ? views.get(v.parent) : null;
+      }
+      return null;
     },
     navItems() {
       return [...views.values()]

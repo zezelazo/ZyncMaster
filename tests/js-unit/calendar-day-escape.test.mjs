@@ -6,10 +6,14 @@
 // register their Escape handlers in the CAPTURE phase and call e.preventDefault() WITHOUT
 // stopPropagation(). While such an overlay was open over the calendar-day view, a single Escape
 // fired BOTH handlers: the overlay closed AND the calendar simultaneously closed its detail panel
-// or navigated back — an unintended two-action dismiss for one keypress.
+// — an unintended two-action dismiss for one keypress.
 //
 // The fix adds `if (e.defaultPrevented) return;` so an Escape already consumed by an overlay's
-// capture handler never reaches the calendar's panel-close / goBack branches.
+// capture handler never reaches the calendar's panel-close branch.
+//
+// IA redesign (fix #7): this view is now the TOP-LEVEL "Calendar" sidebar destination, so a bare
+// Escape with no open panel is a NO-OP — there is nothing above it to navigate "back" to. Escape
+// still closes an open detail panel first. The tests below freeze exactly that contract.
 //
 // This is a real integration test of the SHIPPED handler: it imports the actual view module under
 // a minimal EventTarget-based DOM shim and dispatches genuine capture→bubble Escape events. No DOM
@@ -99,20 +103,22 @@ test('Escape consumed by an open overlay does NOT also close the panel or naviga
   doc.dispatchEvent(new FakeKeyboardEvent('keydown', { key: 'Escape' }));
 
   // The overlay already handled it (defaultPrevented true) → the calendar handler must bail:
-  // no navigate (goBack) and no rerender (panel close) triggered by THIS keypress.
-  assert.deepEqual(calls.navigate, [], 'goBack must not run for an overlay-consumed Escape');
+  // no navigate and no rerender (panel close) triggered by THIS keypress.
+  assert.deepEqual(calls.navigate, [], 'navigation must not run for an overlay-consumed Escape');
   assert.equal(calls.rerenders, 0, 'panel-close rerender must not run for an overlay-consumed Escape');
 });
 
-test('Escape with NO overlay still navigates back from the calendar-day view (handler not over-suppressed)', async () => {
+test('Escape with NO overlay and no open panel is a no-op (top-level view: nothing to go back to)', async () => {
   const { ctx, calls } = makeCtx();
   const register = await loadView();
   register(ctx);
 
-  // No overlay/capture handler this time: a plain Escape with no open panel routes back.
+  // No overlay/capture handler this time: a plain Escape with no open panel does nothing — this is
+  // the top-level "Calendar" destination now, so Escape never navigates the user away from it.
   globalThis.document.dispatchEvent(new FakeKeyboardEvent('keydown', { key: 'Escape' }));
 
-  assert.deepEqual(calls.navigate, ['calendar'], 'a bare Escape must goBack to the parent nav');
+  assert.deepEqual(calls.navigate, [], 'a bare Escape on the top-level calendar view must not navigate');
+  assert.equal(calls.rerenders, 0, 'a bare Escape with no open panel must not rerender');
 });
 
 test('Escape on a DIFFERENT view is ignored (the handler never leaks onto other screens)', async () => {

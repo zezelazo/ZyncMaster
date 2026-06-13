@@ -46,6 +46,26 @@ test('parent maps sub-routes to a sidebar entry', () => {
   assert.equal(r.activeNavId('missing'), null);
 });
 
+test('activeNavId walks the parent CHAIN to the nearest nav ancestor', () => {
+  // IA redesign (fix #7): the day view owns the "Calendar" nav; the pairs/accounts config screen
+  // ('calendar') is a no-nav sub-route of it; add-pair is a sub-route of THAT. A two-hop chain
+  // (add-pair -> calendar -> calendar-day) must still resolve to the calendar-day sidebar entry.
+  const r = createRegistry();
+  r.register('calendar-day', { render: noop, nav: { label: 'Calendar', icon: 'calendar', order: 2, section: 'modules' } });
+  r.register('calendar', { render: noop, parent: 'calendar-day' });        // no nav of its own
+  r.register('add-pair', { render: noop, parent: 'calendar' });
+  assert.equal(r.activeNavId('calendar-day'), 'calendar-day');
+  assert.equal(r.activeNavId('calendar'), 'calendar-day');                 // one hop up, skips no-nav node
+  assert.equal(r.activeNavId('add-pair'), 'calendar-day');                 // two hops up
+});
+
+test('activeNavId terminates on a parent cycle without looping', () => {
+  const r = createRegistry();
+  r.register('a', { render: noop, parent: 'b' });
+  r.register('b', { render: noop, parent: 'a' });   // neither has a nav; mutual parents
+  assert.equal(r.activeNavId('a'), null);
+});
+
 test('navItems: only nav entries, sorted by order, hidden() respected', () => {
   const r = createRegistry();
   r.register('settings', { render: noop, nav: { label: 'Settings', icon: 'settings', order: 100, section: 'system' } });
