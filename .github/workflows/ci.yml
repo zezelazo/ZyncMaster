@@ -57,10 +57,14 @@ jobs:
           node-version: '22'
 
       - name: Syntax check the UI scripts
+        # Check every UI script, not just a hand-picked few. The bare ui/js/*.js modules plus the
+        # whole ui/js/views/ directory are all covered so a syntax error anywhere in the panel fails
+        # CI. `set -e` (default) plus a loop means the first bad file aborts the step.
         run: |
-          node --check ui/js/app.js
-          node --check ui/js/web-transport.js
-          node --check ui/js/calendar-day.js
+          for f in ui/js/*.js ui/js/views/*.js; do
+            echo "node --check $f"
+            node --check "$f"
+          done
 
       - name: Run js-unit tests
         run: node --test tests/js-unit/*.mjs

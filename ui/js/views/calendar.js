@@ -3,6 +3,7 @@
 // renderCalendarSettings reubicada dentro del módulo, spec §4). Extraído de app.js.
 
 import { registerPaletteSource } from '../palette.js';
+import { pairsRenderState } from '../pairs-render-state.js';
 
 export function registerCalendarViews(ctx) {
   const {
@@ -303,20 +304,27 @@ export function registerCalendarViews(ctx) {
       : PAIRS;
 
     const list = el('div', { class: 'pair-list' });
-    // Honest three-state empty rendering (diagnosis §1.2, fix #3). Only when there is nothing to
-    // show do we pick between the three states; when there ARE pairs we render them (a transient
-    // refresh failure must not blank a working screen). The states are mutually exclusive:
-    //   load-FAILED   — the listPairs fetch threw (401/expired/network): show an honest, actionable
-    //                   message + Retry, NOT the lying "No sync pairs yet".
-    //   loaded-empty  — the server returned 200 with an empty array: genuinely no pairs yet.
-    //   loading       — no result yet (and no error): the fetch is still in flight.
-    if (Bridge.available && pairs.length === 0) {
-      if (live.pairsError) {
-        list.append(pairsLoadErrorCard());
-      } else {
-        list.append(el('div', { class: 'glass glass--card', style: 'padding:18px;text-align:center;color:var(--ink-3)' },
-          el('div', { text: live.loadedPairs ? 'No sync pairs yet.' : 'Loading sync pairs…' })));
-      }
+    // Honest three-state empty rendering (diagnosis §1.2, fix #3). The decision lives in the pure,
+    // DOM-free pairsRenderState helper (unit-tested in tests/js-unit/pairs-render-state.test.mjs);
+    // here we only map its token to DOM. Only when there is nothing to show do we pick between the
+    // three states; when there ARE pairs we render them (a transient refresh failure must not blank
+    // a working screen). The states are mutually exclusive:
+    //   'failed'   — the listPairs fetch threw (401/expired/network): show an honest, actionable
+    //                message + Retry, NOT the lying "No sync pairs yet".
+    //   'empty'    — the server returned 200 with an empty array: genuinely no pairs yet.
+    //   'loading'  — no result yet (and no error): the fetch is still in flight.
+    //   'list'     — render the pairs (bridge unavailable in browser mock also resolves here).
+    const renderState = pairsRenderState({
+      available: Bridge.available,
+      pairCount: pairs.length,
+      pairsError: live.pairsError,
+      loadedPairs: live.loadedPairs,
+    });
+    if (renderState === 'failed') {
+      list.append(pairsLoadErrorCard());
+    } else if (renderState === 'empty' || renderState === 'loading') {
+      list.append(el('div', { class: 'glass glass--card', style: 'padding:18px;text-align:center;color:var(--ink-3)' },
+        el('div', { text: renderState === 'empty' ? 'No sync pairs yet.' : 'Loading sync pairs…' })));
     } else {
       pairs.forEach((p) => list.append(pairAccordion(p)));
     }
@@ -337,16 +345,16 @@ export function registerCalendarViews(ctx) {
   // the genuine-empty message. While the retry is in flight the button is disabled to single-flight.
   function pairsLoadErrorCard() {
     const retryBtn = el('button', { class: 'btn btn--primary', type: 'button' },
-      iconEl('sync', 13, 1.8), el('span', { text: 'Reintentar' }));
+      iconEl('sync', 13, 1.8), el('span', { text: 'Retry' }));
     retryBtn.addEventListener('click', () => {
       if (live.loadingPairs) return;             // single-flight: ignore stacked clicks
       retryBtn.disabled = true;
-      const span = retryBtn.querySelector('span'); if (span) span.textContent = 'Cargando…';
+      const span = retryBtn.querySelector('span'); if (span) span.textContent = 'Loading…';
       loadPairs().then(() => { if (state.view === 'calendar') rerenderInPlace(); });
     });
     return el('div', { class: 'glass glass--card', style: 'padding:18px;text-align:center;color:var(--ink-3)' },
-      el('div', { style: 'color:var(--ink-1);font-weight:600;margin-bottom:4px', text: 'No pudimos cargar tus pares' }),
-      el('div', { style: 'margin-bottom:12px', text: 'Revisa tu conexión o vuelve a iniciar sesión, y reintenta.' }),
+      el('div', { style: 'color:var(--ink-1);font-weight:600;margin-bottom:4px', text: "We couldn't load your pairs" }),
+      el('div', { style: 'margin-bottom:12px', text: 'Check your connection or sign in again, then retry.' }),
       el('div', { style: 'display:flex;justify-content:center' }, retryBtn));
   }
 
