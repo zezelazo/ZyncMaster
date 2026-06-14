@@ -91,18 +91,19 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-// Helper de navegación REAL (post-P2): el sidebar se construye desde registry.navItems() y la
-// vista calendar-day es sub-ruta de Calendar (sin entrada de nav propia). El boot llega al
-// home tras el silent sign-in (getIdentityState mockeado como signed-in en REPLIES); de ahí se
-// abre Calendar por el sidebar (igual que shell.spec.js: sidebar.getByRole('button',{name:
-// 'Calendar'})) y luego la acción "Day view" del header de la vista Calendar (botón añadido en
-// 6.5, id #openCalendarDay).
+// Helper de navegación REAL (post-rediseño de IA): el sidebar se construye desde
+// registry.navItems() y la entrada "Calendar" ahora ATERRIZA DIRECTO en la vista día/semana
+// (calendar-day registra el bloque nav). La pantalla de configuración pares/accounts vive
+// DEBAJO en el árbol, alcanzable por el engranaje. El boot llega al home tras el silent
+// sign-in (getIdentityState mockeado como signed-in en REPLIES); de ahí se abre Calendar por
+// el sidebar (igual que shell.spec.js: sidebar.getByRole('button',{name:'Calendar'})) y eso
+// ya es la vista día — no hay paso intermedio "Day view".
 async function gotoDayView(page) {
   await page.goto('https://app.test/index.html');
   // Esperar a que el shell pinte el sidebar (no el gate de sign-in).
   await page.locator('#sidebar').getByRole('button', { name: 'Calendar' }).click();
-  // Acción "Day view" dentro de la vista Calendar (selector estable por id, no por texto).
-  await page.locator('#openCalendarDay').click();
+  // El click en "Calendar" aterriza directamente en la vista día (su header propio .calday-head).
+  await expect(page.locator('.calday-head')).toBeVisible();
 }
 
 test('day view renders the unified grid with the COM degradation badge', async ({ page }) => {
@@ -115,7 +116,7 @@ test('day view renders the unified grid with the COM degradation badge', async (
 });
 
 test('replicate panel requires a typed mask title before creating', async ({ page }) => {
-  // gotoDayView (definido en el harness de 6.7): sidebar → Calendar → #openCalendarDay.
+  // gotoDayView: sidebar → Calendar aterriza directo en la vista día.
   await gotoDayView(page);
   await page.locator('.calday-ev').click();
   await expect(page.getByRole('heading', { name: 'Replicate event' })).toBeVisible();
@@ -147,7 +148,7 @@ test('replicate panel requires a typed mask title before creating', async ({ pag
 });
 
 test('prefix rules panel lists the rules from the bridge', async ({ page }) => {
-  await gotoDayView(page);  // sidebar → Calendar → #openCalendarDay (harness de 6.7)
+  await gotoDayView(page);  // sidebar → Calendar aterriza directo en la vista día
   await page.locator('.calday-ev').click();
   await page.locator('#calDayManageRules').click();
   await expect(page.getByRole('heading', { name: 'Prefix rules' })).toBeVisible();
