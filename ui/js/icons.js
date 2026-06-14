@@ -89,31 +89,29 @@ let logoSeq = 0;
 export function logoSvg({ size = 18, mono = false } = {}) {
   if (mono) {
     return (
-      `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" aria-hidden="true">` +
-      '<rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="currentColor"/>' +
-      '<path d="M6.5 11.5 A 5.5 5.5 0 0 1 16.5 9.2" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" fill="none"/>' +
-      '<path d="M15.2 7.6 L17 9.2 L15.6 11" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' +
-      '<path d="M17.5 12.5 A 5.5 5.5 0 0 1 7.5 14.8" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" fill="none"/>' +
-      '<path d="M8.8 16.4 L7 14.8 L8.4 13" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' +
+      `<svg viewBox="0 0 64 64" width="${size}" height="${size}" fill="none" aria-hidden="true">` +
+      '<path d="M22 21 H42 L24 43 H44" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' +
+      '<circle cx="22" cy="21" r="5" fill="currentColor"/>' +
+      '<circle cx="44" cy="43" r="5" fill="currentColor"/>' +
       '</svg>'
     );
   }
-  const g1 = `sm-g1-${logoSeq}`;
-  const g2 = `sm-g2-${logoSeq}`;
+  const g1 = `sm-bg-${logoSeq}`;
+  const g2 = `sm-sh-${logoSeq}`;
   logoSeq += 1;
   return (
-    `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" aria-hidden="true">` +
+    `<svg viewBox="0 0 64 64" width="${size}" height="${size}" fill="none" aria-hidden="true">` +
     '<defs>' +
-    `<linearGradient id="${g1}" x1="2" y1="4" x2="22" y2="20" gradientUnits="userSpaceOnUse">` +
-    '<stop offset="0" stop-color="#7aa6ff"/><stop offset="1" stop-color="#3766d8"/></linearGradient>' +
-    `<linearGradient id="${g2}" x1="22" y1="4" x2="2" y2="22" gradientUnits="userSpaceOnUse">` +
-    '<stop offset="0" stop-color="#ee9476"/><stop offset="1" stop-color="#c95a38"/></linearGradient>' +
+    `<linearGradient id="${g1}" x1="6" y1="5" x2="58" y2="60" gradientUnits="userSpaceOnUse">` +
+    '<stop offset="0" stop-color="#3ee0c9"/><stop offset=".5" stop-color="#26b6f0"/><stop offset="1" stop-color="#2f6fe6"/></linearGradient>' +
+    `<linearGradient id="${g2}" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">` +
+    '<stop offset="0" stop-color="#ffffff" stop-opacity=".18"/><stop offset=".5" stop-color="#ffffff" stop-opacity="0"/></linearGradient>' +
     '</defs>' +
-    '<rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.10)" stroke-width="0.8"/>' +
-    `<path d="M6.5 11.5 A 5.5 5.5 0 0 1 16.5 9.2" stroke="url(#${g1})" stroke-width="2.1" stroke-linecap="round" fill="none"/>` +
-    `<path d="M15.2 7.6 L17 9.2 L15.6 11" stroke="url(#${g1})" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none"/>` +
-    `<path d="M17.5 12.5 A 5.5 5.5 0 0 1 7.5 14.8" stroke="url(#${g2})" stroke-width="2.1" stroke-linecap="round" fill="none"/>` +
-    `<path d="M8.8 16.4 L7 14.8 L8.4 13" stroke="url(#${g2})" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none"/>` +
+    `<rect x="4" y="4" width="56" height="56" rx="17" fill="url(#${g1})"/>` +
+    `<rect x="4" y="4" width="56" height="56" rx="17" fill="url(#${g2})"/>` +
+    '<path d="M22 21 H42 L24 43 H44" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' +
+    '<circle cx="22" cy="21" r="5" fill="#eafcff" stroke="#0e2c4a" stroke-opacity=".22" stroke-width="0.9"/>' +
+    '<circle cx="44" cy="43" r="5" fill="#f0996f" stroke="#5a2a18" stroke-opacity=".22" stroke-width="0.9"/>' +
     '</svg>'
   );
 }
