@@ -91,7 +91,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-// Helper de navegación REAL (post-rediseño de IA): el sidebar se construye desde
+// Helper de navegación REAL (tras el rediseño de info-arch): el sidebar se construye desde
 // registry.navItems() y la entrada "Calendar" ahora ATERRIZA DIRECTO en la vista día/semana
 // (calendar-day registra el bloque nav). La pantalla de configuración pares/accounts vive
 // DEBAJO en el árbol, alcanzable por el engranaje. El boot llega al home tras el silent

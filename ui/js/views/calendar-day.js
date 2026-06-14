@@ -644,11 +644,12 @@ export function registerCalendarDayView(ctx) {
     const lastRun = raw && raw.lastRunUtc
       ? new Date(raw.lastRunUtc).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
       : 'never';
-    // Next-run ETA: offline / mid-sync have no meaningful countdown (em dash), otherwise mm:ss to the
-    // next scheduled tick — same fmtMMSS the pairs card uses.
+    // Next-run ETA: mid-sync has no meaningful countdown (em dash), otherwise mm:ss to the next
+    // scheduled tick — same fmtMMSS the pairs card uses. fillStatusBody only feeds ACTIVE pairs here,
+    // so pairViewModel.state is always 'ok'; the dot only toggles between 'sync' (busy) and 'ok'.
     const busy = !!vm.inFlight;
-    const nextStr = (vm.state === 'offline' || busy) ? '—' : fmtMMSS(vm.nextSync);
-    const dotState = busy ? 'sync' : vm.state === 'error' ? 'error' : vm.state === 'offline' ? 'offline' : 'ok';
+    const nextStr = busy ? '—' : fmtMMSS(vm.nextSync);
+    const dotState = busy ? 'sync' : 'ok';
 
     const row = el('div', { class: 'calday-status-row glass glass--card' });
 
@@ -674,16 +675,14 @@ export function registerCalendarDayView(ctx) {
     // while a run is in flight (single-flight) or when the origin device is offline / unclaimed, with
     // the same honest reasons the pairs card surfaces.
     const comBlocked = vm.comOffline || vm.comUnclaimed;
-    const disabledReason = vm.state === 'offline'
-      ? 'Force-sync unavailable — the app is offline'
-      : vm.comOffline
-        ? `Force-sync unavailable — origin device ${vm.pinnedDeviceName || 'is'} is offline`
-        : vm.comUnclaimed
-          ? 'Force-sync unavailable — no source device has claimed this sync yet'
-          : '';
+    const disabledReason = vm.comOffline
+      ? `Force-sync unavailable — origin device ${vm.pinnedDeviceName || 'is'} is offline`
+      : vm.comUnclaimed
+        ? 'Force-sync unavailable — no source device has claimed this sync yet'
+        : '';
     const forceBtn = el('button', {
       class: 'btn btn--ghost calday-status-force', type: 'button',
-      disabled: vm.state === 'offline' || comBlocked || busy,
+      disabled: comBlocked || busy,
       title: busy ? 'Sync in progress…' : (disabledReason || 'Force-sync now'),
       'aria-label': busy ? 'Sync in progress' : (disabledReason || 'Force-sync now'),
       onclick: () => {
@@ -736,7 +735,7 @@ export function registerCalendarDayView(ctx) {
   }
 
   // ======== registry ========
-  // IA: this day/week view IS the "Calendar" sidebar entry now — it owns the nav: block (and the
+  // Info-arch: this day/week view IS the "Calendar" sidebar entry now — it owns the nav: block (and the
   // sidebar status dot). The pairs/accounts CONFIGURATION screen ('calendar') degrades to a sub-route
   // reached from the gear in this view's header (parent:'calendar-day', no nav of its own). Clicking
   // "Calendar" in the sidebar lands here (consume + trigger), config lives behind the gear.

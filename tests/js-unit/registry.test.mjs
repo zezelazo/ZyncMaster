@@ -47,7 +47,7 @@ test('parent maps sub-routes to a sidebar entry', () => {
 });
 
 test('activeNavId walks the parent CHAIN to the nearest nav ancestor', () => {
-  // IA redesign (fix #7): the day view owns the "Calendar" nav; the pairs/accounts config screen
+  // Info-arch redesign (fix #7): the day view owns the "Calendar" nav; the pairs/accounts config screen
   // ('calendar') is a no-nav sub-route of it; add-pair is a sub-route of THAT. A two-hop chain
   // (add-pair -> calendar -> calendar-day) must still resolve to the calendar-day sidebar entry.
   const r = createRegistry();

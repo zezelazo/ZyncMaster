@@ -11,7 +11,7 @@
 // The fix adds `if (e.defaultPrevented) return;` so an Escape already consumed by an overlay's
 // capture handler never reaches the calendar's panel-close branch.
 //
-// IA redesign (fix #7): this view is now the TOP-LEVEL "Calendar" sidebar destination, so a bare
+// Info-arch redesign (fix #7): this view is now the TOP-LEVEL "Calendar" sidebar destination, so a bare
 // Escape with no open panel is a NO-OP — there is nothing above it to navigate "back" to. Escape
 // still closes an open detail panel first. The tests below freeze exactly that contract.
 //
