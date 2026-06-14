@@ -474,8 +474,15 @@ function onPairRunPushed(payload) {
   if (plan.kind === 'ignore') return;
   if (plan.kind === 'reload') {
     // We don't have this pair locally (newly created elsewhere, or the list never loaded): a full
-    // reload is the only correct reaction. Repaint when it lands if a calendar screen is open.
-    loadPairs().then(() => { if (state.view === 'calendar' || state.view === 'calendar-day') rerenderInPlace(); });
+    // reload is the only correct reaction. plan.notifyStatus is true here (as it is for 'patch'):
+    // notify the sync-state subscribers FIRST so the open read-only Status popup (which lives in
+    // document.body, outside #view, and only repaints from notifySyncState -> refreshStatusRows)
+    // reflects the newly-relevant pair's run; then repaint the in-place view if a calendar screen is
+    // the visible one. Mirrors onPairsChangedPushed.
+    loadPairs().then(() => {
+      if (plan.notifyStatus) notifySyncState();
+      if (state.view === 'calendar' || state.view === 'calendar-day') rerenderInPlace();
+    });
     return;
   }
   // kind === 'patch': mutate the existing row (not replace the array) so other references stay valid;
@@ -489,7 +496,8 @@ function onPairRunPushed(payload) {
   announce('A sync ran on another device.');
   // notifySyncState repaints the Status popup (it subscribes via subscribeSyncState) regardless of the
   // active view; the in-place repaint covers the Calendar Sync list when it is the visible screen.
-  notifySyncState();
+  // plan.notifyStatus is true for a patch (same as for reload) — both change what the popup must show.
+  if (plan.notifyStatus) notifySyncState();
   if (state.view === 'calendar' || state.view === 'calendar-day') rerenderInPlace();
 }
 

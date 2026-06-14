@@ -26,6 +26,11 @@ test('ignore: payload without a pairId', () => {
   assert.equal(planPairRun({ lastResult: { created: 5 } }, PAIRS()).kind, 'ignore');
 });
 
+test('ignore: a malformed frame does NOT signal a Status-popup repaint', () => {
+  assert.equal(planPairRun(null, PAIRS()).notifyStatus, false);
+  assert.equal(planPairRun({ lastResult: { created: 5 } }, PAIRS()).notifyStatus, false);
+});
+
 // ---- reload: the pair is not in this snapshot ---------------------------------------------
 
 test('reload: a run for a pair we do not have (created elsewhere)', () => {
@@ -36,6 +41,15 @@ test('reload: a run for a pair we do not have (created elsewhere)', () => {
 test('reload: pairs snapshot is null (list never loaded)', () => {
   const plan = planPairRun({ pairId: 'p1', lastResult: { created: 3 } }, null);
   assert.equal(plan.kind, 'reload');
+});
+
+// Regression for the SyncLive-t2 review: the reload branch previously omitted notifySyncState(), so a
+// run for a NEWLY-relevant pair never reached an already-open read-only Status popup (it lives in
+// document.body, outside #view, and only repaints from a sync-state notification — never from a view
+// rerender). The plan must carry notifyStatus:true so app.js's reload branch calls notifySyncState().
+test('reload: signals a Status-popup repaint (notifyStatus true) — newly-relevant pair reaches an open popup', () => {
+  assert.equal(planPairRun({ pairId: 'p-new', lastResult: { created: 3 } }, PAIRS()).notifyStatus, true);
+  assert.equal(planPairRun({ pairId: 'p1', lastResult: { created: 3 } }, null).notifyStatus, true);
 });
 
 // ---- patch: an existing pair's row gets the new last-run + result --------------------------
@@ -69,6 +83,11 @@ test('patch: an absent lastRunUtc yields null so the caller keeps the existing t
 test('patch: an empty-string lastRunUtc also yields null (must not wipe the timestamp)', () => {
   const plan = planPairRun({ pairId: 'p1', lastResult: { created: 1 }, lastRunUtc: '' }, PAIRS());
   assert.equal(plan.lastRunUtc, null);
+});
+
+test('patch: also signals a Status-popup repaint (notifyStatus true) — same intent as reload', () => {
+  const plan = planPairRun({ pairId: 'p1', lastResult: { created: 4 } }, PAIRS());
+  assert.equal(plan.notifyStatus, true);
 });
 
 // ---- de-dupe contract: the origin device is excluded server-side, so a frame is always a -----
