@@ -315,10 +315,12 @@ if (mql && mql.addEventListener) {
 }
 
 // ---------------- App state ----------------
-// Product version shown in About + the Settings "About" row. Hardcoded because the web UI has
-// no channel to read the host's .NET assembly version.
-// Mantener sincronizado con <Version> en src/ZyncMaster.App/ZyncMaster.App.csproj — ÚNICA otra fuente.
-const VERSION = '0.3.8';
+// Product version shown in About + the Settings "About" row. This is the fallback used by the
+// web panel (no bridge). The desktop App resolves the REAL value from the host assembly via
+// getAppVersion at boot and stores it in live.appVersion; all About renders read live.appVersion
+// first and fall back to VERSION when it is not yet set.
+// Mantener sincronizado con <Version> en src/ZyncMaster.App/ZyncMaster.App.csproj.
+const VERSION = '0.4.2';
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -412,6 +414,9 @@ const live = {
   // COM is unavailable (the safer default: COM affordances stay disabled until confirmed).
   capabilities: { outlookCom: false },
   capabilitiesLoaded: false,
+  // Host assembly version resolved via getAppVersion at boot (desktop App only). Falls back to
+  // the hardcoded VERSION constant until the bridge reply lands (or when running as web panel).
+  appVersion: '',
   // ---- Per-pair sync runtime (client-only, this session) ----
   // syncing      — Set of pair ids with a sync in flight. Single-flight: a click while the id is
   //                present is ignored, so the user cannot stack dozens of concurrent runs.
@@ -1847,6 +1852,12 @@ async function boot() {
     Bridge.call('getCapabilities')
       .then((c) => { if (c) live.capabilities = { outlookCom: !!c.outlookCom }; live.capabilitiesLoaded = true; rerenderInPlace(); })
       .catch(() => { live.capabilitiesLoaded = true; });
+
+    // Resolve the host assembly version so the About screen never drifts from the running binary.
+    // Fire-and-forget: a failure leaves live.appVersion '' and the render falls back to VERSION.
+    Bridge.call('getAppVersion')
+      .then((r) => { if (r && r.version) { live.appVersion = r.version; rerenderInPlace(); } })
+      .catch(() => {});
 
     // Desktop App: warm up the server FIRST. The Azure F1 free tier cold-starts, so before the
     // identity gate (which talks to the server) we ping /health and show "waking up" feedback.

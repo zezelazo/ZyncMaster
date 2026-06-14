@@ -496,6 +496,15 @@ public class UiBridgeTests
             if (Throw != null) await Throw();
             SetPastePanelOpacityArg = opacity;
         }
+
+        public string AppVersionToReturn = "0.0.0-test";
+        public int GetAppVersionCalls;
+        public async Task<string> GetAppVersionAsync(CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            GetAppVersionCalls++;
+            return AppVersionToReturn;
+        }
     }
 
     private sealed class FakeWindowControl : IWindowControl
@@ -1546,5 +1555,38 @@ public class UiBridgeTests
         using var doc = JsonDocument.Parse(transport.Sent[0]);
         doc.RootElement.GetProperty("ok").GetBoolean().Should().BeFalse();
         doc.RootElement.GetProperty("error").GetString().Should().Be("boom-day");
+    }
+
+    // ---------------- getAppVersion bridge action ----------------
+
+    [Fact]
+    public void GetAppVersion_calls_engine_and_returns_version_in_payload()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { AppVersionToReturn = "1.2.3" };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("getAppVersion", "v1"));
+
+        engine.GetAppVersionCalls.Should().Be(1);
+        var reply = LastReply(transport);
+        reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("version").GetString().Should().Be("1.2.3");
+    }
+
+    [Fact]
+    public void GetAppVersion_empty_string_from_engine_still_replies_ok()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { AppVersionToReturn = "" };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("getAppVersion", "v2"));
+
+        LastReply(transport).GetProperty("ok").GetBoolean().Should().BeTrue();
+        var payload = JsonSerializer.Deserialize<JsonElement>(
+            LastReply(transport).GetProperty("payload").GetString()!);
+        payload.GetProperty("version").GetString().Should().Be("");
     }
 }

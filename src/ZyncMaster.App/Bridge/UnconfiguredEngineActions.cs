@@ -259,6 +259,21 @@ public sealed class UnconfiguredEngineActions : IEngineActions
         return Task.CompletedTask;
     }
 
+    // Returns the running assembly's informational version. Works even before the engine is
+    // configured — the version is baked into the exe and needs no server or settings.
+    public Task<string> GetAppVersionAsync(CancellationToken ct = default)
+    {
+        var asm = System.Reflection.Assembly.GetEntryAssembly();
+        var infoAttr = asm?.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false);
+        var ver = (infoAttr is { Length: > 0 }
+            ? ((System.Reflection.AssemblyInformationalVersionAttribute)infoAttr[0]).InformationalVersion
+            : asm?.GetName().Version?.ToString(3))
+            ?? "";
+        // Strip any build metadata suffix (+<hash>) that the SDK appends in some configurations.
+        var plus = ver.IndexOf('+');
+        return Task.FromResult(plus >= 0 ? ver[..plus] : ver);
+    }
+
     private static InvalidOperationException NotConfigured()
         => new("Set the server URL in Settings first.");
 }

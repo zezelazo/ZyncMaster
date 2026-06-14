@@ -112,4 +112,17 @@ public class UnconfiguredEngineActionsTests
 
         view.PastePanelOpacity.Should().Be(40);
     }
+
+    [Fact]
+    public async Task GetAppVersion_returns_a_version_string_without_throwing()
+    {
+        // The test runner IS the entry assembly, so the result can be empty or a version — what
+        // matters is that it never throws and always returns a string (not null).
+        var engine = Build();
+
+        var result = await engine.GetAppVersionAsync(CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result.Should().NotContain("+"); // build-metadata suffix must be stripped
+    }
 }

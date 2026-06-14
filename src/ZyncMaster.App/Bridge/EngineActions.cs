@@ -1403,6 +1403,22 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return Task.CompletedTask;
     }
 
+    // Returns the running assembly's informational version string (e.g. "0.4.2"), stripped of any
+    // build-metadata suffix (+<hash>) that the SDK appends in some configurations. Falls back to the
+    // three-part numeric version, then to "" so the UI degrades to its hardcoded constant rather than
+    // showing a blank. No I/O — reads a runtime attribute baked into the exe.
+    public Task<string> GetAppVersionAsync(CancellationToken ct = default)
+    {
+        var asm = System.Reflection.Assembly.GetEntryAssembly();
+        var infoAttr = asm?.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false);
+        var ver = (infoAttr is { Length: > 0 }
+            ? ((System.Reflection.AssemblyInformationalVersionAttribute)infoAttr[0]).InformationalVersion
+            : asm?.GetName().Version?.ToString(3))
+            ?? "";
+        var plus = ver.IndexOf('+');
+        return Task.FromResult(plus >= 0 ? ver[..plus] : ver);
+    }
+
     // internal (not private) so UiBridge can reuse the exact Engine→wire mapping when it pushes a live
     // "clipboard:settings" event to the UI (no duplicate mapping that could drift from this one).
     internal static ClipboardSettingsView ToSettingsView(ClipboardSettings s) => new()

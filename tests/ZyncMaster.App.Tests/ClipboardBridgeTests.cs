@@ -129,6 +129,7 @@ public class ClipboardBridgeTests
         public Task<string> ListPrefixRulesAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<string> SavePrefixRuleAsync(string ruleJson, CancellationToken ct = default) => throw new NotImplementedException();
         public Task DeletePrefixRuleAsync(string ruleId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string> GetAppVersionAsync(CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private static string Message(string action, string? correlationId, string? payload = null)

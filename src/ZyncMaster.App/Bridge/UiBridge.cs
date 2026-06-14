@@ -413,6 +413,14 @@ public sealed class UiBridge
                 await _engine.OpenLicensesAsync(ct);
                 return null;
             }
+            case "getAppVersion":
+            {
+                // Returns the host assembly's informational version (e.g. "0.4.2") so the About screen
+                // never drifts from the running binary. The UI resolves this once at boot and falls back
+                // to its hardcoded VERSION constant when running as a plain browser page (no bridge).
+                var version = await _engine.GetAppVersionAsync(ct);
+                return JsonSerializer.Serialize(new { version }, JsonOptions);
+            }
             // ---------------- Calendar-account connection lifecycle ----------------
             case "connectCalendar":
             {

@@ -207,4 +207,10 @@ public interface IEngineActions
     // window is created. Surfaced in GetClipboardDevicesAsync so the settings slider shows the
     // persisted value.
     Task SetPastePanelOpacityAsync(int opacity, CancellationToken ct = default);
+
+    // Returns the host assembly's informational version string (e.g. "0.4.2"). Read from
+    // Assembly.GetEntryAssembly() so it always matches the running binary — the UI falls back to
+    // its hardcoded VERSION constant when the action is not available (web panel). Synchronous in
+    // practice; the Task wrapper keeps it consistent with every other bridge action.
+    Task<string> GetAppVersionAsync(CancellationToken ct = default);
 }

@@ -216,10 +216,12 @@ export function registerSettingsViews(ctx) {
   }
 
   // aboutSection — the navigable About row (nav-row component, so the chevron is centred and the
-  // version sits to its left).
+  // version sits to its left). live.appVersion is populated by the getAppVersion bridge call at
+  // boot (desktop App) and falls back to the hardcoded VERSION constant (web panel / not yet set).
   function aboutSection() {
+    const displayVersion = live.appVersion || VERSION;
     return el('div', { class: 'glass glass--card config-section' },
-      navRow({ label: 'About Zync Master', sublabel: 'Version, credits, links', value: VERSION, onClick: () => navigate('about') }));
+      navRow({ label: 'About Zync Master', sublabel: 'Version, credits, links', value: displayVersion, onClick: () => navigate('about') }));
   }
 
   // ---------------- Screen: About ----------------
@@ -253,7 +255,7 @@ export function registerSettingsViews(ctx) {
       el('div', { class: 'about-logo', html: logoSvg({ size: 64 }) }),
       el('div', { class: 'about-name', text: 'Zync Master' }),
       // Sourced from the VERSION const — single source in the UI. No build number.
-      el('div', { class: 'about-version num', text: `VERSION ${VERSION} · BETA` }),
+      el('div', { class: 'about-version num', text: `VERSION ${live.appVersion || VERSION} · BETA` }),
       el('div', { class: 'about-tag', text: 'A quiet desktop utility for mirroring calendars across Microsoft, Google and iCloud accounts. Past events are never touched.' }),
       links,
     ));
