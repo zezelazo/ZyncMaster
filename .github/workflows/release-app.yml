@@ -208,7 +208,7 @@ jobs:
 
             ### What's included
             - Tray-resident desktop app for Windows (calendar sync).
-            - Connects to the Zync Master service at `https://zyncmaster.azurewebsites.net`
+            - Connects to the Zync Master service at `https://api.devlabperu.com/zync`
               by default. You connect your calendar accounts from inside the app.
 
             ### Requirements
