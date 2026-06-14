@@ -156,3 +156,92 @@ test('prefix rules panel lists the rules from the bridge', async ({ page }) => {
   // element whose text is exactly the bracketed prefix.
   await expect(page.getByText('[Lunch]', { exact: true })).toBeVisible();
 });
+
+test('the gear opens the pairs/accounts configuration sub-route', async ({ page }) => {
+  await gotoDayView(page);
+  await expect(page.locator('.calday-head')).toBeVisible();
+  await page.locator('#calDayConfig').click();
+  // The gear navigates to the 'calendar' config screen (pairs/accounts): its title is "Calendar
+  // Sync" and it carries the "Day view" button that routes back here. The day/week header is gone.
+  await expect(page.locator('.view-header__title')).toHaveText('Calendar Sync');
+  await expect(page.locator('#openCalendarDay')).toBeVisible();
+  await expect(page.locator('.calday-head')).toHaveCount(0);
+});
+
+// Stuck-spinner regression (CalendarIA-t2, high): a Force-sync from the read-only Status popup must
+// clear its spinner and refresh its counts when the ACTUAL run completes — not on an independent
+// loadPairs() that resolved before the mirror finished. This test installs a STATEFUL bridge: the
+// first listPairs returns the pre-run pair, runPairNow only resolves once the test releases it, and
+// every listPairs AFTER runPairNow returns the post-run counts. So the popup can only show the fresh
+// numbers (and the cleared spinner) if it is driven off the real run lifecycle.
+test('Status popup Force-sync clears the spinner and updates counts when the run completes', async ({ page }) => {
+  await page.addInitScript(() => {
+    const listeners = new Set();
+    let runResolved = false;       // flips true once the run is released
+    let releaseRun = null;         // setTimeout-style callback the page can trigger
+    window.__releaseRun = () => { runResolved = true; if (releaseRun) releaseRun(); };
+
+    const PRE = [{ id: 'p1', name: 'Work → Personal', state: 'active', intervalMin: 10,
+      lastRunUtc: '2026-06-10T09:00:00Z',
+      lastResult: { created: 0, updated: 0, deleted: 0, skipped: 0, failed: 0 },
+      source: { provider: 'MicrosoftGraph', accountRef: 'a@job1.com', calendarIds: ['c1'] },
+      destination: { provider: 'MicrosoftGraph', accountRef: 'b@job2.com', calendarId: 'c2' } }];
+    const POST = [{ ...PRE[0], lastRunUtc: '2026-06-13T12:00:00Z',
+      lastResult: { created: 4, updated: 1, deleted: 0, skipped: 2, failed: 0 } }];
+
+    const baseReplies = window.__replies || {};
+    window.chrome = {
+      webview: {
+        addEventListener: (name, cb) => { if (name === 'message') listeners.add(cb); },
+        removeEventListener: (name, cb) => { listeners.delete(cb); },
+        postMessage: (raw) => {
+          const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (!msg.correlationId) return;
+          const send = (payload) => {
+            const reply = JSON.stringify({ correlationId: msg.correlationId, ok: true, payload, error: null });
+            setTimeout(() => listeners.forEach((cb) => cb({ data: reply })), 5);
+          };
+          if (msg.action === 'listPairs') { send(JSON.stringify(runResolved ? POST : PRE)); return; }
+          if (msg.action === 'runPairNow') {
+            // Hold the run open until the test releases it, mirroring a real multi-second mirror.
+            releaseRun = () => send(JSON.stringify({ created: 4, updated: 1, deleted: 0, skipped: 2 }));
+            if (runResolved) releaseRun();
+            return;
+          }
+          const payload = Object.prototype.hasOwnProperty.call(baseReplies, msg.action)
+            ? baseReplies[msg.action] : null;
+          send(payload);
+        },
+      },
+    };
+  });
+  // Carry REPLIES into the page so the stateful bridge can fall through to them for non-pair actions.
+  await page.addInitScript((replies) => { window.__replies = replies; }, REPLIES);
+
+  await gotoDayView(page);
+  await page.locator('#calDayStatus').click();
+
+  const row = page.locator('.calday-status-row');
+  await expect(row).toHaveCount(1);
+  const force = row.locator('.calday-status-force');
+  await expect(force).toContainText('Force-sync');
+  // Pre-run counts: Synced 0, New 0.
+  await expect(row.locator('.calday-status-stat-val').nth(0)).toHaveText('0');
+  await expect(row.locator('.calday-status-stat-val').nth(1)).toHaveText('0');
+
+  await force.click();
+  // Mid-run: the spinner shows and the button is disabled — the popup reflects the live run state.
+  await expect(force.locator('.spinner')).toBeVisible();
+  await expect(force).toBeDisabled();
+  await expect(force).toContainText('Syncing');
+
+  // Release the run; only the real completion (endPairSync after loadPairs) repaints the popup.
+  await page.evaluate(() => window.__releaseRun());
+
+  await expect(force.locator('.spinner')).toHaveCount(0);
+  await expect(force).toBeEnabled();
+  await expect(force).toContainText('Force-sync');
+  // Fresh counts: Synced 4+1+2 = 7, New = created = 4.
+  await expect(row.locator('.calday-status-stat-val').nth(0)).toHaveText('7');
+  await expect(row.locator('.calday-status-stat-val').nth(1)).toHaveText('4');
+});

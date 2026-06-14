@@ -1262,6 +1262,29 @@ function errorMessage(err) {
   try { return JSON.stringify(err); } catch (_) { return 'Sync failed'; }
 }
 
+// ---- Sync-state observers ----
+// The pairs card repaints itself via `rerenderInPlace()` when state.view === 'calendar'. But other
+// surfaces also reflect per-pair run state and live OUTSIDE the #view DOM that a view rerender
+// touches — most importantly the read-only Status popup in the calendar-day view, whose body is
+// appended to document.body by openModal. A view rerender can never repaint it, and state.view is
+// 'calendar-day' (not 'calendar') while the popup is open, so the card's own rerender guard is a
+// double miss. To keep those surfaces honest we publish every begin/end transition to a list of
+// subscribers; each subscriber repaints itself however it likes, regardless of the active view.
+const syncStateListeners = new Set();
+// subscribeSyncState(fn) — register fn to run after every beginPairSync/endPairSync transition.
+// Returns an unsubscribe function; the caller MUST call it when its surface goes away (e.g. the
+// Status popup unsubscribes on close) so a stale closure never repaints a detached node.
+function subscribeSyncState(fn) {
+  if (typeof fn !== 'function') return () => {};
+  syncStateListeners.add(fn);
+  return () => syncStateListeners.delete(fn);
+}
+function notifySyncState() {
+  // A throwing subscriber must not break the sync lifecycle (begin/end still has to finish), so each
+  // is isolated. Snapshot the set first so a subscriber that unsubscribes mid-notify is safe.
+  for (const fn of [...syncStateListeners]) { try { fn(); } catch (_) { /* isolate */ } }
+}
+
 // Mark a pair's sync as in flight (single-flight) and repaint so the button shows its busy state.
 // Returns false when a run is already in flight for this id (the caller must abort).
 function beginPairSync(id) {
@@ -1270,6 +1293,7 @@ function beginPairSync(id) {
   live.syncing.add(id);
   live.attempts[id] = (live.attempts[id] || 0) + 1;
   if (state.view === 'calendar') rerenderInPlace();
+  notifySyncState();
   return true;
 }
 
@@ -1278,6 +1302,7 @@ function endPairSync(id) {
   if (!id) return;
   live.syncing.delete(id);
   if (state.view === 'calendar') rerenderInPlace();
+  notifySyncState();
 }
 
 function runPairNow(id) {
@@ -1809,7 +1834,7 @@ const ctx = {
   pairViewModel, resolveCalendarLabel, comAvailable, fmtMMSS, COM_SLOW_TIMEOUT_MS,
   loadClipboardDevices, refreshClipboardDevices, persistClipboardSettings, thisClipboardDevice, clipboardActive,
   // sync runtime
-  runPairNow, setPairState, deletePair, syncAllPairs, runSync, syncPairRemote,
+  runPairNow, setPairState, deletePair, syncAllPairs, runSync, syncPairRemote, subscribeSyncState,
   // calendar module (extraído a views/calendar.js)
   openPairs, PAIRS,
   calendarStatusDot: () => calendarDot(live.pairs, live.loadedPairs),

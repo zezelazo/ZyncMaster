@@ -14,7 +14,8 @@ export function registerCalendarDayView(ctx) {
     Bridge, state, navigate, rerenderInPlace, announce, registry,
     // Status popup (read-only) + config gear deps. The popup reuses the SAME pair shapes + run-now
     // bridge actions the pairs screen uses, so a Force-sync here behaves exactly like "Sync now" there.
-    live, openModal, el, iconEl, icon, pairViewModel, runPairNow, syncPairRemote, fmtMMSS, loadPairs,
+    live, openModal, el, iconEl, icon, pairViewModel, runPairNow, syncPairRemote, fmtMMSS,
+    subscribeSyncState,
   } = ctx;
 
   // ---------------- Calendar v2: unified day/week view state ----------------
@@ -631,8 +632,11 @@ export function registerCalendarDayView(ctx) {
   // lastResult/lastRunUtc for counts, and runPairNow / syncPairRemote (via requestPairSync) for the
   // run-now bridge action — so a Force-sync here behaves identically to "Sync now" on the pairs card.
 
-  // statusPopup holds the live modal handle + a repaint hook so a completed Force-sync can refresh
-  // the rows in place (counts / last-run) without the user reopening the popup.
+  // statusPopup holds the rendered body node + the sync-state unsubscribe handle so a completed
+  // Force-sync can refresh the rows in place (spinner clears, counts / last-run update) without the
+  // user reopening the popup. The popup body lives in document.body (openModal), OUTSIDE #view, so a
+  // view rerender can never touch it — the only thing that repaints it is refreshStatusRows, driven
+  // by the sync-state observer below (subscribed on open, unsubscribed on close).
   let statusPopup = null;
 
   // Build one read-only row for an ACTIVE pair. `vm` is the pairViewModel; `raw` is the underlying
@@ -687,12 +691,13 @@ export function registerCalendarDayView(ctx) {
       'aria-label': busy ? 'Sync in progress' : (disabledReason || 'Force-sync now'),
       onclick: () => {
         if (busy) return;                          // single-flight guard at the click site
+        // Fire the run and let the sync-state observer drive every repaint. beginPairSync (inside
+        // runPairNow/syncPairRemote) flips the spinner ON immediately, and endPairSync flips it OFF
+        // AFTER runPairNow/syncPairRemote have already awaited loadPairs() — so by the time our
+        // subscriber refreshes the rows, live.pairs already carries the new lastResult and the counts
+        // update in the same pass. We deliberately do NOT race an independent loadPairs() here: that
+        // resolved long before the actual mirror finished and repainted stale counts (CalendarIA-t2).
         if (vm.comRemote) syncPairRemote(raw); else runPairNow(vm.id);
-        // Reflect the run immediately, then refresh counts/last-run when it lands. loadPairs() resolves
-        // after the run-now bridge call completes (runPairNow/syncPairRemote both loadPairs on finish),
-        // so a single deferred refresh repaints the popup with the new lastResult.
-        refreshStatusRows();
-        loadPairs().then(refreshStatusRows);
       },
     },
       busy
@@ -729,9 +734,20 @@ export function registerCalendarDayView(ctx) {
   function openStatusPopup() {
     const body = el('div', { class: 'calday-status' });
     fillStatusBody(body);
-    const modal = openModal({ title: 'Sync status', body, onClose: () => { statusPopup = null; } });
-    // Keep a handle to the rendered body node so refreshStatusRows can repaint it in place.
-    statusPopup = { modal, bodyEl: body };
+    // Subscribe to per-pair sync transitions so a Force-sync started from THIS popup (or a run that
+    // begins/ends anywhere else) repaints the rows in place: spinner on at beginPairSync, spinner off
+    // + fresh counts at endPairSync. This is what makes the run-now lifecycle reach the modal — a
+    // view rerender cannot, because the body lives outside #view and the active view is 'calendar-day'.
+    const unsubscribe = subscribeSyncState(refreshStatusRows);
+    openModal({
+      title: 'Sync status',
+      body,
+      onClose: () => { unsubscribe(); statusPopup = null; },
+    });
+    // Keep a handle to the rendered body node (for refreshStatusRows) + the unsubscribe (released on
+    // close above). We do NOT retain the openModal { close } handle: the popup is only ever dismissed
+    // by its own X / overlay / Escape, never programmatically, so storing it would be dead state.
+    statusPopup = { bodyEl: body, unsubscribe };
   }
 
   // ======== registry ========
