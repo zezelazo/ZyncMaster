@@ -227,6 +227,11 @@ public partial class App : Application
         bootEngine.Actions.ClipboardPresenceChanged += OnClipboardPresenceChanged;
         bootEngine.Actions.ClipboardSettingsChanged += OnClipboardSettingsChanged;
         bootEngine.Actions.ClipboardDeleted += OnClipboardDeleted;
+        // Live sync push: a pair run / a pair-set change on another of the user's sessions rides the
+        // same socket (SyncBroadcaster). Push it to the MAIN window bridge so an open Calendar/Sync
+        // screen refreshes its last-run + results (and the Status popup) without re-opening the screen.
+        bootEngine.Actions.PairRunReceived += OnPairRunReceived;
+        bootEngine.Actions.PairsChanged += OnPairsChanged;
         // The E2E text key landed (a peer relayed it): previously undecryptable history rows just
         // became readable, so push a refresh signal to any open history list.
         bootEngine.ClipboardKeyExchange.TextKeyChanged += OnClipboardTextKeyChanged;
@@ -442,6 +447,8 @@ public partial class App : Application
             try { engine.Actions.ClipboardPresenceChanged -= OnClipboardPresenceChanged; } catch { }
             try { engine.Actions.ClipboardSettingsChanged -= OnClipboardSettingsChanged; } catch { }
             try { engine.Actions.ClipboardDeleted -= OnClipboardDeleted; } catch { }
+            try { engine.Actions.PairRunReceived -= OnPairRunReceived; } catch { }
+            try { engine.Actions.PairsChanged -= OnPairsChanged; } catch { }
             try { engine.ClipboardKeyExchange.TextKeyChanged -= OnClipboardTextKeyChanged; } catch { }
             try { engine.ClipboardService.Stop(); } catch { }
             try { (engine.ClipboardHotkey as IDisposable)?.Dispose(); } catch { }
@@ -555,6 +562,25 @@ public partial class App : Application
         catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard key push failed.", ex); }
         try { _clipboardViewerBridge?.PushClipboardKeyChanged(); }
         catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard key viewer push failed.", ex); }
+    }
+
+    // A Sync pair run completed on another of the user's sessions (a peer machine, or a cron RunDue on
+    // the VPS): the server fanned it out over the shared socket and the engine relayed it. Push it to
+    // the main-window bridge so the open Calendar/Sync screen patches that pair's last-run + result row
+    // (and the Status popup) live. Only the main window cares — the floating clipboard viewer has no
+    // sync surface. Best-effort: a push failure must not break the receive loop.
+    private void OnPairRunReceived(string pairId, string lastResultJson, string lastRunUtc)
+    {
+        try { _bridge?.PushPairRun(pairId, lastResultJson, lastRunUtc); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Pair-run push failed.", ex); }
+    }
+
+    // The user's pair SET changed on another session (create / delete / re-target): tell the open
+    // Calendar/Sync screen to reload the pair list. Best-effort.
+    private void OnPairsChanged()
+    {
+        try { _bridge?.PushPairsChanged(); }
+        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Pairs-changed push failed.", ex); }
     }
 
     // Another device (or the human panel) deleted a history entry and the server broadcast it: push the

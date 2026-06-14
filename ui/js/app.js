@@ -15,6 +15,7 @@ import { icon, logoSvg, microsoftLogo, hydrateIcons } from './icons.js';
 import { webRequestFor, statusFromPairs } from './web-transport.js';
 import { createRegistry } from './core/registry.js';
 import { calendarDot, clipboardDot, devicesDot } from './core/status-model.js';
+import { planPairRun } from './pair-run-apply.js';
 import { initPalette, registerPaletteSource } from './palette.js';
 import { showToast } from './toast.js';
 import { registerHomeViews } from './views/home.js';
@@ -447,6 +448,58 @@ function pushPairEvent(id, entry) {
     ...entry,
   });
   if (log.length > PAIR_EVENT_LOG_MAX) log.length = PAIR_EVENT_LOG_MAX;
+}
+
+// ---------------- Live sync push (diagnosis §B, fix #5) ----------------
+// The Sync module had no push channel: a run on another machine (or a cron RunDue on the VPS) only
+// touched the DB, and this App learned about it solely by re-opening the Calendar screen. The server
+// now fans a completed run / a pair-set change over the shared clipboard socket (SyncBroadcaster);
+// the host relays them as "pair-run" / "pairs-changed" bridge events, handled here.
+//
+// De-dupe: the server EXCLUDES the device that ran the pair, so this machine never receives its own
+// run echoed back — runPairNow already patched live.pairs + the event log from the HTTP reply. So a
+// "pair-run" frame is always a PEER/cron run, and applying it is never a double-apply of the origin's
+// own run. We still guard against a frame for an unknown pair (a row we don't have): when the pair is
+// not in our snapshot we fall back to a full loadPairs() so a newly-relevant pair appears.
+
+// A peer/cron run finished for one of the user's pairs. Patch that pair's row in place (last-run +
+// result) so the pair list, the calendar status dot, and the open Status popup all reflect it without
+// re-opening the screen. Push a neutral session event so the per-pair "Recent events" shows the remote
+// run too. Then notify the sync-state subscribers (the Status popup repaints from live.pairs) and, if
+// the Calendar Sync screen is open, repaint it in place.
+function onPairRunPushed(payload) {
+  // The pure decision (de-dupe / patch / reload) lives in planPairRun (unit-tested in
+  // tests/js-unit/pair-run-apply.test.mjs); here we only apply its plan to live state + the repaint.
+  const plan = planPairRun(payload, live.pairs);
+  if (plan.kind === 'ignore') return;
+  if (plan.kind === 'reload') {
+    // We don't have this pair locally (newly created elsewhere, or the list never loaded): a full
+    // reload is the only correct reaction. Repaint when it lands if a calendar screen is open.
+    loadPairs().then(() => { if (state.view === 'calendar' || state.view === 'calendar-day') rerenderInPlace(); });
+    return;
+  }
+  // kind === 'patch': mutate the existing row (not replace the array) so other references stay valid;
+  // the pair view model is rebuilt on the next paint from these fields.
+  const pair = (live.pairs || []).find((p) => p && p.id === plan.pairId);
+  if (!pair) return; // raced away between the plan and here — nothing to patch.
+  pair.lastResult = plan.lastResult;
+  if (plan.lastRunUtc) pair.lastRunUtc = plan.lastRunUtc;
+  // Surface the remote run in the per-pair session log so "Recent events" is honest about it.
+  pushPairEvent(plan.pairId, { ok: true, action: 'ok', title: syncResultSummary(plan.lastResult), sub: 'Synced on another device', result: plan.lastResult });
+  announce('A sync ran on another device.');
+  // notifySyncState repaints the Status popup (it subscribes via subscribeSyncState) regardless of the
+  // active view; the in-place repaint covers the Calendar Sync list when it is the visible screen.
+  notifySyncState();
+  if (state.view === 'calendar' || state.view === 'calendar-day') rerenderInPlace();
+}
+
+// The user's pair SET changed on another session (create / delete / re-target). A per-row patch is not
+// enough (a row appears or disappears), so reload the list and repaint if a calendar screen is open.
+function onPairsChangedPushed() {
+  loadPairs().then(() => {
+    notifySyncState();
+    if (state.view === 'calendar' || state.view === 'calendar-day') rerenderInPlace();
+  });
 }
 
 // True only once getCapabilities has confirmed Outlook Classic COM is present on this device.
@@ -1767,6 +1820,14 @@ async function boot() {
     // without a manual refresh. Registered once; the payloads are not trusted as the whole view.
     Bridge.onEvent('clipboard:presence', () => refreshClipboardDevices());
     Bridge.onEvent('clipboard:settings', () => refreshClipboardDevices());
+
+    // Live sync push (diagnosis §B, fix #5): a pair run / pair-set change on another of the user's
+    // sessions (a peer machine or a cron RunDue on the VPS) arrives over the shared socket. "pair-run"
+    // patches the affected pair's last-run + result row (and the open Status popup) in place; the
+    // origin device is excluded server-side, so this is never this machine's own run echoed back.
+    // "pairs-changed" reloads the pair list (a row appeared/disappeared). Registered once at boot.
+    Bridge.onEvent('pair-run', (payload) => onPairRunPushed(payload));
+    Bridge.onEvent('pairs-changed', () => onPairsChangedPushed());
 
     // Las suscripciones de historial (clipboard:item / :deleted / :key) viven ahora en
     // views/clipboard.js (registerClipboardViews), junto a las funciones que disparan —

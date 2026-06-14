@@ -124,6 +124,62 @@ public sealed class UiBridge
         _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
     }
 
+    // Sends an unsolicited "pair-run" event when a Sync pair finished a run on another of the user's
+    // sessions (a peer machine, or a cron RunDue on the VPS). The Sync module has no push channel of
+    // its own; it rides the clipboard socket (SyncBroadcaster) and the host relays the frame here. The
+    // UI patches that pair's last-run + result row in place (and the open Status popup) without
+    // re-opening the screen. lastResultJson is the MirrorResult as a raw JSON OBJECT string — it is
+    // embedded as a nested object (not a quoted string) so the UI reads payload.lastResult.created etc.
+    // A malformed/empty lastResult degrades to an empty object rather than throwing.
+    public void PushPairRun(string pairId, string lastResultJson, string lastRunUtc)
+    {
+        if (pairId == null) throw new ArgumentNullException(nameof(pairId));
+
+        var envelope = new
+        {
+            @event = "pair-run",
+            payload = new
+            {
+                pairId,
+                lastResult = ParseObjectOrEmpty(lastResultJson),
+                lastRunUtc = lastRunUtc ?? "",
+            },
+        };
+        _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
+    // Sends an unsolicited "pairs-changed" event when the user's pair SET changed on another session
+    // (create / delete / re-target). The UI reloads the pair list (a per-row patch is not enough when a
+    // row appears/disappears). No payload.
+    public void PushPairsChanged()
+    {
+        var envelope = new
+        {
+            @event = "pairs-changed",
+            payload = new { },
+        };
+        _transport.Send(JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
+    // Parses a raw JSON-object string into a JsonElement so it serializes as a nested object on the
+    // wire. Anything that is not a well-formed JSON object (empty, null, malformed, or a non-object
+    // token) degrades to an empty object — the UI then just shows no counts rather than crashing.
+    private static JsonElement ParseObjectOrEmpty(string? json)
+    {
+        if (!string.IsNullOrWhiteSpace(json))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    return doc.RootElement.Clone();
+            }
+            catch (JsonException) { /* fall through to the empty object */ }
+        }
+        using var empty = JsonDocument.Parse("{}");
+        return empty.RootElement.Clone();
+    }
+
     private void OnReceived(string json)
     {
         // Fire-and-forget: inbound dispatch is async but the transport callback is sync.

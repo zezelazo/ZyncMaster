@@ -91,6 +91,8 @@ public sealed class ClipboardKeyAdmissionTests
         public event Action<IReadOnlyList<string>>? PresenceChanged;
         public event Action PresenceReset { add { } remove { } }
         public event Action<string, ClipboardSettings>? SettingsChanged;
+        public event Action<string, string, string> PairRunReceived { add { } remove { } }
+        public event Action PairsChanged { add { } remove { } }
 
         public void RaisePresence(params string[] online) => PresenceChanged?.Invoke(online);
         public void RaiseSettings(string deviceId, ClipboardSettings s) => SettingsChanged?.Invoke(deviceId, s);

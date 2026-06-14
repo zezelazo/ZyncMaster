@@ -40,6 +40,11 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
     public event Action? PresenceReset;
     public event Action<string, ClipboardSettings>? SettingsChanged;
 
+    // Sync push (the Sync module rides this same clipboard socket — see SyncBroadcaster server-side).
+    // PairRunReceived carries (pairId, lastResultJson, lastRunUtc); PairsChanged is payload-less.
+    public event Action<string, string, string>? PairRunReceived;
+    public event Action? PairsChanged;
+
     // The latest online-device roster the server pushed via a "presence" frame. Null until the first
     // presence frame arrives (so consumers can tell "no presence yet" from "presence says nobody is
     // online" and fall back to the last-seen heuristic accordingly).
@@ -291,7 +296,15 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
         JObject frame;
         try
         {
-            frame = JObject.Parse(json);
+            // DateParseHandling.None: keep ISO date strings (e.g. a pair-run's lastRunUtc, an item's
+            // createdUtc) as RAW strings. The default JObject.Parse coerces them to DateTime tokens,
+            // which would reformat lastRunUtc to a locale string before it reaches the UI and make
+            // ParseDate's JTokenType.String guard miss createdUtc. This mirrors SendAsync's reader.
+            using var reader = new JsonTextReader(new System.IO.StringReader(json))
+            {
+                DateParseHandling = DateParseHandling.None,
+            };
+            frame = JObject.Load(reader);
         }
         catch (JsonException)
         {
@@ -349,6 +362,29 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
                     var settings = MapSettings(frame["settings"] as JObject ?? new JObject());
                     SettingsChanged?.Invoke(settingsDeviceId, settings);
                 }
+                break;
+
+            case "pair-run":
+                // A completed Sync pair run on another of the user's sessions (manual push/run on a
+                // peer, a cron RunDue on the VPS, or a sibling machine). The server fans it out here so
+                // an open Calendar/Sync screen patches that pair's last-run + result without re-opening
+                // the screen. A frame without a pairId is malformed and ignored. lastResult is the
+                // MirrorResult object — pass it through as a compact JSON STRING so the UI maps the
+                // counts directly without this transport taking a server-model dependency. lastRunUtc
+                // is the recorded timestamp (may be absent; an empty string then).
+                var runPairId = frame["pairId"]?.Value<string>();
+                if (!string.IsNullOrEmpty(runPairId))
+                {
+                    var lastResultJson = (frame["lastResult"] as JObject)?.ToString(Formatting.None) ?? "{}";
+                    var lastRunUtc = frame["lastRunUtc"]?.Value<string>() ?? "";
+                    PairRunReceived?.Invoke(runPairId, lastResultJson, lastRunUtc);
+                }
+                break;
+
+            case "pairs-changed":
+                // The user's pair SET changed on another session (create / delete / re-target): a row
+                // appears or disappears, so a per-row patch is not enough. Signal a full reload.
+                PairsChanged?.Invoke();
                 break;
         }
     }

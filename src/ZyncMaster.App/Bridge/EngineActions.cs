@@ -218,6 +218,10 @@ public sealed class EngineActions : IEngineActions, IDisposable
             _clipboardTransport.PresenceReset += OnPresenceReset;
             _clipboardTransport.SettingsChanged += OnSettingsChanged;
             _clipboardTransport.DeletedReceived += OnDeletedReceived;
+            // Sync push rides the same socket (SyncBroadcaster server-side): relay a completed pair run
+            // and a pair-set change so the host can push them to the user's open Calendar/Sync screen.
+            _clipboardTransport.PairRunReceived += OnPairRunReceived;
+            _clipboardTransport.PairsChanged += OnPairsChanged;
         }
     }
 
@@ -275,6 +279,26 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // change to the user's open windows. EngineActions only relays — the entry is already gone on the
     // server (the originating DELETE removed it).
     private void OnDeletedReceived(string id) => ClipboardDeleted?.Invoke(id);
+
+    // Raised when the host should push a completed Sync pair run to the UI (so an open Calendar/Sync
+    // screen patches that pair's last-run + result row live). Wired by the composition root; a no-op
+    // when nothing subscribes (headless/tests). Carries the pair id, the MirrorResult as a raw JSON
+    // object string, and the recorded run timestamp (round-trip ISO string, possibly empty).
+    public event Action<string, string, string>? PairRunReceived;
+
+    // Raised when the host should tell the UI the pair SET changed (create / delete / re-target on
+    // another session) so it reloads the pair list. Wired by the composition root; a no-op when
+    // nothing subscribes (headless/tests). No payload.
+    public event Action? PairsChanged;
+
+    // A server pair-run broadcast arrived (the Sync module's push over the shared socket): re-raise it
+    // so the host pushes it to the user's open Calendar/Sync screen. EngineActions only relays — the
+    // server already excluded the device that ran the pair, so this never echoes this machine's own run.
+    private void OnPairRunReceived(string pairId, string lastResultJson, string lastRunUtc)
+        => PairRunReceived?.Invoke(pairId, lastResultJson, lastRunUtc);
+
+    // A server pairs-changed broadcast arrived: re-raise it so the host signals the UI to reload pairs.
+    private void OnPairsChanged() => PairsChanged?.Invoke();
 
     // Seeds the live clipboard settings + this device's identity once the App has loaded them (after
     // sign-in + device registration). Called by EngineHost/App composition before the capture loop
@@ -1656,6 +1680,8 @@ public sealed class EngineActions : IEngineActions, IDisposable
             _clipboardTransport.PresenceReset -= OnPresenceReset;
             _clipboardTransport.SettingsChanged -= OnSettingsChanged;
             _clipboardTransport.DeletedReceived -= OnDeletedReceived;
+            _clipboardTransport.PairRunReceived -= OnPairRunReceived;
+            _clipboardTransport.PairsChanged -= OnPairsChanged;
         }
         _registerGate.Dispose();
         _ownedHttp?.Dispose();

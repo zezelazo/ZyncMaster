@@ -51,4 +51,18 @@ public interface IClipboardTransport
     // deviceId, settings:{...}}) so the user's OTHER open windows update without a manual refresh. The
     // arguments are the affected device id and its new settings.
     event Action<string, ClipboardSettings> SettingsChanged;
+
+    // Raised when the server broadcasts a completed Sync pair run ({type:"pair-run", pairId,
+    // lastResult:{...}, lastRunUtc}) over the SAME live connection (the Sync module reuses the
+    // clipboard socket — see SyncBroadcaster). The server already excludes the device that ran the
+    // pair, so this fires only for the user's OTHER sessions: an open Calendar/Sync screen patches
+    // that pair's last-run + result row live without re-opening the screen. The arguments are the
+    // pair id, the MirrorResult serialized as a raw JSON object string (counts the UI maps directly),
+    // and the recorded run timestamp (round-trip ISO string, may be empty if the server omitted it).
+    event Action<string, string, string> PairRunReceived;
+
+    // Raised when the server broadcasts that the user's pair SET changed ({type:"pairs-changed"}) —
+    // a pair was created, deleted or re-targeted on another session. A single per-row patch is not
+    // enough (a row appears/disappears), so consumers reload the pair list. No payload.
+    event Action PairsChanged;
 }

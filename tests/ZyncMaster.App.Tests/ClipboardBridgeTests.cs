@@ -418,6 +418,81 @@ public class ClipboardBridgeTests
         msg.GetProperty("payload").EnumerateObject().Should().BeEmpty();
     }
 
+    // ---------- Live sync push (diagnosis §B, fix #5) ----------
+
+    [Fact]
+    public void PushPairRun_sends_a_pair_run_event_with_pairId_lastResult_object_and_lastRunUtc()
+    {
+        // A peer/cron run finished: the host relays it as a "pair-run" event so the open Calendar/Sync
+        // screen patches that pair's row live. lastResult is embedded as a nested OBJECT (not a quoted
+        // string) so the UI reads payload.lastResult.created directly.
+        var transport = new FakeTransport();
+        var bridge = new UiBridge(transport, new ClipboardSpyActions());
+
+        bridge.PushPairRun(
+            "pair-7",
+            "{\"created\":3,\"updated\":1,\"deleted\":0,\"skipped\":2}",
+            "2026-06-13T18:30:00Z");
+
+        transport.Sent.Should().ContainSingle();
+        var msg = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]);
+        msg.GetProperty("event").GetString().Should().Be("pair-run");
+        var payload = msg.GetProperty("payload");
+        payload.GetProperty("pairId").GetString().Should().Be("pair-7");
+        payload.GetProperty("lastRunUtc").GetString().Should().Be("2026-06-13T18:30:00Z");
+        var result = payload.GetProperty("lastResult");
+        result.ValueKind.Should().Be(JsonValueKind.Object);
+        result.GetProperty("created").GetInt32().Should().Be(3);
+        result.GetProperty("updated").GetInt32().Should().Be(1);
+        result.GetProperty("deleted").GetInt32().Should().Be(0);
+        result.GetProperty("skipped").GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public void PushPairRun_degrades_malformed_lastResult_to_empty_object()
+    {
+        // A malformed / empty lastResult must NOT throw or leak a quoted string: it degrades to an
+        // empty object so the UI just shows no counts.
+        var transport = new FakeTransport();
+        var bridge = new UiBridge(transport, new ClipboardSpyActions());
+
+        bridge.PushPairRun("pair-9", "not json", "");
+
+        transport.Sent.Should().ContainSingle();
+        var payload = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]).GetProperty("payload");
+        payload.GetProperty("pairId").GetString().Should().Be("pair-9");
+        payload.GetProperty("lastRunUtc").GetString().Should().Be("");
+        var result = payload.GetProperty("lastResult");
+        result.ValueKind.Should().Be(JsonValueKind.Object);
+        result.EnumerateObject().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void PushPairRun_throws_on_null_pairId()
+    {
+        var transport = new FakeTransport();
+        var bridge = new UiBridge(transport, new ClipboardSpyActions());
+
+        Action act = () => bridge.PushPairRun(null!, "{}", "");
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void PushPairsChanged_sends_a_payload_less_pairs_changed_event()
+    {
+        // The pair SET changed elsewhere: the UI gets a payload-less "pairs-changed" reload signal.
+        var transport = new FakeTransport();
+        var bridge = new UiBridge(transport, new ClipboardSpyActions());
+
+        bridge.PushPairsChanged();
+
+        transport.Sent.Should().ContainSingle();
+        var msg = JsonSerializer.Deserialize<JsonElement>(transport.Sent[0]);
+        msg.GetProperty("event").GetString().Should().Be("pairs-changed");
+        msg.GetProperty("payload").EnumerateObject().Should().BeEmpty();
+    }
+
     // ---------- EngineActions behaviour over fakes ----------
 
     private static EngineActions BuildEngine(
@@ -1400,5 +1475,105 @@ public class ClipboardBridgeTests
         transport.HandleFrame("{\"type\":\"deleted\"}");
 
         raised.Should().Be(0);
+    }
+
+    // ---------- HttpWsClipboardTransport.HandleFrame: 'pair-run' / 'pairs-changed' frames ----------
+    // The Sync module rides the SAME clipboard socket (SyncBroadcaster server-side). These prove the
+    // transport routes the two new frame types: pair-run carries (pairId, lastResult-as-JSON-string,
+    // lastRunUtc); pairs-changed is payload-less. (diagnosis §B, fix #5)
+
+    [Fact]
+    public void HandleFrame_pair_run_frame_raises_PairRunReceived_with_pairId_result_json_and_runUtc()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        string? gotPairId = null, gotResultJson = null, gotRunUtc = null;
+        transport.PairRunReceived += (id, json, runUtc) => { gotPairId = id; gotResultJson = json; gotRunUtc = runUtc; };
+
+        transport.HandleFrame(
+            "{\"type\":\"pair-run\",\"pairId\":\"p-1\",\"lastResult\":{\"created\":2,\"updated\":0,\"deleted\":0,\"skipped\":1},\"lastRunUtc\":\"2026-06-13T18:30:00Z\"}");
+
+        gotPairId.Should().Be("p-1");
+        gotRunUtc.Should().Be("2026-06-13T18:30:00Z");
+        // lastResult is passed through as a compact JSON OBJECT string (no transport-side model).
+        var result = JsonSerializer.Deserialize<JsonElement>(gotResultJson!);
+        result.GetProperty("created").GetInt32().Should().Be(2);
+        result.GetProperty("skipped").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public void HandleFrame_pair_run_frame_missing_lastResult_passes_empty_object()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        string? gotResultJson = null, gotRunUtc = null;
+        transport.PairRunReceived += (_, json, runUtc) => { gotResultJson = json; gotRunUtc = runUtc; };
+
+        transport.HandleFrame("{\"type\":\"pair-run\",\"pairId\":\"p-2\"}");
+
+        gotResultJson.Should().Be("{}");
+        gotRunUtc.Should().Be(""); // absent lastRunUtc degrades to empty string, never null
+    }
+
+    [Fact]
+    public void HandleFrame_pair_run_frame_missing_pairId_does_not_raise()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        var raised = 0;
+        transport.PairRunReceived += (_, _, _) => raised++;
+
+        transport.HandleFrame("{\"type\":\"pair-run\",\"lastResult\":{\"created\":1}}");
+
+        raised.Should().Be(0);
+    }
+
+    [Fact]
+    public void HandleFrame_pairs_changed_frame_raises_PairsChanged()
+    {
+        var transport = new ZyncMaster.App.Infrastructure.Clipboard.HttpWsClipboardTransport(
+            new HttpClient(), "https://server.test", _ => Task.FromResult("k"));
+
+        var raised = 0;
+        transport.PairsChanged += () => raised++;
+
+        transport.HandleFrame("{\"type\":\"pairs-changed\"}");
+
+        raised.Should().Be(1);
+    }
+
+    // ---------- EngineActions relays pair-run / pairs-changed from the transport ----------
+
+    [Fact]
+    public void PairRunReceived_from_transport_is_relayed_by_EngineActions()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        var actions = BuildEngine(transport);
+
+        string? pairId = null, resultJson = null, runUtc = null;
+        actions.PairRunReceived += (id, json, utc) => { pairId = id; resultJson = json; runUtc = utc; };
+
+        transport.Raise(t => t.PairRunReceived += null, "p-9", "{\"created\":4}", "2026-06-13T20:00:00Z");
+
+        pairId.Should().Be("p-9");
+        resultJson.Should().Be("{\"created\":4}");
+        runUtc.Should().Be("2026-06-13T20:00:00Z");
+    }
+
+    [Fact]
+    public void PairsChanged_from_transport_is_relayed_by_EngineActions()
+    {
+        var transport = new Mock<IClipboardTransport>();
+        var actions = BuildEngine(transport);
+
+        var raised = 0;
+        actions.PairsChanged += () => raised++;
+
+        transport.Raise(t => t.PairsChanged += null);
+
+        raised.Should().Be(1);
     }
 }
