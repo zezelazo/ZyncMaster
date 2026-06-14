@@ -290,6 +290,13 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<ISyncPairStore, EfSyncPairStore>();
 builder.Services.AddSingleton<ISyncRunLock, EfSyncRunLock>();
 
+// Live-push for the Sync module (the missing counterpart to ClipboardBroadcaster). It reuses the
+// clipboard presence/routing table (ClipboardConnectionRegistry, registered below) so a recorded
+// pair run — from the App, the VPS cron, or another of the user's machines — fans out to the user's
+// OTHER live sessions over the WS they already hold, refreshing sync status in real time. Singleton,
+// process-local; the registry it depends on is registered with the clipboard module.
+builder.Services.AddSingleton<SyncBroadcaster>();
+
 // Clipboard module (Plan 1 / F1a). Options bind from the "Clipboard" config section; the WS
 // presence registry and the fan-out broadcaster are process-local singletons; the EF-backed
 // history + settings stores are singletons over the DbContext factory like the other Ef*Store

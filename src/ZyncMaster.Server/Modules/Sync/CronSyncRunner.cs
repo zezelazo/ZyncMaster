@@ -43,6 +43,7 @@ public sealed class CronSyncRunner
     private readonly SyncModuleRegistry _modules;
     private readonly IHttpCurrentUserOverride _userOverride;
     private readonly IEntitlementsService _entitlements;
+    private readonly SyncBroadcaster _broadcaster;
     private readonly ServerOptions _options;
     private readonly ILogger<CronSyncRunner> _logger;
 
@@ -52,6 +53,7 @@ public sealed class CronSyncRunner
         SyncModuleRegistry modules,
         IHttpCurrentUserOverride userOverride,
         IEntitlementsService entitlements,
+        SyncBroadcaster broadcaster,
         IOptions<ServerOptions> options,
         ILogger<CronSyncRunner> logger)
     {
@@ -60,6 +62,7 @@ public sealed class CronSyncRunner
         _modules = modules ?? throw new ArgumentNullException(nameof(modules));
         _userOverride = userOverride ?? throw new ArgumentNullException(nameof(userOverride));
         _entitlements = entitlements ?? throw new ArgumentNullException(nameof(entitlements));
+        _broadcaster = broadcaster ?? throw new ArgumentNullException(nameof(broadcaster));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -219,7 +222,7 @@ public sealed class CronSyncRunner
                 if (outcome.NoServerReader)
                     return false;
 
-                await RecordRunAsync(row.Id, outcome.Result!, ct).ConfigureAwait(false);
+                await RecordRunAsync(row.Id, row.UserId, outcome.Result!, ct).ConfigureAwait(false);
                 return true;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -236,7 +239,7 @@ public sealed class CronSyncRunner
                 // Record LastRunUtc + a failed result so the pair backs off to its normal interval.
                 // Only a TRULY transient escape (handled by the outer when-filter NOT matching)
                 // skips recording, so a genuine throttle still retries promptly.
-                await RecordRunAsync(row.Id, FailedRunResult(ex), ct).ConfigureAwait(false);
+                await RecordRunAsync(row.Id, row.UserId, FailedRunResult(ex), ct).ConfigureAwait(false);
 
                 // Re-throw so the batch still counts this as Failed (RunDueAsync's catch). The
                 // LastRunUtc is now advanced, so the immediate next tick will not re-run the pair.
@@ -259,18 +262,30 @@ public sealed class CronSyncRunner
     // earlier OperationCanceledException catch, so this only ever sees genuine run failures.
     private static SyncErrorKind Classify(Exception ex) => SyncErrorClassifier.Classify(ex);
 
-    // Records LastRunUtc (+ result) so a second immediate cron call sees the pair as no longer due.
-    // Cross-user update by id: the cron context has no single owning user, so we update the row
-    // directly rather than through the user-scoped store.
-    private async Task RecordRunAsync(string pairId, MirrorResult result, CancellationToken ct)
+    // Records LastRunUtc (+ result) so a second immediate cron call sees the pair as no longer due,
+    // then fans the run out over the WS to that pair OWNER's live sessions so any open App/panel
+    // refreshes the result in real time. Cross-user update by id: the cron context has no single
+    // owning user, so we update the row directly rather than through the user-scoped store; the owner
+    // for the broadcast is the row's UserId. The cron is not one of the user's devices, so no origin
+    // is excluded (originDeviceId empty) and the run reaches all of the owner's sessions. Best-effort:
+    // a dead peer socket never fails the cron run.
+    private async Task RecordRunAsync(string pairId, string userId, MirrorResult result, CancellationToken ct)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        var row = await db.SyncPairs.FirstOrDefaultAsync(p => p.Id == pairId, ct).ConfigureAwait(false);
-        if (row is null)
-            return;
-        row.LastRunUtc = DateTimeOffset.UtcNow;
-        row.LastResultJson = PairJson.Serialize(result);
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        DateTimeOffset recordedUtc;
+        await using (var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false))
+        {
+            var row = await db.SyncPairs.FirstOrDefaultAsync(p => p.Id == pairId, ct).ConfigureAwait(false);
+            if (row is null)
+                return;
+            recordedUtc = DateTimeOffset.UtcNow;
+            row.LastRunUtc = recordedUtc;
+            row.LastResultJson = PairJson.Serialize(result);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        await _broadcaster
+            .BroadcastPairRunAsync(userId, originDeviceId: string.Empty, pairId, result, recordedUtc, ct)
+            .ConfigureAwait(false);
     }
 
     // DUE = active AND (never run OR its interval has elapsed since the last run). A non-positive

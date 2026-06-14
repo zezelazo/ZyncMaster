@@ -221,9 +221,11 @@ public static class PairEndpoints
 
         app.MapPost("/api/pairs", async (
             CreatePairRequest req,
+            HttpContext http,
             ISyncPairStore store,
             ILegacyConnectedAccountAdapter adapter,
             IEntitlementsService entitlements,
+            SyncBroadcaster broadcaster,
             ICurrentUserAccessor currentUser,
             CancellationToken ct) =>
         {
@@ -295,6 +297,14 @@ public static class PairEndpoints
                 pair = pair with { PinnedDeviceId = req.PinnedDeviceId };
 
             await store.AddAsync(pair);
+
+            // A new row appeared in the user's pair set: tell the user's OTHER live sessions to reload
+            // /api/pairs so a second open window/machine shows the new pair without re-opening Calendar.
+            // The creator is a cookie/identity-bearer caller with no deviceId claim, so the origin is
+            // empty and the reload reaches all sessions (a redundant reload on the creator is harmless).
+            var createDeviceId = http.User.FindFirst("deviceId")?.Value ?? string.Empty;
+            await broadcaster.BroadcastPairsChangedAsync(currentUser.UserId, createDeviceId, ct).ConfigureAwait(false);
+
             return Results.Ok(pair);
         }).RequireCookieOrIdentityBearer();
 
@@ -322,9 +332,12 @@ public static class PairEndpoints
         app.MapPatch("/api/pairs/{id}", async (
             string id,
             UpdatePairRequest req,
+            HttpContext http,
             ISyncPairStore store,
             ISyncRunLock runLock,
             ILegacyConnectedAccountAdapter adapter,
+            SyncBroadcaster broadcaster,
+            ICurrentUserAccessor currentUser,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
         {
@@ -406,6 +419,14 @@ public static class PairEndpoints
                 PendingCleanupDestinations = pendingCleanup,
             };
             await store.UpdateAsync(updated, ct);
+
+            // A pair changed (renamed, re-targeted, paused/resumed): tell the user's OTHER live sessions
+            // to reload /api/pairs so a second open window/machine reflects the edit live. Cookie/
+            // identity-bearer caller has no deviceId claim, so origin is empty and the reload reaches all
+            // sessions (a redundant reload on the editing session is harmless).
+            var patchDeviceId = http.User.FindFirst("deviceId")?.Value ?? string.Empty;
+            await broadcaster.BroadcastPairsChangedAsync(currentUser.UserId, patchDeviceId, ct).ConfigureAwait(false);
+
             return Results.Ok(updated);
         }).RequireCookieOrIdentityBearer();
 
@@ -622,7 +643,13 @@ public static class PairEndpoints
             return Results.Ok(new { deleted = result.Deleted, failures = result.Failures });
         }).RequireCookieOrIdentityBearer();
 
-        app.MapDelete("/api/pairs/{id}", async (string id, ISyncPairStore store, CancellationToken ct) =>
+        app.MapDelete("/api/pairs/{id}", async (
+            string id,
+            HttpContext http,
+            ISyncPairStore store,
+            SyncBroadcaster broadcaster,
+            ICurrentUserAccessor currentUser,
+            CancellationToken ct) =>
         {
             // Confirm ownership before deleting: a cross-user (or absent) id resolves to null
             // in the user-scoped store -> 404, so RemoveAsync never silently no-ops on a pair
@@ -631,6 +658,13 @@ public static class PairEndpoints
                 return Results.NotFound();
 
             await store.RemoveAsync(id, ct);
+
+            // A row disappeared from the user's pair set: tell the user's OTHER live sessions to reload
+            // /api/pairs so a second open window/machine drops the deleted pair live. Cookie/identity-
+            // bearer caller has no deviceId claim, so origin is empty and the reload reaches all sessions.
+            var deleteDeviceId = http.User.FindFirst("deviceId")?.Value ?? string.Empty;
+            await broadcaster.BroadcastPairsChangedAsync(currentUser.UserId, deleteDeviceId, ct).ConfigureAwait(false);
+
             return Results.NoContent();
         }).RequireCookieOrIdentityBearer();
 
@@ -642,6 +676,8 @@ public static class PairEndpoints
             ISyncRunLock runLock,
             ProviderRegistry registry,
             DeviceService devices,
+            SyncBroadcaster broadcaster,
+            ICurrentUserAccessor currentUser,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
         {
@@ -718,7 +754,12 @@ public static class PairEndpoints
                     mirrorPair.Destination.CalendarId, req.Events, ReminderMinutes, from, to, token, mirrorPair.Id),
                 ct).ConfigureAwait(false);
 
-            await RecordRunAsync(store, pair, result, ct).ConfigureAwait(false);
+            // Exclude the pushing device from the fan-out (it already has the result). A cookie/
+            // identity-bearer human has no deviceId claim, so originDeviceId is empty and the run
+            // reaches every one of the user's live sessions.
+            await RecordRunAsync(
+                store, pair, result, ct,
+                broadcaster, currentUser.UserId, deviceId ?? string.Empty).ConfigureAwait(false);
             return Results.Ok(result);
         }).RequireCookieOrApiKeyOrIdentityBearer();
 
@@ -787,10 +828,13 @@ public static class PairEndpoints
 
         app.MapPost("/api/pairs/{id}/run", async (
             string id,
+            HttpContext http,
             ISyncPairStore store,
             ISyncRunLock runLock,
             SyncModuleRegistry modules,
             ProviderRegistry registry,
+            SyncBroadcaster broadcaster,
+            ICurrentUserAccessor currentUser,
             Microsoft.Extensions.Options.IOptions<ServerOptions> opts,
             CancellationToken ct) =>
         {
@@ -841,7 +885,13 @@ public static class PairEndpoints
                 });
             }
 
-            await RecordRunAsync(store, pair, outcome.Result!, ct).ConfigureAwait(false);
+            // Fan the run out to the user's OTHER live sessions. A /run is a server-side read+mirror
+            // (Graph source); the calling principal is a human (cookie) or a device (api-key) — exclude
+            // a device caller via its deviceId claim, empty for a human.
+            var runDeviceId = http.User.FindFirst("deviceId")?.Value ?? string.Empty;
+            await RecordRunAsync(
+                store, pair, outcome.Result!, ct,
+                broadcaster, currentUser.UserId, runDeviceId).ConfigureAwait(false);
             return Results.Ok(outcome.Result);
         }).RequireCookieOrApiKey();
     }
@@ -1162,7 +1212,21 @@ public static class PairEndpoints
         };
     }
 
-    private static Task RecordRunAsync(ISyncPairStore store, SyncPair pair, MirrorResult result, CancellationToken ct)
+    // Records a completed run (LastRunUtc + LastResult, clearing any satisfied sync-now signal) AND
+    // fans the result out over the WS to the user's OTHER live sessions so an open Calendar/Sync
+    // screen on another window/machine refreshes without re-opening the screen. The broadcast is
+    // best-effort and is issued AFTER the persist so a peer that reloads on the frame reads the new
+    // row; userId scopes the fan-out and originDeviceId (the pushing device, empty for a human caller)
+    // is excluded — it already has the result. A null broadcaster/userId skips the push (the persist
+    // still happens), which keeps the helper usable from paths without an identity in scope.
+    private static async Task RecordRunAsync(
+        ISyncPairStore store,
+        SyncPair pair,
+        MirrorResult result,
+        CancellationToken ct,
+        SyncBroadcaster? broadcaster = null,
+        string? userId = null,
+        string? originDeviceId = null)
     {
         var now = DateTimeOffset.UtcNow;
         // Track B — a recorded run at/after a pending sync-now request satisfies that request, so the
@@ -1184,6 +1248,13 @@ public static class PairEndpoints
             LastResult = result,
             SyncRequestedUtc = clearSignal ? null : pair.SyncRequestedUtc,
         };
-        return store.UpdateAsync(updated, ct);
+        await store.UpdateAsync(updated, ct).ConfigureAwait(false);
+
+        // Live-push the recorded run to the user's OTHER sessions. Best-effort: a dead peer socket
+        // never fails the run. Skipped when no broadcaster/identity is in scope.
+        if (broadcaster is not null && !string.IsNullOrEmpty(userId))
+            await broadcaster
+                .BroadcastPairRunAsync(userId!, originDeviceId ?? string.Empty, pair.Id, result, now, ct)
+                .ConfigureAwait(false);
     }
 }
