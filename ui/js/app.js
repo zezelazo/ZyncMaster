@@ -664,7 +664,18 @@ function onServerReady() {
 // host's self-heal retries on the next device-key-gated call (e.g. Sync now).
 function ensureDeviceRegistered() {
   if (!Bridge.desktopApp) return;
-  Bridge.call('ensureDevice').catch(() => {});
+  Bridge.call('ensureDevice')
+    .then(() => {
+      // Registration just minted this device's api key (or confirmed an existing one). The clipboard
+      // roster is loaded ONCE at boot — before sign-in that load caches an empty list, so the clipboard
+      // settings panel reads "this device is not registered" and the home tile shows "Set up". Now that
+      // the device has a key, invalidate that once-only cache and re-fetch so the clipboard panel, the
+      // Devices screen and the home tile reflect the freshly registered device instead of the stale
+      // pre-login snapshot. getClipboardDevices needs the device key, which now exists.
+      live.clipboardDevices = null;
+      loadClipboardDevices(state.view);
+    })
+    .catch(() => {});
 }
 
 // Track B — lazy-load THIS device's record (id + name) once into live.device, the SAME cache the
