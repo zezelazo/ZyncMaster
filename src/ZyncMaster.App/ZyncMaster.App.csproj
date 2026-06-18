@@ -16,10 +16,10 @@
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <!-- Release versioning. The release workflow overrides this with /p:Version=<input>;
          the value here is the local/dev default and the floor for the first beta. -->
-    <Version>0.4.3</Version>
-    <AssemblyVersion>0.4.3.0</AssemblyVersion>
-    <FileVersion>0.4.3.0</FileVersion>
-    <InformationalVersion>0.4.3</InformationalVersion>
+    <Version>0.4.4</Version>
+    <AssemblyVersion>0.4.4.0</AssemblyVersion>
+    <FileVersion>0.4.4.0</FileVersion>
+    <InformationalVersion>0.4.4</InformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <DefineConstants>$(DefineConstants);WIN_WEBVIEW2</DefineConstants>
