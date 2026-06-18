@@ -28,12 +28,18 @@ public sealed class ClipboardServiceTests
         public readonly List<ClipboardSettings> UpdatedSettings = new();
         public Exception? PublishError;
 
-        public Task PublishAsync(ClipboardEntry encrypted, CancellationToken ct = default)
+        // Optional gate to simulate a SLOW upload (e.g. a multi-MB image): when set, PublishAsync
+        // records the call synchronously but then blocks on this until the test releases it, so a
+        // second capture of the same content can be raised WHILE the first publish is in flight.
+        public TaskCompletionSource<bool>? PublishGate;
+
+        public async Task PublishAsync(ClipboardEntry encrypted, CancellationToken ct = default)
         {
             if (PublishError is not null)
                 throw PublishError;
             Published.Add(encrypted);
-            return Task.CompletedTask;
+            if (PublishGate is not null)
+                await PublishGate.Task;
         }
 
         public Task<IReadOnlyList<ClipboardEntry>> GetHistoryAsync(CancellationToken ct = default) =>
@@ -474,6 +480,31 @@ public sealed class ClipboardServiceTests
 
         h.Transport.Published.Should().HaveCount(1);
         h.Transport.Published[0].SizeBytes.Should().Be(500);
+    }
+
+    // Regression: Windows fires WM_CLIPBOARDUPDATE 2-3x for one copy. A multi-MB image upload is slow
+    // enough that the re-fires arrive WHILE the first publish is still in flight. The dedupe must mark
+    // the content as published BEFORE awaiting the (slow) upload, or the re-fires each pass
+    // IsRecentlyPublished and the same screenshot piles up 2-3x on the server. The gated transport
+    // holds the first publish open; the second capture of the SAME bytes must be dropped, not sent.
+    [Fact]
+    public async Task Captured_Image_OsMultiFireDuringSlowUpload_PublishesOnce()
+    {
+        var h = new Harness(TextCrypto.NewKey(), hardMax: 1_000_000);
+        h.Transport.PublishGate = new TaskCompletionSource<bool>();
+        var bytes = new byte[2048];
+        new Random(7).NextBytes(bytes); // identical bytes both times -> identical dedupe hash
+
+        h.Capture.Raise(Image(bytes)); // capture 1: marks published, then blocks in the upload at the gate
+        h.Capture.Raise(Image(bytes)); // capture 2: the OS multi-fire of the SAME screenshot, mid-upload
+
+        // The call is recorded synchronously before the gate blocks, so the count is settled here:
+        // exactly one publish reached the transport.
+        h.Transport.Published.Should().HaveCount(1);
+
+        h.Transport.PublishGate.SetResult(true); // release so the in-flight publish completes cleanly
+        await SettleAsync();
+        h.Transport.Published.Should().HaveCount(1);
     }
 
     [Fact]

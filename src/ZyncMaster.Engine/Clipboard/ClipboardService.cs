@@ -168,8 +168,10 @@ public sealed class ClipboardService
                 // no longer multi-fire, and leaving them up would swallow a later genuine re-copy
                 // of that earlier content (peer applies A, user copies B then re-copies A).
                 _dedupe.OnNewContentCaptured(hash);
-                await _transport.PublishAsync(entry with { Text = null, CipherText = cipher }, ct).ConfigureAwait(false);
+                // Mark BEFORE the await (see the image path) so the OS's multi-fire of one copy is
+                // deduped even while the publish is in flight, instead of duplicating the item.
                 _dedupe.MarkPublished(hash);
+                await _transport.PublishAsync(entry with { Text = null, CipherText = cipher }, ct).ConfigureAwait(false);
                 textPublished = true;
             }
             catch (Exception ex)
@@ -207,10 +209,16 @@ public sealed class ClipboardService
         var imageEntry = entry with { SizeBytes = size };
         try
         {
-            // Same as the text path: new content on the clipboard ends every other echo window.
+            // New content on the clipboard ends every other echo window.
             _dedupe.OnNewContentCaptured(hash);
-            await _transport.PublishAsync(imageEntry, ct).ConfigureAwait(false);
+            // Mark BEFORE the await. A multi-MB image upload is slow enough that the OS's 2-3x
+            // WM_CLIPBOARDUPDATE multi-fire for ONE copy arrives while we're still uploading; marking
+            // only after the await left those re-fires un-deduped (IsRecentlyPublished was still
+            // false), so the same screenshot was published 2-3 times and piled up on the server.
+            // Marking first dedupes the burst; a failed upload just keeps the content in the
+            // recent-publish window (no retry storm) and is recoverable by a deliberate re-copy.
             _dedupe.MarkPublished(hash);
+            await _transport.PublishAsync(imageEntry, ct).ConfigureAwait(false);
             imagePublished = true;
         }
         catch (Exception ex)
