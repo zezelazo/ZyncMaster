@@ -38,10 +38,14 @@ const REGISTERED_DEVICES = JSON.stringify({
   thisDeviceId: 'd1', pastePanelOpacity: 70,
 });
 const EMPTY_DEVICES = JSON.stringify({ devices: [], thisDeviceId: null, pastePanelOpacity: 70 });
+// The shared history is also empty until the device is registered (getClipboardHistory needs the key).
+const REGISTERED_HISTORY = JSON.stringify([
+  { id: 'h1', type: 'text', text: 'synced from the server', createdUtc: '2026-06-15T07:00:00Z', originDeviceName: 'DEVLAB2' },
+]);
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((args) => {
-    const { replies, registeredDevices, emptyDevices } = args;
+    const { replies, registeredDevices, emptyDevices, registeredHistory } = args;
     const listeners = new Set();
     let ensured = false;                 // flips true once the host registers the device
     window.__bridgeCalls = [];
@@ -56,13 +60,14 @@ test.beforeEach(async ({ page }) => {
           let payload;
           if (msg.action === 'ensureDevice') { ensured = true; payload = '"dev-key"'; }
           else if (msg.action === 'getClipboardDevices') { payload = ensured ? registeredDevices : emptyDevices; }
+          else if (msg.action === 'getClipboardHistory') { payload = ensured ? registeredHistory : '[]'; }
           else payload = Object.prototype.hasOwnProperty.call(replies, msg.action) ? replies[msg.action] : null;
           const reply = JSON.stringify({ correlationId: msg.correlationId, ok: true, payload, error: null });
           setTimeout(() => listeners.forEach((cb) => cb({ data: reply })), 5);
         },
       },
     };
-  }, { replies: REPLIES, registeredDevices: REGISTERED_DEVICES, emptyDevices: EMPTY_DEVICES });
+  }, { replies: REPLIES, registeredDevices: REGISTERED_DEVICES, emptyDevices: EMPTY_DEVICES, registeredHistory: REGISTERED_HISTORY });
 
   await page.route('https://app.test/**', async (route) => {
     const url = new URL(route.request().url());
@@ -91,4 +96,21 @@ test('clipboard Settings shows the device as registered after sign-in re-fetches
   });
   expect(order.ensureAt).toBeGreaterThanOrEqual(0);
   expect(order.devicesAfter).toBeGreaterThan(order.ensureAt);
+});
+
+test('in-app clipboard history re-fetches after sign-in so it matches the server (not the empty boot snapshot)', async ({ page }) => {
+  await page.goto('https://app.test/index.html');
+  // The history is loaded once at boot — empty before the device registered. The fix invalidates and
+  // re-fetches it once ensureDevice resolves, so the in-app history shows the real server item instead
+  // of the stale empty snapshot (which is what made the in-app list diverge from the floating viewer).
+  await page.locator('#sidebar').getByRole('button', { name: 'Clipboard' }).click();
+  await expect(page.getByText('synced from the server')).toBeVisible();
+
+  // The history was re-fetched AFTER the device was registered.
+  const order = await page.evaluate(() => {
+    const calls = window.__bridgeCalls.map((c) => c.action);
+    return { ensureAt: calls.indexOf('ensureDevice'), historyAfter: calls.lastIndexOf('getClipboardHistory') };
+  });
+  expect(order.ensureAt).toBeGreaterThanOrEqual(0);
+  expect(order.historyAfter).toBeGreaterThan(order.ensureAt);
 });

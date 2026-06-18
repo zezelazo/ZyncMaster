@@ -667,13 +667,16 @@ function ensureDeviceRegistered() {
   Bridge.call('ensureDevice')
     .then(() => {
       // Registration just minted this device's api key (or confirmed an existing one). The clipboard
-      // roster is loaded ONCE at boot — before sign-in that load caches an empty list, so the clipboard
-      // settings panel reads "this device is not registered" and the home tile shows "Set up". Now that
-      // the device has a key, invalidate that once-only cache and re-fetch so the clipboard panel, the
-      // Devices screen and the home tile reflect the freshly registered device instead of the stale
-      // pre-login snapshot. getClipboardDevices needs the device key, which now exists.
+      // roster AND the shared history are each loaded ONCE at boot — before sign-in those loads cache
+      // empty, so the clipboard settings panel reads "this device is not registered", the home tile
+      // shows "Set up", and the in-app history stays EMPTY while the floating viewer (which fetches
+      // fresh on every open) shows the real items. Now that the device has a key, invalidate both
+      // once-only caches and re-fetch so the clipboard panel, history, Devices screen and home tile
+      // all match the server. getClipboardDevices/History need the device key, which now exists.
       live.clipboardDevices = null;
+      live.clipboardHistory = null;
       loadClipboardDevices(state.view);
+      softRepaint(); // re-renders the current view; its loadClipboardHistory re-fetches the history
     })
     .catch(() => {});
 }
