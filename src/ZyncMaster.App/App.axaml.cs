@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -352,10 +353,14 @@ public partial class App : Application
             var settings = await engine.ClipboardTransport.GetSettingsAsync(device.DeviceId, ct);
             engine.Actions.InitializeClipboard(settings, device.DeviceId, device.Name);
 
-            // 3) Text-key bootstrap: empty history => this is the first device, generate + keep the key;
-            //    otherwise wait for a peer to relay it (OnKeyReceivedAsync, wired in ClipboardService).
+            // 3) Text-key bootstrap: with no existing TEXT to decrypt this is effectively the first
+            //    device for text, so generate + keep the key; otherwise wait for a peer to relay it
+            //    (OnKeyReceivedAsync, wired in ClipboardService). Gate on the absence of TEXT, not of
+            //    all history — images/files never use the text key, so a history of only images must
+            //    NOT block self-generation, or text is silently dropped forever on a single device.
             var history = await engine.ClipboardTransport.GetHistoryAsync(ct);
-            var textKey = await engine.ClipboardKeyExchange.EnsureTextKeyAsync(history.Count == 0, ct);
+            var noPriorText = !history.Any(i => i.Type == ClipboardEntryType.Text);
+            var textKey = await engine.ClipboardKeyExchange.EnsureTextKeyAsync(noPriorText, ct);
 
             // 4) Go live.
             await engine.ClipboardTransport.ConnectAsync(ct);

@@ -77,7 +77,7 @@ public sealed class ClipboardKeyExchangeTests
         var keys = new FakeKeyStore();
         var sut = new ClipboardKeyExchange(keys, new FakeTransport());
 
-        var key = await sut.EnsureTextKeyAsync(historyIsEmpty: true, CancellationToken.None);
+        var key = await sut.EnsureTextKeyAsync(noPriorText: true, CancellationToken.None);
 
         key.Should().NotBeNull();
         key!.Length.Should().Be(32);
@@ -93,7 +93,7 @@ public sealed class ClipboardKeyExchangeTests
         var transport = new FakeTransport();
         var sut = new ClipboardKeyExchange(keys, transport);
 
-        var key = await sut.EnsureTextKeyAsync(historyIsEmpty: false, CancellationToken.None);
+        var key = await sut.EnsureTextKeyAsync(noPriorText: false, CancellationToken.None);
 
         key.Should().BeEquivalentTo(existing);
         transport.RelayCalls.Should().Be(0);
@@ -105,7 +105,7 @@ public sealed class ClipboardKeyExchangeTests
         var keys = new FakeKeyStore();
         var sut = new ClipboardKeyExchange(keys, new FakeTransport());
 
-        var key = await sut.EnsureTextKeyAsync(historyIsEmpty: false, CancellationToken.None);
+        var key = await sut.EnsureTextKeyAsync(noPriorText: false, CancellationToken.None);
 
         key.Should().BeNull();
         (await keys.LoadTextKeyAsync()).Should().BeNull();

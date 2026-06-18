@@ -59,17 +59,21 @@ public sealed class ClipboardKeyExchange
 
     // Resolves this device's copy of the shared text key:
     //  - already have it locally -> return it (no-op);
-    //  - first device (history empty, so no existing text we couldn't read) -> generate + save;
+    //  - no existing TEXT to decrypt (noPriorText) -> this is effectively the first device for text,
+    //    so generate + save. NOTE this is gated on the absence of *text*, NOT of all history: images
+    //    (and files) never use the text key, so a device whose history holds only images must still
+    //    self-generate — otherwise it forever believes a peer must relay a key that never comes, and
+    //    every text copy is dropped on a single-device account.
     //  - otherwise -> null: history holds text encrypted with a key we don't have, so we cannot
     //    self-generate. The caller follows up with RequestKeyAsync and waits for a peer to relay
     //    the key via OnKeyReceivedAsync.
-    public async Task<byte[]?> EnsureTextKeyAsync(bool historyIsEmpty, CancellationToken ct = default)
+    public async Task<byte[]?> EnsureTextKeyAsync(bool noPriorText, CancellationToken ct = default)
     {
         var existing = await _keys.LoadTextKeyAsync(ct).ConfigureAwait(false);
         if (existing is not null)
             return existing;
 
-        if (historyIsEmpty)
+        if (noPriorText)
         {
             var k = TextCrypto.NewKey();
             await _keys.SaveTextKeyAsync(k, ct).ConfigureAwait(false);
