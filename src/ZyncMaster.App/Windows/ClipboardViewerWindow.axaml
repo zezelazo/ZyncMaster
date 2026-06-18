@@ -6,7 +6,7 @@
         WindowDecorations="None"
         ExtendClientAreaToDecorationsHint="True"
         Background="Transparent"
-        TransparencyLevelHint="Transparent"
+        TransparencyLevelHint="AcrylicBlur, Blur, Transparent"
         CanResize="False"
         Topmost="True"
         ShowInTaskbar="False"
