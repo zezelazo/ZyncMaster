@@ -40,6 +40,26 @@ public class ClipboardHistoryStoreTests
     }
 
     [Fact]
+    public async Task Append_evicts_items_older_than_RetentionMaxAge()
+    {
+        var store = ClipboardTestHarness.HistoryStore("u1",
+            new ClipboardOptions { RetentionMaxAge = TimeSpan.FromHours(1), MaxItemsPerUser = 100 });
+        await store.AppendAsync(Text("stale", DateTimeOffset.UtcNow.AddHours(-2))); // older than the 1h window
+        await store.AppendAsync(Text("fresh", DateTimeOffset.UtcNow.AddMinutes(-1)));
+        (await store.ListAsync()).Select(i => i.Id).Should().BeEquivalentTo(new[] { "fresh" });
+    }
+
+    [Fact]
+    public async Task Append_keeps_aged_items_when_RetentionMaxAge_disabled()
+    {
+        var store = ClipboardTestHarness.HistoryStore("u1",
+            new ClipboardOptions { RetentionMaxAge = TimeSpan.Zero, MaxItemsPerUser = 100 });
+        await store.AppendAsync(Text("ancient", DateTimeOffset.UtcNow.AddDays(-5)));
+        await store.AppendAsync(Text("now", DateTimeOffset.UtcNow));
+        (await store.ListAsync()).Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task Append_image_over_hard_max_throws()
     {
         var store = ClipboardTestHarness.HistoryStore("u1", new ClipboardOptions { HardMaxImageBytes = 10 });

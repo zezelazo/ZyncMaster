@@ -11,7 +11,8 @@ namespace ZyncMaster.Server;
 //
 // Eviction policy applied on every Append, in order:
 //   1. Hard image ceiling — an image over HardMaxImageBytes is rejected (throws), never stored.
-//   2. FIFO item cap — keep only the newest MaxItemsPerUser rows; delete the overflow.
+//   2. FIFO item cap + age cap — keep only the newest MaxItemsPerUser rows, and drop anything older
+//      than RetentionMaxAge; delete the union so the history stays a short rolling buffer on disk.
 //   3. Image-byte budget — while the sum of the user's image SizeBytes exceeds
 //      MaxImageTotalBytesPerUser, evict the oldest images until it fits.
 public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
@@ -44,19 +45,25 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
         db.ClipboardItems.Add(ToRow(item with { UserId = _user.UserId }));
         await db.SaveChangesAsync(ct);
 
-        // FIFO cap: drop everything past the newest MaxItemsPerUser rows. SQLite's EF provider
-        // cannot translate DateTimeOffset ordering/compares to SQL; materialise then order in
-        // memory — same root cause the EfDeviceStore handles for its DateTimeOffset predicates.
-        // Correct on both providers.
+        // FIFO + age caps: drop everything past the newest MaxItemsPerUser rows AND anything older
+        // than RetentionMaxAge. SQLite's EF provider cannot translate DateTimeOffset ordering/compares
+        // to SQL; materialise then order/compare in memory — same root cause the EfDeviceStore handles
+        // for its DateTimeOffset predicates. Correct on both providers; deleted by id in one round-trip.
         var byNewest = (await db.ClipboardItems
                 .Where(x => x.UserId == _user.UserId)
                 .Select(x => new { x.Id, x.CreatedUtc })
                 .ToListAsync(ct))
             .OrderByDescending(x => x.CreatedUtc)
             .ToList();
-        var overflow = byNewest.Skip(_opts.MaxItemsPerUser).Select(x => x.Id).ToList();
-        if (overflow.Count > 0)
-            await db.ClipboardItems.Where(x => overflow.Contains(x.Id)).ExecuteDeleteAsync(ct);
+        var stale = new HashSet<string>(byNewest.Skip(_opts.MaxItemsPerUser).Select(x => x.Id));
+        if (_opts.RetentionMaxAge > TimeSpan.Zero)
+        {
+            var cutoff = DateTimeOffset.UtcNow - _opts.RetentionMaxAge;
+            foreach (var x in byNewest)
+                if (x.CreatedUtc < cutoff) stale.Add(x.Id);
+        }
+        if (stale.Count > 0)
+            await db.ClipboardItems.Where(x => stale.Contains(x.Id)).ExecuteDeleteAsync(ct);
 
         // Image-byte budget: evict oldest images until the running total fits. Ordered
         // client-side for the same DateTimeOffset/SQLite reason as above.
