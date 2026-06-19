@@ -43,5 +43,20 @@ public static class PanelEndpoints
             await context.SignOutAsync(AuthSchemes.Cookie);
             return Results.Redirect("/");
         });
+
+        // GDPR right-to-be-forgotten. Cookie-gated; hard-deletes the signed-in user and EVERY row
+        // scoped to them (accounts, devices, pairs, sync state, clipboard, replica/prefix rules,
+        // identity logins + tokens, magic links), then clears the session cookie so the panel drops
+        // to the sign-in gate. Idempotent — a stale cookie whose user is already gone still 204s.
+        app.MapDelete("/api/account", async (
+            HttpContext context,
+            ICurrentUserAccessor currentUser,
+            IUserStore users,
+            CancellationToken ct) =>
+        {
+            await users.DeleteUserAsync(currentUser.UserId, ct);
+            await context.SignOutAsync(AuthSchemes.Cookie);
+            return Results.NoContent();
+        }).RequireCookie();
     }
 }

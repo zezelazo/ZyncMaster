@@ -311,6 +311,51 @@ public sealed class EfUserStore : IUserStore
         return await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id, ct);
     }
 
+    // GDPR right-to-be-forgotten. Hard-deletes the user and every row scoped to them in ONE
+    // transaction, child tables before their parents (FK-safe regardless of which relationships
+    // declare a cascade). The DataProtection key ring is global infrastructure, NOT user data, so it
+    // is deliberately untouched. Idempotent: a missing user returns false without opening a transaction.
+    public async Task<bool> DeleteUserAsync(string userId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(userId);
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null)
+            return false;
+
+        // Tables keyed by a parent id (not UserId) — resolve the parents up front so we can delete
+        // their children by id.
+        var pairIds = await db.SyncPairs.Where(p => p.UserId == userId).Select(p => p.Id).ToListAsync(ct);
+        var ruleIds = await db.PrefixRules.Where(r => r.UserId == userId).Select(r => r.Id).ToListAsync(ct);
+        var email = user.Email; // magic links are keyed by normalized email, not UserId
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        await db.PrefixRuleDestinations.Where(d => ruleIds.Contains(d.RuleId)).ExecuteDeleteAsync(ct);
+        await db.PrefixRules.Where(r => r.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.ReplicaLinks.Where(r => r.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.SyncRunLocks.Where(l => pairIds.Contains(l.PairId)).ExecuteDeleteAsync(ct);
+        await db.SyncStates.Where(s => s.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.SyncPairs.Where(p => p.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.PendingPairings.Where(p => p.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.Devices.Where(d => d.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.ClipboardItems.Where(c => c.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.ClipboardDeviceSettings.Where(c => c.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.CalendarAccounts.Where(a => a.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.ConnectedAccounts.Where(a => a.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.UserToggles.Where(t => t.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.IdentityRefreshTokens.Where(t => t.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.IdentityAccessTokens.Where(t => t.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.IdentityLogins.Where(l => l.UserId == userId).ExecuteDeleteAsync(ct);
+        if (!string.IsNullOrEmpty(email))
+            await db.MagicLinks.Where(m => m.Email == email).ExecuteDeleteAsync(ct);
+        await db.Users.Where(u => u.Id == userId).ExecuteDeleteAsync(ct);
+
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
     private static IdentityLoginRow NewLogin(
         string userId, string provider, string providerSubject, string email, bool emailVerified) => new()
     {

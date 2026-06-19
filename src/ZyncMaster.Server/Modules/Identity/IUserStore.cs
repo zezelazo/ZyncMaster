@@ -34,4 +34,9 @@ public interface IUserStore
         CancellationToken ct = default);
 
     Task<UserRow?> GetAsync(string id, CancellationToken ct = default);
+
+    // GDPR right-to-be-forgotten: hard-deletes the user and EVERY row scoped to them (accounts,
+    // devices, pairs, sync state, clipboard, replica/prefix rules, identity logins + tokens, magic
+    // links) in one transaction. Idempotent: returns false when the user does not exist.
+    Task<bool> DeleteUserAsync(string userId, CancellationToken ct = default);
 }

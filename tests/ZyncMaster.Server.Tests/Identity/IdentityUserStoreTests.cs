@@ -439,6 +439,61 @@ public class IdentityUserStoreTests
             .WithMessage("*multiple users share verified email*");
     }
 
+    [Fact]
+    public async Task DeleteUser_removes_the_user_and_all_their_data_leaving_others_intact()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+
+        var alice = await store.UpsertByLoginAsync("microsoft", "oid-a", "alice@test", true, "Alice");
+        var bob = await store.UpsertByLoginAsync("microsoft", "oid-b", "bob@test", true, "Bob");
+
+        // Seed each of the cascade's deletion paths for BOTH users: UserId-scoped rows, parent-id-scoped
+        // children (SyncRunLocks by PairId, PrefixRuleDestinations by RuleId), and the email-scoped magic link.
+        await using (var db = h.NewContext())
+        {
+            db.Devices.Add(NewDevice(alice.Id));
+            db.Devices.Add(NewDevice(bob.Id));
+            db.ClipboardItems.Add(new() { Id = "c-a", UserId = alice.Id, OriginDeviceId = "d", CreatedUtc = System.DateTimeOffset.UtcNow });
+            db.ClipboardItems.Add(new() { Id = "c-b", UserId = bob.Id, OriginDeviceId = "d", CreatedUtc = System.DateTimeOffset.UtcNow });
+            db.SyncPairs.Add(new() { Id = "p-a", UserId = alice.Id, Name = "pair" });
+            db.SyncRunLocks.Add(new() { PairId = "p-a" });
+            db.PrefixRules.Add(new() { Id = "r-a", UserId = alice.Id, Prefix = "[x]", MaskTitle = "x" });
+            db.PrefixRuleDestinations.Add(new() { Id = "rd-a", RuleId = "r-a", AccountId = "acc", CalendarId = "cal" });
+            db.MagicLinks.Add(new() { Id = "m-a", TokenHash = "h", Email = "alice@test", Nonce = "n" });
+            await db.SaveChangesAsync();
+        }
+
+        (await store.DeleteUserAsync(alice.Id)).Should().BeTrue();
+
+        await using (var db = h.NewContext())
+        {
+            // Alice: gone everywhere, including the parent-id-scoped children and the magic link.
+            (await db.Users.AnyAsync(u => u.Id == alice.Id)).Should().BeFalse();
+            (await db.IdentityLogins.AnyAsync(l => l.UserId == alice.Id)).Should().BeFalse();
+            (await db.Devices.AnyAsync(d => d.UserId == alice.Id)).Should().BeFalse();
+            (await db.ClipboardItems.AnyAsync(c => c.UserId == alice.Id)).Should().BeFalse();
+            (await db.SyncPairs.AnyAsync(p => p.UserId == alice.Id)).Should().BeFalse();
+            (await db.SyncRunLocks.AnyAsync(l => l.PairId == "p-a")).Should().BeFalse();
+            (await db.PrefixRules.AnyAsync(r => r.UserId == alice.Id)).Should().BeFalse();
+            (await db.PrefixRuleDestinations.AnyAsync(d => d.RuleId == "r-a")).Should().BeFalse();
+            (await db.MagicLinks.AnyAsync(m => m.Email == "alice@test")).Should().BeFalse();
+
+            // Bob: untouched.
+            (await db.Users.AnyAsync(u => u.Id == bob.Id)).Should().BeTrue();
+            (await db.Devices.AnyAsync(d => d.UserId == bob.Id)).Should().BeTrue();
+            (await db.ClipboardItems.AnyAsync(c => c.UserId == bob.Id)).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task DeleteUser_is_idempotent_returns_false_when_missing()
+    {
+        using var h = new EfStoreTestHarness();
+        var store = new EfUserStore(h.Factory);
+        (await store.DeleteUserAsync("does-not-exist")).Should().BeFalse();
+    }
+
     private static ZyncMaster.Server.Data.DeviceRow NewDevice(string userId)
     {
         var suffix = System.Guid.NewGuid().ToString("N")[..6];

@@ -56,6 +56,9 @@ public class DeviceServiceTests
             string provider, string providerSubject, string email, bool emailVerified, string displayName,
             System.Threading.CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<bool> DeleteUserAsync(string userId, System.Threading.CancellationToken ct = default)
+            => Task.FromResult(_byId.Remove(userId));
     }
 
     [Fact]
