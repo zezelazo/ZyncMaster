@@ -4,6 +4,10 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <RootNamespace>ZyncMaster.Server.Tests</RootNamespace>
+    <!-- NU1903: GHSA-2m69-gcr7-jv3q in SQLitePCLRaw.lib.e_sqlite3 (transitive via EF Core Sqlite). It is
+         used ONLY by the in-memory SQLite test database here; production runs on Postgres (Npgsql) and
+         never ships this native lib. Suppressed test-only until a patched SQLitePCLRaw bundle ships. -->
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.8" />
