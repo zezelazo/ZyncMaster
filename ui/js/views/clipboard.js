@@ -299,9 +299,14 @@ export function registerClipboardViews(ctx) {
     const type = clipNormalizeType(item);
     if (clipIsLocked(item)) return 'Waiting for key from your other device';
     if (type === 'text') return (item.text || '').replace(/\s+/g, ' ').trim() || '(empty)';
+    if (type === 'file') return item.preview || item.fileName || 'File';
     if (item.text) return item.text;
     return type === 'image' ? 'Image' : 'File';
   }
+
+  // Files above this size are never synced byte-for-byte (see the engine cap) — they land as a
+  // metadata-only "too large to sync" entry with no Save action. Matches the server MaxBlobBytes.
+  const CLIP_MAX_FILE_BYTES = 100 * 1024 * 1024;
 
   // clipFormatSize — short byte size (mirrors the viewer's formatSize).
   function clipFormatSize(bytes) {
@@ -394,18 +399,41 @@ export function registerClipboardViews(ctx) {
   function clipActionOverlay(item) {
     const overlay = el('div', { class: 'cb-actions' });
 
-    const copyBtn = el('button', {
-      class: 'cb-action cb-action--copy', type: 'button', 'aria-label': 'Copy to clipboard', title: 'Copy',
-      onclick: (e) => {
-        e.stopPropagation();
-        clipCloseOpenOverlay();
-        if (Bridge.available) {
-          Bridge.call('copyClipboardEntry', item.id)
-            .then((r) => { announce(r && r.status === 'ok' ? 'Copied' : 'Could not copy this item.'); })
-            .catch(() => { announce('Could not copy this item.'); });
-        }
-      },
-    }, iconEl('copy', 18, 1.7));
+    // Primary action: a File saves to disk (its bytes are fetched on demand via the lazy blob); a
+    // text/image copies to the OS clipboard. A file over the sync cap was never uploaded — show a
+    // note instead of a Save button.
+    let primary;
+    if (clipNormalizeType(item) === 'file') {
+      const tooLarge = item.sizeBytes != null && Number(item.sizeBytes) > CLIP_MAX_FILE_BYTES;
+      primary = tooLarge
+        ? el('div', { class: 'cb-note', text: 'Too large to sync' })
+        : el('button', {
+            class: 'cb-action cb-action--save', type: 'button', 'aria-label': 'Save file', title: 'Save to Downloads',
+            onclick: (e) => {
+              e.stopPropagation();
+              clipCloseOpenOverlay();
+              if (Bridge.available) {
+                announce('Saving…');
+                Bridge.call('saveClipboardFile', item.id)
+                  .then((r) => { announce(r && r.ok ? 'Saved to Downloads' : 'File not ready yet — try again in a moment.'); })
+                  .catch(() => { announce('Could not save this file.'); });
+              }
+            },
+          }, iconEl('download', 18, 1.7));
+    } else {
+      primary = el('button', {
+        class: 'cb-action cb-action--copy', type: 'button', 'aria-label': 'Copy to clipboard', title: 'Copy',
+        onclick: (e) => {
+          e.stopPropagation();
+          clipCloseOpenOverlay();
+          if (Bridge.available) {
+            Bridge.call('copyClipboardEntry', item.id)
+              .then((r) => { announce(r && r.status === 'ok' ? 'Copied' : 'Could not copy this item.'); })
+              .catch(() => { announce('Could not copy this item.'); });
+          }
+        },
+      }, iconEl('copy', 18, 1.7));
+    }
 
     const trashBtn = el('button', {
       class: 'cb-action cb-action--del', type: 'button', 'aria-label': 'Delete', title: 'Delete',
@@ -420,7 +448,7 @@ export function registerClipboardViews(ctx) {
       },
     }, iconEl('trash', 18, 1.7));
 
-    overlay.append(copyBtn, trashBtn);
+    overlay.append(primary, trashBtn);
     // A tap on the overlay backdrop (not a button) closes it without acting.
     overlay.addEventListener('click', (e) => { if (e.target === overlay) { e.stopPropagation(); clipCloseOpenOverlay(); } });
     return overlay;

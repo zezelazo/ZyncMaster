@@ -493,6 +493,16 @@ public sealed class UiBridge
                 var copied = await _engine.CopyClipboardEntryAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(new { status = copied ? "ok" : "notfound" }, JsonOptions);
             }
+            case "saveClipboardFile":
+            {
+                // Payload is the item id (a bare/quoted string). Fetches the File's bytes from the blob
+                // store on demand and writes them to Downloads. Returns {ok, path} on success, or
+                // {ok:false} when the file is not retrievable yet (still uploading / too large / stale).
+                var savedPath = await _engine.SaveClipboardFileAsync(UnwrapString(message.Payload), ct);
+                return JsonSerializer.Serialize(
+                    savedPath is null ? new { ok = false, path = (string?)null } : new { ok = true, path = (string?)savedPath },
+                    JsonOptions);
+            }
             case "deleteClipboardEntry":
             {
                 // Payload is the item id (a bare/quoted string). The UI already removed the row

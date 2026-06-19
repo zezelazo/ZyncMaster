@@ -491,4 +491,16 @@ html.cb-viewer-page body,
 .cb-action--copy:hover { border-color: var(--azure-edge); box-shadow: 0 0 0 1px var(--azure-edge); }
 .cb-action--del { color: var(--terra); }
 .cb-action--del:hover { border-color: var(--terra-edge); box-shadow: 0 0 0 1px var(--terra-edge); }
+.cb-action--save { color: var(--azure-2); }
+.cb-action--save:hover { border-color: var(--azure-edge); box-shadow: 0 0 0 1px var(--azure-edge); }
 .cb-action:focus-visible { outline: none; box-shadow: var(--focus); }
+/* Inline note shown in the action overlay for a file that is too large to sync (no Save button). */
+.cb-note {
+  display: grid;
+  place-items: center;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}

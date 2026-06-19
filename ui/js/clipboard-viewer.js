@@ -202,7 +202,8 @@ function itemType(item) {
 function titleOf(item) {
   const type = itemType(item);
   if (type === 'text') return (item.text || '').replace(/\s+/g, ' ').trim() || '(empty)';
-  if (item.text) return item.text; // some images/files carry a caption/filename in text
+  if (type === 'file') return item.preview || item.fileName || item.text || 'File';
+  if (item.text) return item.text; // some images carry a caption in text
   return type === 'image' ? 'Image' : 'File';
 }
 

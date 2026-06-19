@@ -289,6 +289,8 @@ public sealed class EngineHost : IDisposable
         // on every paste/copy).
         actions.PasteThroughClipboardService = clipboardService.PasteAsync;
         actions.CopyThroughClipboardService = clipboardService.CopyAsync;
+        // Lazy-blob retrieval: saving a received File fetches its bytes from the blob store on demand.
+        actions.DownloadClipboardFile = clipboardService.DownloadFileAsync;
 
         // Multi-pair scheduler: drives every configured pair on its own cadence. COM-sourced
         // pairs are read locally and pushed; the rest are mirrored server-side. It lists the pairs

@@ -99,6 +99,15 @@ public sealed class EngineActions : IEngineActions, IDisposable
     // WITHOUT a synthetic Ctrl+V. Falls back to the raw sink's SetAsync when unset.
     public Func<ClipboardEntry, CancellationToken, Task>? CopyThroughClipboardService { get; set; }
 
+    // File-retrieval seam (lazy-blob): fetches a received File's bytes from the blob store on demand, so
+    // the bridge can save a synced file to disk. Set by the host to ClipboardService.DownloadFileAsync;
+    // when unset (headless/tests) file save reports "not available".
+    public Func<string, CancellationToken, Task<byte[]?>>? DownloadClipboardFile { get; set; }
+
+    // Where SaveClipboardFileAsync writes a retrieved file. Defaults to the user's Downloads folder;
+    // overridable so tests target a temp directory.
+    public Func<string>? ClipboardFileSaveDirectory { get; set; }
+
     // Supplies the window handle a paste must target: the viewer window captures the foreground HWND
     // BEFORE it opens (the user's real paste target) and the App wires this to surface it. At paste
     // time the foreground window is the viewer itself, so capturing the foreground then (the sink's
@@ -1543,6 +1552,69 @@ public sealed class EngineActions : IEngineActions, IDisposable
         else
             await _clipboardSink.SetAsync(match, ct).ConfigureAwait(false);
         return true;
+    }
+
+    // Saves a received File to disk (the user's Downloads folder by default), fetching its bytes from
+    // the blob store on demand (lazy-blob). Returns the saved path, or null when the item is not a
+    // retrievable file or the blob is not available yet (still uploading, evicted, or over the size cap
+    // so it was never synced). A name clash is de-duplicated ("report (1).pdf"). File bytes are never
+    // auto-applied to the OS clipboard — this is the only path that lands a synced file on disk.
+    public async Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+        if (DownloadClipboardFile is null || _clipboardTransport is null)
+        {
+            _logger.Log(LogLevel.Warning, "Save clipboard file: the clipboard module is not wired on this host.");
+            return null;
+        }
+
+        // Resolve the File entry directly — NOT via ResolveHistoryEntryAsync, whose no-inline-content
+        // guard (built for paste/copy) would reject a File: a File's content is the lazy blob, not inline.
+        var history = await _clipboardTransport.GetHistoryAsync(ct).ConfigureAwait(false);
+        ClipboardEntry? match = null;
+        foreach (var e in history)
+            if (string.Equals(e.Id, id, StringComparison.Ordinal)) { match = e; break; }
+        if (match is null || match.Type != ClipboardEntryType.File)
+            return null;
+
+        var bytes = await DownloadClipboardFile(id, ct).ConfigureAwait(false);
+        if (bytes is null)
+        {
+            _logger.Log(LogLevel.Warning,
+                $"Save clipboard file '{id}': not available yet (still uploading, evicted, or too large to sync).");
+            return null;
+        }
+
+        var dir = ClipboardFileSaveDirectory?.Invoke()
+                  ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        Directory.CreateDirectory(dir);
+        var path = UniquePath(dir, SanitizeFileName(match.FileName ?? "clipboard-file"));
+        await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
+        _logger.Log(LogLevel.Info, $"Saved clipboard file to '{path}' ({bytes.Length} bytes).");
+        return path;
+    }
+
+    // The file name rides from another device — never let it write outside the save folder. Replace any
+    // path-invalid character (separators included) so the result is a plain file name.
+    private static string SanitizeFileName(string name)
+    {
+        foreach (var c in Path.GetInvalidFileNameChars())
+            name = name.Replace(c, '_');
+        return string.IsNullOrWhiteSpace(name) ? "clipboard-file" : name;
+    }
+
+    // Avoids clobbering an existing file: "report.pdf" -> "report (1).pdf" -> "report (2).pdf" ...
+    private static string UniquePath(string dir, string name)
+    {
+        var path = Path.Combine(dir, name);
+        if (!File.Exists(path)) return path;
+        var stem = Path.GetFileNameWithoutExtension(name);
+        var ext = Path.GetExtension(name);
+        for (var n = 1; ; n++)
+        {
+            var candidate = Path.Combine(dir, $"{stem} ({n}){ext}");
+            if (!File.Exists(candidate)) return candidate;
+        }
     }
 
     // Shared resolution for paste/copy: finds the entry by id in the transport history (the history

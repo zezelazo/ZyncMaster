@@ -239,6 +239,9 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<bool> CopyClipboardEntryAsync(string id, CancellationToken ct = default)
         => Task.FromResult(false);
 
+    public Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
+
     public Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
         => Task.CompletedTask;
 

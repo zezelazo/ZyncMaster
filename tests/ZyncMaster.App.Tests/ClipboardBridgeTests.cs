@@ -75,6 +75,8 @@ public class ClipboardBridgeTests
         { PasteArg = id; return Task.FromResult(PasteToReturn); }
         public Task<bool> CopyClipboardEntryAsync(string id, CancellationToken ct = default)
         { CopyArg = id; return Task.FromResult(CopyToReturn); }
+        public Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
         public Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
         { DeleteArg = id; return Task.CompletedTask; }
         public Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)
@@ -1220,6 +1222,71 @@ public class ClipboardBridgeTests
 
         found.Should().BeFalse();
         sink.Verify(s => s.SetAsync(It.IsAny<ClipboardEntry>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static Mock<IClipboardTransport> TransportWith(params ClipboardEntry[] history)
+    {
+        var transport = new Mock<IClipboardTransport>();
+        transport.Setup(t => t.GetHistoryAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ClipboardEntry>)history);
+        return transport;
+    }
+
+    private static ClipboardEntry FileRow(string id, string name, long size) =>
+        new() { Id = id, Type = ClipboardEntryType.File, FileName = name, SizeBytes = size, OriginDeviceId = "dev-1" };
+
+    [Fact]
+    public async Task SaveClipboardFile_writes_the_blob_bytes_to_disk()
+    {
+        var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zm-save-test", Guid.NewGuid().ToString("N"));
+        var bytes = new byte[] { 1, 2, 3, 4, 5 };
+        var actions = BuildEngine(TransportWith(FileRow("f1", "report.pdf", 5)));
+        actions.DownloadClipboardFile = (_, _) => Task.FromResult<byte[]?>(bytes);
+        actions.ClipboardFileSaveDirectory = () => dir;
+
+        var path = await actions.SaveClipboardFileAsync("f1", CancellationToken.None);
+
+        path.Should().NotBeNull();
+        System.IO.File.Exists(path!).Should().BeTrue();
+        (await System.IO.File.ReadAllBytesAsync(path!)).Should().Equal(bytes);
+        System.IO.Path.GetFileName(path!).Should().Be("report.pdf");
+    }
+
+    [Fact]
+    public async Task SaveClipboardFile_when_blob_not_ready_returns_null()
+    {
+        var actions = BuildEngine(TransportWith(FileRow("f1", "report.pdf", 5)));
+        actions.DownloadClipboardFile = (_, _) => Task.FromResult<byte[]?>(null); // not uploaded yet
+        actions.ClipboardFileSaveDirectory = () => System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+
+        (await actions.SaveClipboardFileAsync("f1", CancellationToken.None)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SaveClipboardFile_non_file_item_returns_null_without_fetching()
+    {
+        var downloaded = false;
+        var actions = BuildEngine(TransportWith(
+            new ClipboardEntry { Id = "t1", Type = ClipboardEntryType.Text, Text = "hi", OriginDeviceId = "dev-1" }));
+        actions.DownloadClipboardFile = (_, _) => { downloaded = true; return Task.FromResult<byte[]?>(new byte[] { 1 }); };
+
+        (await actions.SaveClipboardFileAsync("t1", CancellationToken.None)).Should().BeNull();
+        downloaded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SaveClipboardFile_dedupes_name_on_clash()
+    {
+        var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zm-save-test", Guid.NewGuid().ToString("N"));
+        var actions = BuildEngine(TransportWith(FileRow("f1", "report.pdf", 1)));
+        actions.DownloadClipboardFile = (_, _) => Task.FromResult<byte[]?>(new byte[] { 7 });
+        actions.ClipboardFileSaveDirectory = () => dir;
+
+        var first = await actions.SaveClipboardFileAsync("f1", CancellationToken.None);
+        var second = await actions.SaveClipboardFileAsync("f1", CancellationToken.None);
+
+        System.IO.Path.GetFileName(first!).Should().Be("report.pdf");
+        System.IO.Path.GetFileName(second!).Should().Be("report (1).pdf");
     }
 
     [Fact]

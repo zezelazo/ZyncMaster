@@ -421,6 +421,8 @@ public class UiBridgeTests
         public bool PasteClipboardEntryToReturn = true;
         public string? CopyClipboardEntryArg;
         public bool CopyClipboardEntryToReturn = true;
+        public string? SaveClipboardFileArg;
+        public string? SaveClipboardFileToReturn;
         public string? DeleteClipboardEntryArg;
         public string? SetClipboardHotkeyArg;
         public int CloseClipboardViewerCalls;
@@ -471,6 +473,13 @@ public class UiBridgeTests
             if (Throw != null) await Throw();
             CopyClipboardEntryArg = id;
             return CopyClipboardEntryToReturn;
+        }
+
+        public async Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default)
+        {
+            if (Throw != null) await Throw();
+            SaveClipboardFileArg = id;
+            return SaveClipboardFileToReturn;
         }
 
         public async Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
@@ -588,6 +597,36 @@ public class UiBridgeTests
         var reply = LastReply(transport);
         reply.GetProperty("correlationId").GetString().Should().Be("c2");
         reply.GetProperty("ok").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void SaveClipboardFile_dispatches_id_and_replies_with_path()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { SaveClipboardFileToReturn = @"C:\Users\me\Downloads\report.pdf" };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("saveClipboardFile", "cs1", "\"f1\""));
+
+        engine.SaveClipboardFileArg.Should().Be("f1");
+        var reply = LastReply(transport);
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("ok").GetBoolean().Should().BeTrue();
+        payload.GetProperty("path").GetString().Should().Be(@"C:\Users\me\Downloads\report.pdf");
+    }
+
+    [Fact]
+    public void SaveClipboardFile_replies_not_ok_when_unavailable()
+    {
+        var transport = new FakeTransport();
+        var engine = new FakeEngineActions { SaveClipboardFileToReturn = null };
+        _ = new UiBridge(transport, engine);
+
+        transport.PushInbound(Message("saveClipboardFile", "cs2", "\"f1\""));
+
+        var reply = LastReply(transport);
+        var payload = JsonSerializer.Deserialize<JsonElement>(reply.GetProperty("payload").GetString()!);
+        payload.GetProperty("ok").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

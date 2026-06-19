@@ -190,6 +190,11 @@ public interface IEngineActions
     // clean no-op) when it was not.
     Task<bool> CopyClipboardEntryAsync(string id, CancellationToken ct = default);
 
+    // Saves a received File item to disk (the user's Downloads folder), fetching its bytes from the
+    // blob store on demand (lazy-blob). Returns the saved path, or null when the item is not a
+    // retrievable file or the blob is not available yet (still uploading, evicted, or over the cap).
+    Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default);
+
     // Deletes the history entry with the given id on the server (DELETE /api/clipboard/items/{id}).
     // User-scoped, so a stale/foreign id is a clean no-op; the deletion is fanned out to the user's
     // other devices so their open clipboard screens drop the row live. No confirmation is implied here
