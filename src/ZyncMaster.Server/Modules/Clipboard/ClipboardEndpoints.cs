@@ -95,6 +95,45 @@ public static class ClipboardEndpoints
             return Results.Ok(new { id = item.Id });
         }).RequireApiKey();
 
+        // POST a lazy blob — the heavy bytes of a File item, streamed to the off-DB blob store under the
+        // resolved user (the metadata item is published separately via POST /items). Device-only. Capped
+        // at MaxBlobBytes: a larger body is 413, and the client instead publishes a metadata-only "too
+        // large to sync" entry. The id is the owning item's id.
+        app.MapPost("/api/clipboard/blobs/{id}", async (
+            string id,
+            HttpContext http,
+            IClipboardBlobStore blobs,
+            Microsoft.Extensions.Options.IOptions<ClipboardOptions> opts,
+            ICurrentUserAccessor currentUser,
+            CancellationToken ct) =>
+        {
+            var max = opts.Value.MaxBlobBytes;
+            if (http.Request.ContentLength is { } len && len > max)
+                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+            // Raise Kestrel's per-request body cap for THIS upload (the ~28 MB default would truncate a
+            // large file). nginx's client_max_body_size must also allow it at the edge.
+            var sizeFeature = http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+            if (sizeFeature is { IsReadOnly: false })
+                sizeFeature.MaxRequestBodySize = max;
+            await blobs.SaveAsync(currentUser.UserId, id, http.Request.Body, ct);
+            return Results.Ok(new { id });
+        }).RequireApiKey();
+
+        // GET a lazy blob — stream the bytes back, or 404 when missing (never uploaded / evicted by
+        // retention). Same read auth as the history so the App, the floating viewer and the web panel
+        // can all fetch it on paste.
+        app.MapGet("/api/clipboard/blobs/{id}", async (
+            string id,
+            IClipboardBlobStore blobs,
+            ICurrentUserAccessor currentUser,
+            CancellationToken ct) =>
+        {
+            var stream = await blobs.OpenReadAsync(currentUser.UserId, id, ct);
+            return stream is null
+                ? Results.NotFound()
+                : Results.Stream(stream, "application/octet-stream");
+        }).RequireCookieOrApiKeyOrIdentityBearer();
+
         // DELETE one history entry — user-scoped removal, then fan out a {type:"deleted", id} frame to
         // the user's OTHER devices so their clipboard screen / floating viewer drop the row live. Accepts
         // the same three schemes as the reads: the human panel (cookie), the signed-in App (identity

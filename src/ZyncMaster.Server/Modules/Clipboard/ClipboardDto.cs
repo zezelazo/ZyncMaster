@@ -57,10 +57,16 @@ public static class ClipboardDto
             OriginDeviceId = req.OriginDeviceId,
             OriginDeviceName = req.OriginDeviceName,
             CreatedUtc = DateTimeOffset.UtcNow,
-            // The server is authoritative on image size: use the ACTUAL decoded payload length,
-            // never the client-supplied SizeBytes (which could understate it to slip past the
-            // store's HardMax / per-user image-total guards). Text carries no size.
-            SizeBytes = type == ClipboardItemType.Image ? payload.Length : null,
+            // Image size is authoritative from the ACTUAL decoded payload length, never the
+            // client-supplied SizeBytes (which could understate it to slip past the store's HardMax /
+            // per-user image-total guards). A File has no inline payload — its bytes live in the blob
+            // store — so its size is the client-reported SizeBytes. Text carries no size.
+            SizeBytes = type switch
+            {
+                ClipboardItemType.Image => payload.Length,
+                ClipboardItemType.File => req.SizeBytes,
+                _ => null,
+            },
             Payload = payload,
             Thumbnail = string.IsNullOrEmpty(req.ThumbnailBase64)
                 ? null

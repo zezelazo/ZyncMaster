@@ -19,15 +19,18 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
 {
     private readonly IDbContextFactory<ZyncMasterDbContext> _factory;
     private readonly ICurrentUserAccessor _user;
+    private readonly IClipboardBlobStore _blobs;
     private readonly ClipboardOptions _opts;
 
     public EfClipboardHistoryStore(
         IDbContextFactory<ZyncMasterDbContext> factory,
         ICurrentUserAccessor user,
+        IClipboardBlobStore blobs,
         IOptions<ClipboardOptions> opts)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _user = user ?? throw new ArgumentNullException(nameof(user));
+        _blobs = blobs ?? throw new ArgumentNullException(nameof(blobs));
         _opts = (opts ?? throw new ArgumentNullException(nameof(opts))).Value;
     }
 
@@ -51,7 +54,7 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
         // for its DateTimeOffset predicates. Correct on both providers; deleted by id in one round-trip.
         var byNewest = (await db.ClipboardItems
                 .Where(x => x.UserId == _user.UserId)
-                .Select(x => new { x.Id, x.CreatedUtc })
+                .Select(x => new { x.Id, x.Type, x.CreatedUtc })
                 .ToListAsync(ct))
             .OrderByDescending(x => x.CreatedUtc)
             .ToList();
@@ -63,7 +66,15 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
                 if (x.CreatedUtc < cutoff) stale.Add(x.Id);
         }
         if (stale.Count > 0)
+        {
             await db.ClipboardItems.Where(x => stale.Contains(x.Id)).ExecuteDeleteAsync(ct);
+            // An evicted File leaves its bytes on disk — delete the blob too, or retention would free
+            // the metadata row but never the actual space. Best-effort (the blob store swallows misses).
+            foreach (var fileId in byNewest
+                         .Where(x => stale.Contains(x.Id) && x.Type == nameof(ClipboardItemType.File))
+                         .Select(x => x.Id))
+                await _blobs.DeleteAsync(_user.UserId, fileId, ct);
+        }
 
         // Image-byte budget: evict oldest images until the running total fits. Ordered
         // client-side for the same DateTimeOffset/SQLite reason as above.
@@ -124,9 +135,16 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
     {
         ArgumentNullException.ThrowIfNull(id);
         await using var db = await _factory.CreateDbContextAsync(ct);
+        // Note the type before deleting so a File's blob can be cleaned up after the row is gone.
+        var type = await db.ClipboardItems.AsNoTracking()
+            .Where(x => x.UserId == _user.UserId && x.Id == id)
+            .Select(x => x.Type)
+            .FirstOrDefaultAsync(ct);
         await db.ClipboardItems
             .Where(x => x.UserId == _user.UserId && x.Id == id)
             .ExecuteDeleteAsync(ct);
+        if (type == nameof(ClipboardItemType.File))
+            await _blobs.DeleteAsync(_user.UserId, id, ct);
     }
 
     private static ClipboardItemRow ToRow(ClipboardItem i) => new()

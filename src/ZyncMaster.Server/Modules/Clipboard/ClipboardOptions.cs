@@ -15,6 +15,13 @@ public sealed class ClipboardOptions
     // and image-byte caps), so the clipboard stays a short rolling buffer rather than an ever-growing
     // log on disk. TimeSpan.Zero (or negative) disables age eviction. Default 24h.
     public TimeSpan RetentionMaxAge { get; set; } = TimeSpan.FromHours(24);
+
+    // Lazy-blob storage. Image/file bytes live OUTSIDE the DB as files under this root (keyed by
+    // userId/itemId); only metadata + thumbnail stay on the row. Empty => a "clipboard-blobs" folder
+    // under the server content root. MaxBlobBytes is the hard ceiling for a single uploaded blob (a
+    // file/image larger than this is not synced byte-for-byte; the client shows it as a link entry).
+    public string BlobRoot { get; set; } = "";
+    public long MaxBlobBytes { get; set; } = 100L * 1024 * 1024;
 }
 
 // Thrown by the history store when a single image exceeds the hard ceiling and must be

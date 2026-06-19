@@ -2,9 +2,10 @@ using FluentValidation;
 
 namespace ZyncMaster.Server;
 
-// Body for publishing a clipboard item to the user's shared history. PayloadBase64 is the
-// item bytes (E2E ciphertext for Text; readable image bytes for Image). File is rejected in
-// F1a — the validator blocks it explicitly.
+// Body for publishing a clipboard item to the user's shared history. Text/Image carry their bytes in
+// PayloadBase64 (E2E ciphertext for Text; readable image bytes for Image). A File carries ONLY metadata
+// here — Preview is the file name, SizeBytes its size — and its bytes are uploaded separately to the
+// lazy-blob endpoint (POST /api/clipboard/blobs/{id}), so PayloadBase64 is empty for a File.
 public sealed record PublishItemRequest(
     string Id, string Type, string OriginDeviceId, string? OriginDeviceName,
     long? SizeBytes, string PayloadBase64, string? ThumbnailBase64, string? Preview);
@@ -16,8 +17,12 @@ public sealed class PublishItemRequestValidator : AbstractValidator<PublishItemR
         RuleFor(x => x.Id).NotEmpty().MaximumLength(64);
         RuleFor(x => x.Type).Must(t => t is "Text" or "Image" or "File");
         RuleFor(x => x.OriginDeviceId).NotEmpty().MaximumLength(64);
-        RuleFor(x => x.PayloadBase64).NotEmpty();
-        RuleFor(x => x.Type).Must(t => t != "File").WithMessage("Files are not supported in F1a.");
+        // Text/Image must carry their bytes inline; a File carries only metadata (bytes go via /blobs).
+        RuleFor(x => x.PayloadBase64).NotEmpty().When(x => x.Type is "Text" or "Image");
+        // A File item must name the file (shown in history; its bytes are fetched lazily by id) and
+        // report its size (so the UI can show it and decide too-large-to-sync).
+        RuleFor(x => x.Preview).NotEmpty().MaximumLength(260).When(x => x.Type == "File");
+        RuleFor(x => x.SizeBytes).NotNull().GreaterThanOrEqualTo(0).When(x => x.Type == "File");
     }
 }
 

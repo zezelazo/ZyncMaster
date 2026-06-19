@@ -311,6 +311,17 @@ builder.Services.AddSingleton<ClipboardConnectionRegistry>();
 builder.Services.AddSingleton<ClipboardBroadcaster>();
 builder.Services.AddSingleton<IClipboardHistoryStore, EfClipboardHistoryStore>();
 builder.Services.AddSingleton<IClipboardSettingsStore, EfClipboardSettingsStore>();
+// Lazy-blob store: image/file bytes on disk, outside the DB. Root from ClipboardOptions.BlobRoot,
+// else a "clipboard-blobs" folder under the content root.
+builder.Services.AddSingleton<IClipboardBlobStore>(sp =>
+{
+    var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ClipboardOptions>>().Value;
+    var env = sp.GetRequiredService<IWebHostEnvironment>();
+    var root = string.IsNullOrWhiteSpace(opts.BlobRoot)
+        ? System.IO.Path.Combine(env.ContentRootPath, "clipboard-blobs")
+        : opts.BlobRoot;
+    return new DiskClipboardBlobStore(root);
+});
 
 // Track C — plan/entitlements seam. Today's impl returns everything unlocked (∩ the user's
 // toggles). SWAP: replace DefaultEntitlementsService with PlanBasedEntitlementsService here (one

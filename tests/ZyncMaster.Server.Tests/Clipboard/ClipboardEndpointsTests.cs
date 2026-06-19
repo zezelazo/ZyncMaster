@@ -142,20 +142,85 @@ public class ClipboardEndpointsTests
     }
 
     [Fact]
-    public async Task Publish_File_type_returns_400()
+    public async Task Publish_File_without_a_name_returns_400()
     {
         using var h = new Harness();
         var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
         var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
 
+        // A File must carry its name (preview) + size; one without a name is rejected.
         var resp = await device.PostAsJsonAsync("/api/clipboard/items",
-            PublishBody("file-1", "File", "dev-a", B64("data"), sizeBytes: 4));
+            PublishBody("file-1", "File", "dev-a", "", sizeBytes: 4));
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-
-        // Nothing was persisted for the rejected File item.
         var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
         history.GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Publish_File_metadata_is_accepted_and_listed()
+    {
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        // A File carries only metadata here (name in preview, size); the bytes go via the blob endpoint.
+        var resp = await device.PostAsJsonAsync("/api/clipboard/items",
+            PublishBody("file-1", "File", "dev-a", "", sizeBytes: 4096, preview: "report.pdf"));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var history = await device.GetFromJsonAsync<JsonElement>("/api/clipboard/history");
+        history.GetArrayLength().Should().Be(1);
+        history[0].GetProperty("type").GetString().Should().Be("File");
+        history[0].GetProperty("preview").GetString().Should().Be("report.pdf");
+        history[0].GetProperty("sizeBytes").GetInt64().Should().Be(4096);
+    }
+
+    [Fact]
+    public async Task Blob_upload_then_download_round_trips()
+    {
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        var bytes = new byte[] { 1, 2, 3, 4, 5 };
+        var up = await device.PostAsync("/api/clipboard/blobs/file-1", new ByteArrayContent(bytes));
+        up.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var down = await device.GetAsync("/api/clipboard/blobs/file-1");
+        down.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await down.Content.ReadAsByteArrayAsync()).Should().Equal(bytes);
+    }
+
+    [Fact]
+    public async Task Blob_download_missing_returns_404()
+    {
+        using var h = new Harness();
+        var userId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var device = h.DeviceClient(await h.AddDeviceForUserAsync(userId));
+
+        (await device.GetAsync("/api/clipboard/blobs/never-uploaded")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Blob_upload_without_auth_returns_401()
+    {
+        using var h = new Harness();
+        var resp = await h.Anonymous().PostAsync("/api/clipboard/blobs/file-1", new ByteArrayContent(new byte[] { 1 }));
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Blob_is_user_scoped_other_user_gets_404()
+    {
+        using var h = new Harness();
+        var aId = await h.SignInAndUserIdAsync("oid-a", "alice@test", "Alice");
+        var alice = h.DeviceClient(await h.AddDeviceForUserAsync(aId));
+        await alice.PostAsync("/api/clipboard/blobs/file-1", new ByteArrayContent(new byte[] { 9 }));
+
+        var bId = await h.SignInAndUserIdAsync("oid-b", "bob@test", "Bob");
+        var bob = h.DeviceClient(await h.AddDeviceForUserAsync(bId, "Bob-Laptop"));
+        (await bob.GetAsync("/api/clipboard/blobs/file-1")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
