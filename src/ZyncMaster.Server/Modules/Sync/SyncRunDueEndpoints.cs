@@ -56,8 +56,16 @@ public static class SyncRunDueEndpoints
             // (spec §11 — the VPS crontab is the only scheduler). Additive response key.
             var calendar = await replicaRunner.RunAsync(ct);
 
+            // The endpoint returns 200 even when individual pairs failed (it RAN fine; the failures are
+            // per-pair data, and the cron caller must not retry the whole batch on one bad pair). The
+            // top-level `hadFailures` flag is the monitor-friendly signal: a dead-man's switch / uptime
+            // check can branch on it without parsing every nested count. The per-failure detail is
+            // logged at Warning by the runners (CronSyncRunner / ReplicaSyncRunner).
+            var hadFailures = summary.Failed > 0 || calendar.Failed > 0;
+
             return Results.Ok(new
             {
+                hadFailures,
                 ran = summary.Ran,
                 skipped = summary.Skipped,
                 failed = summary.Failed,

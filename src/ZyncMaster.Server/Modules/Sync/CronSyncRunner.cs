@@ -177,13 +177,22 @@ public sealed class CronSyncRunner
             }
         }
 
-        // FIX 5 — one Info line per run summarising the outcome, so "it doesn't sync" can be
-        // diagnosed from the logs alone (due/ran/skipped with the skip reasons broken out).
-        _logger.LogInformation(
+        // FIX 5 — one line per run summarising the outcome, so "it doesn't sync" can be diagnosed
+        // from the logs alone (due/ran/skipped with the skip reasons broken out). Escalated to
+        // Warning when ANY pair failed, so a log-based alert (or a `grep [Warning]`) catches a run
+        // that completed-but-failed — the endpoint itself still returns 200 (it ran fine; the failures
+        // are per-pair data), so the Warning line is the monitoring signal.
+        var summaryTemplate =
             "Cron run-due summary: due={Due} ran={Ran} skipped={Skipped} failed={Failed} " +
-            "(covered={Covered} comPinned={ComPinned} gated={Gated} lockBusy={LockBusy}).",
-            dueRows.Count, summary.Ran, summary.Skipped, summary.Failed,
-            covered_, comPinned, gated, lockBusy);
+            "(covered={Covered} comPinned={ComPinned} gated={Gated} lockBusy={LockBusy}).";
+        if (summary.Failed > 0)
+            _logger.LogWarning(summaryTemplate,
+                dueRows.Count, summary.Ran, summary.Skipped, summary.Failed,
+                covered_, comPinned, gated, lockBusy);
+        else
+            _logger.LogInformation(summaryTemplate,
+                dueRows.Count, summary.Ran, summary.Skipped, summary.Failed,
+                covered_, comPinned, gated, lockBusy);
 
         return summary;
     }
