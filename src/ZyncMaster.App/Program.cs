@@ -1,7 +1,10 @@
 ﻿using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
+using ZyncMaster.Core;
 
 namespace ZyncMaster.App;
 
@@ -31,6 +34,19 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Last-resort crash logging. An exception that escapes a background thread, or an un-awaited
+        // faulted Task, would otherwise tear the process down with no trace — the class of failure
+        // that left users with a vanished tray app and an empty log. Hook the two process-level
+        // escalation points so a crash lands in the same logs dir the rest of the app writes to,
+        // for post-mortem diagnosis. Registered FIRST so it covers startup faults too.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            WriteCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            WriteCrash("TaskScheduler.UnobservedTaskException", e.Exception);
+            e.SetObserved(); // stop the un-awaited faulted Task from escalating to a process kill
+        };
+
         // Must run before any window is shown so the shell associates the taskbar entry with
         // this app's icon rather than a derived generic one. Best effort: only Windows 7+ has
         // the API, and a failure here must never block startup.
@@ -69,6 +85,22 @@ internal static class Program
             ShowWindowSignal.Dispose();
             ShowWindowSignal = null;
         }
+    }
+
+    // Self-contained, never-throws crash writer. It runs at the worst possible moment (the process is
+    // dying), so it must NOT depend on the composed IAppLogger / DI — it writes straight to the log
+    // directory. Appends to a dedicated crash.log so a post-mortem is one file away. Any failure here
+    // is swallowed: the app is already going down and the crash handler must never make it worse.
+    private static void WriteCrash(string source, Exception? ex)
+    {
+        try
+        {
+            var dir = DailyFileLogger.DefaultLogDirectory();
+            Directory.CreateDirectory(dir);
+            var line = $"{DateTimeOffset.UtcNow:O} [CRASH] {source}: {ex?.ToString() ?? "(no exception object)"}{Environment.NewLine}";
+            File.AppendAllText(Path.Combine(dir, "crash.log"), line);
+        }
+        catch { /* dying anyway — never throw from the crash handler */ }
     }
 
     // Avalonia configuration, shared by the entry point and the previewer.
