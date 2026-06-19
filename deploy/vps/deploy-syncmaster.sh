@@ -27,6 +27,42 @@ if [[ ! -d "$STAGING/publish" || ! -f "$STAGING/efbundle" ]]; then
     exit 1
 fi
 
+# --- Rollback safety -------------------------------------------------------------------------------
+# A failed swap / migration / restart used to leave the service DOWN on a half-applied deploy with
+# nothing to revert to. Snapshot the live build (cp -al = hardlinks, ~free) before touching it, and
+# on ANY error restore it + restart. The snapshot is removed only after the new build proves healthy.
+readonly PREV_DIR="${SERVICE_DIR}.prev"
+rollback() {
+    echo "ERROR: deploy failed — rolling back to the previous build." >&2
+    if [[ -d "$PREV_DIR" ]]; then
+        rsync -a --delete "$PREV_DIR/" "$SERVICE_DIR/"
+        systemctl restart "$SERVICE" || true
+        echo "Rolled back to the previous build." >&2
+    else
+        echo "No previous build to roll back to ($PREV_DIR missing)." >&2
+    fi
+}
+trap rollback ERR
+
+# In-process health gate: the service is "up" only if it answers /health on the loopback backend. A
+# restart that returns 0 but then crashes on bad config would otherwise pass and bin the snapshot.
+health_check() {
+    local code
+    for _ in $(seq 1 12); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5007/zync/health || true)
+        [[ "$code" == "200" ]] && return 0
+        sleep 3
+    done
+    echo "Health check failed after restart (last code: ${code:-none})." >&2
+    return 1
+}
+
+if [[ -d "$SERVICE_DIR" ]]; then
+    rm -rf "$PREV_DIR"
+    cp -al "$SERVICE_DIR" "$PREV_DIR"
+fi
+# ---------------------------------------------------------------------------------------------------
+
 echo "[1/5] Stopping $SERVICE..."
 systemctl stop "$SERVICE" || true
 
@@ -68,5 +104,14 @@ SQL
 echo "[5/5] Restarting $SERVICE..."
 systemctl restart "$SERVICE"
 systemctl --no-pager --lines=0 status "$SERVICE" || true
+
+# Prove the new build is healthy BEFORE we discard the rollback snapshot. A failure here trips the
+# ERR trap, which restores the previous build and restarts it.
+echo "Health check (loopback /zync/health)..."
+health_check
+
+# New build is healthy: drop the rollback snapshot and disarm the trap.
+trap - ERR
+rm -rf "$PREV_DIR"
 
 echo "Done."
