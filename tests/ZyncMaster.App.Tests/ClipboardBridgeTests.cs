@@ -77,6 +77,10 @@ public class ClipboardBridgeTests
         { CopyArg = id; return Task.FromResult(CopyToReturn); }
         public Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default)
         => Task.FromResult<string?>(null);
+        public Task<int?> GetClipboardRetentionAsync(CancellationToken ct = default)
+            => Task.FromResult<int?>(null);
+        public Task SetClipboardRetentionAsync(int? hours, CancellationToken ct = default)
+            => Task.CompletedTask;
         public Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
         { DeleteArg = id; return Task.CompletedTask; }
         public Task SetClipboardHotkeyAsync(string hotkey, CancellationToken ct = default)

@@ -31,6 +31,12 @@ public interface IClipboardTransport
     // key-holder reads this to find which peers are waiting for the E2E text key.
     Task<IReadOnlyList<ClipboardDeviceKeyInfo>> GetDevicesAsync(CancellationToken ct = default);
     Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default);
+
+    // Per-account clipboard retention window (hours). Get returns null when unset (server default
+    // applies); Set accepts null to clear the override. Surfaces the GET/PUT /api/clipboard/retention
+    // endpoints so the App's bridge can read+write the override for the signed-in user.
+    Task<int?> GetRetentionAsync(CancellationToken ct = default);
+    Task SetRetentionAsync(int? hours, CancellationToken ct = default);
     Task ConnectAsync(CancellationToken ct = default);
     event Action<ClipboardEntry> ItemReceived;
     event Action<string, byte[]> KeyReceived;

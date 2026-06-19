@@ -1594,6 +1594,32 @@ public sealed class EngineActions : IEngineActions, IDisposable
         return path;
     }
 
+    // Per-account clipboard retention window (hours). GetClipboardRetentionAsync reads the override
+    // (1..720) or null when unset (server default applies). SetClipboardRetentionAsync writes it;
+    // pass null to clear the override. Server-side range is enforced (1..720) and surfaces as a 400
+    // on the bridge. Both delegate to the transport (GET/PUT /api/clipboard/retention). The transport
+    // is optional, so an unwired host (no server URL yet) reports a clean null / no-op instead of
+    // throwing — the unconfigured bridge already does the same.
+    public async Task<int?> GetClipboardRetentionAsync(CancellationToken ct = default)
+    {
+        if (_clipboardTransport is null)
+        {
+            _logger.Log(LogLevel.Warning, "Get clipboard retention: the clipboard module is not wired on this host.");
+            return null;
+        }
+        return await _clipboardTransport.GetRetentionAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task SetClipboardRetentionAsync(int? hours, CancellationToken ct = default)
+    {
+        if (_clipboardTransport is null)
+        {
+            _logger.Log(LogLevel.Warning, "Set clipboard retention: the clipboard module is not wired on this host.");
+            return;
+        }
+        await _clipboardTransport.SetRetentionAsync(hours, ct).ConfigureAwait(false);
+    }
+
     // The file name rides from another device — never let it write outside the save folder. Replace any
     // path-invalid character (separators included) so the result is a plain file name.
     private static string SanitizeFileName(string name)

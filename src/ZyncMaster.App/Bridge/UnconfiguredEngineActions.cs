@@ -242,6 +242,11 @@ public sealed class UnconfiguredEngineActions : IEngineActions
     public Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default)
         => Task.FromResult<string?>(null);
 
+    public Task<int?> GetClipboardRetentionAsync(CancellationToken ct = default)
+        => Task.FromResult<int?>(null);
+    public Task SetClipboardRetentionAsync(int? hours, CancellationToken ct = default)
+        => Task.CompletedTask;
+
     public Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
         => Task.CompletedTask;
 

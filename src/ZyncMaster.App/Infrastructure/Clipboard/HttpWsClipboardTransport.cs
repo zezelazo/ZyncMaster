@@ -234,6 +234,28 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
         return root["delivered"]?.Value<bool>() ?? false;
     }
 
+    // Per-account clipboard retention (GET/PUT /api/clipboard/retention). GetRetentionAsync returns
+    // null when no override is set (server default applies); SetRetentionAsync accepts null to clear
+    // the override. Body for PUT is { "hours": <int|null> }.
+    public async Task<int?> GetRetentionAsync(CancellationToken ct = default)
+    {
+        var root = await SendAsync(HttpMethod.Get, "/api/clipboard/retention", null, ct).ConfigureAwait(false) as JObject ?? new JObject();
+        var token = root["hours"];
+        if (token is null || token.Type == JTokenType.Null)
+            return null;
+        return token.Value<int?>();
+    }
+
+    public async Task SetRetentionAsync(int? hours, CancellationToken ct = default)
+    {
+        var body = new JObject();
+        if (hours.HasValue)
+            body["hours"] = hours.Value;
+        else
+            body["hours"] = JValue.CreateNull();
+        await SendAsync(HttpMethod.Put, "/api/clipboard/retention", body, ct).ConfigureAwait(false);
+    }
+
     // ----- WebSocket -----
 
     public Task ConnectAsync(CancellationToken ct = default)

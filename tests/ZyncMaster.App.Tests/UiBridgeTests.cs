@@ -482,6 +482,11 @@ public class UiBridgeTests
             return SaveClipboardFileToReturn;
         }
 
+        public Task<int?> GetClipboardRetentionAsync(CancellationToken ct = default)
+            => Task.FromResult<int?>(null);
+        public Task SetClipboardRetentionAsync(int? hours, CancellationToken ct = default)
+            => Task.CompletedTask;
+
         public async Task DeleteClipboardEntryAsync(string id, CancellationToken ct = default)
         {
             if (Throw != null) await Throw();

@@ -195,6 +195,13 @@ public interface IEngineActions
     // retrievable file or the blob is not available yet (still uploading, evicted, or over the cap).
     Task<string?> SaveClipboardFileAsync(string id, CancellationToken ct = default);
 
+    // Per-account clipboard retention window (hours). GetClipboardRetentionAsync returns the
+    // override (1..720) or null when unset (server default applies). SetClipboardRetentionAsync
+    // sets the override; pass null to clear it. Server-side range is enforced (1..720) and surfaces
+    // as a 400 on the bridge. Wires GET/PUT /api/clipboard/retention on the transport.
+    Task<int?> GetClipboardRetentionAsync(CancellationToken ct = default);
+    Task SetClipboardRetentionAsync(int? hours, CancellationToken ct = default);
+
     // Deletes the history entry with the given id on the server (DELETE /api/clipboard/items/{id}).
     // User-scoped, so a stale/foreign id is a clean no-op; the deletion is fanned out to the user's
     // other devices so their open clipboard screens drop the row live. No confirmation is implied here

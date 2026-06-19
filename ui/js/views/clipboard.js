@@ -523,6 +523,36 @@ export function registerClipboardViews(ctx) {
     root.append(card);
   }
 
+  // Per-account retention window (hours). null = server default (24h). Loaded lazily from the server.
+  let clipRetentionHours = null;
+  let clipRetentionLoaded = false;
+  const CLIP_RETENTION_PRESETS = [[1, '1 hour'], [6, '6 hours'], [24, '24 hours (default)'], [72, '3 days'], [168, '7 days']];
+
+  function retentionSelect() {
+    if (!clipRetentionLoaded && Bridge.available) {
+      clipRetentionLoaded = true;
+      Bridge.call('getClipboardRetention')
+        .then((r) => { clipRetentionHours = (r && typeof r.hours === 'number') ? r.hours : null; softRepaint(); })
+        .catch(() => {});
+    }
+    const sel = el('select', { class: 'cfg-select', 'aria-label': 'Clipboard retention' });
+    CLIP_RETENTION_PRESETS.forEach(([h, label]) => {
+      const opt = el('option', { value: String(h), text: label });
+      if ((clipRetentionHours ?? 24) === h) opt.selected = true;
+      sel.append(opt);
+    });
+    sel.addEventListener('change', () => {
+      const hours = parseInt(sel.value, 10);
+      clipRetentionHours = hours;
+      if (Bridge.available) {
+        Bridge.call('setClipboardRetention', hours)
+          .then(() => announce('Retention updated'))
+          .catch(() => announce('Could not update retention'));
+      }
+    });
+    return sel;
+  }
+
   function renderClipboardSettings(root) {
     root.append(viewHeader('Clipboard', { onBack: () => navigate('config') }));
 
@@ -568,7 +598,10 @@ export function registerClipboardViews(ctx) {
           pasteOpacitySlider()),
         cfgRow('Show shortcut hints',
           el('div', { class: 'cfg-row__hint', text: 'Key bar at the foot of the viewer (Rich only)' }),
-          clipToggle(me, 'showHints', { label: 'Show shortcut hints' }))));
+          clipToggle(me, 'showHints', { label: 'Show shortcut hints' })),
+        cfgRow('Keep clipboard for',
+          el('div', { class: 'cfg-row__hint', text: 'Records older than this are deleted automatically' }),
+          retentionSelect()));
     } else {
       root.append(cfgSection('Clipboard · this device',
         cfgRow('This device is not registered yet', el('div', { class: 'cfg-row__hint', text: 'Sign in on this device to manage its clipboard.' }), null)));

@@ -55,6 +55,8 @@ public sealed class ClipboardServiceTests
         }
         public Task<IReadOnlyList<ClipboardDeviceKeyInfo>> GetDevicesAsync(CancellationToken ct = default) =>
             Task.FromResult((IReadOnlyList<ClipboardDeviceKeyInfo>)Array.Empty<ClipboardDeviceKeyInfo>());
+        public Task<int?> GetRetentionAsync(CancellationToken ct = default) => Task.FromResult<int?>(null);
+        public Task SetRetentionAsync(int? hours, CancellationToken ct = default) => Task.CompletedTask;
         public Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default) =>
             Task.FromResult(true);
         public Task UploadBlobAsync(string id, byte[] content, CancellationToken ct = default)

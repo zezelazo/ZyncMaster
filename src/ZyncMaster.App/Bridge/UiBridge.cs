@@ -493,6 +493,18 @@ public sealed class UiBridge
                 var copied = await _engine.CopyClipboardEntryAsync(UnwrapString(message.Payload), ct);
                 return JsonSerializer.Serialize(new { status = copied ? "ok" : "notfound" }, JsonOptions);
             }
+            case "getClipboardRetention":
+            {
+                var hours = await _engine.GetClipboardRetentionAsync(ct);
+                return JsonSerializer.Serialize(new { hours }, JsonOptions);
+            }
+            case "setClipboardRetention":
+            {
+                // Payload is the hours as a bare number (or null).
+                int? hours = int.TryParse(UnwrapString(message.Payload), out var hv) ? hv : (int?)null;
+                await _engine.SetClipboardRetentionAsync(hours, ct);
+                return JsonSerializer.Serialize(new { ok = true }, JsonOptions);
+            }
             case "saveClipboardFile":
             {
                 // Payload is the item id (a bare/quoted string). Fetches the File's bytes from the blob

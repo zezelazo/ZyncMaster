@@ -75,6 +75,9 @@ public sealed class ClipboardKeyAdmissionTests
             return Task.FromResult(Devices);
         }
 
+        public Task<int?> GetRetentionAsync(CancellationToken ct = default) => Task.FromResult<int?>(null);
+        public Task SetRetentionAsync(int? hours, CancellationToken ct = default) => Task.CompletedTask;
+
         public Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default)
         {
             if (RelayFailureFor(targetDeviceId) is { } ex)
