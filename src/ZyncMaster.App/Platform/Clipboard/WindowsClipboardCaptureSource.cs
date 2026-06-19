@@ -88,9 +88,35 @@ public sealed class WindowsClipboardCaptureSource : IClipboardCaptureSource, IDi
             $"(formats: {Win32Clipboard.DescribeAvailableFormats()}). Item dropped.");
     }
 
+    // File-drop capture cap: a file larger than this syncs as metadata only (no bytes). Matches the
+    // server's ClipboardOptions.MaxBlobBytes default (100 MB); the server enforces its own cap on upload.
+    private const long MaxFileBytes = 100L * 1024 * 1024;
+
     private ClipboardEntry? BuildEntry()
     {
         var (id, name) = SafeOrigin();
+
+        // File(s) copied in Explorer ride CF_HDROP. Capture the FIRST file before text/image — a file
+        // copy is the most specific intent. Its bytes ride along only within the cap; a bigger (or
+        // unreadable) file is captured as metadata only and shows as a "too large to sync" entry.
+        var file = Win32Clipboard.TryReadFileDrop(MaxFileBytes);
+        if (file is { } f)
+        {
+            var withBytes = f.Bytes is { Length: > 0 };
+            _logger.Log(LogLevel.Warning,
+                $"Clipboard capture: file '{f.Name}' ({f.Size} bytes, {(withBytes ? "syncing" : "metadata only — over the cap or unreadable")}).");
+            return new ClipboardEntry
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Type = ClipboardEntryType.File,
+                FileName = f.Name,
+                FileBytes = f.Bytes,
+                SizeBytes = f.Size,
+                CreatedUtc = _now(),
+                OriginDeviceId = id,
+                OriginDeviceName = name,
+            };
+        }
 
         // Prefer text; only fall back to an image when there is no text on the board.
         var text = Win32Clipboard.TryReadText();

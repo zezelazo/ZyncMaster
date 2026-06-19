@@ -22,6 +22,7 @@ internal static class Win32
     public const uint CF_BITMAP = 2;
     public const uint CF_DIB = 8;
     public const uint CF_DIBV5 = 17;
+    public const uint CF_HDROP = 15; // a file drop list (the format an Explorer file copy puts down)
 
     // GetDIBits usage: build a DIB whose colour table holds RGB values (vs palette indices).
     public const uint DIB_RGB_COLORS = 0;
@@ -162,6 +163,11 @@ internal static class Win32
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool IsClipboardFormatAvailable(uint format);
+
+    // Queries a CF_HDROP handle. iFile == 0xFFFFFFFF returns the file count; otherwise, a null buffer
+    // returns the required length and a non-null buffer receives the iFile-th path (return = chars copied).
+    [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern uint DragQueryFile(IntPtr hDrop, uint iFile, System.Text.StringBuilder? lpszFile, uint cch);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);

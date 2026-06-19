@@ -93,6 +93,62 @@ internal static class Win32Clipboard
         return null;
     }
 
+    // One file taken off a CF_HDROP file-drop list. Bytes is null when the file is over the size cap
+    // (synced as metadata only) or unreadable (locked / access denied).
+    public readonly record struct FileDrop(string Name, long Size, byte[]? Bytes);
+
+    // Reads the FIRST file off a CF_HDROP copy (the format Explorer puts down when you copy a file).
+    // Returns its name + size, and its bytes when within maxBytes (else null -> a metadata-only entry).
+    // Null when there is no file drop, the entry is a directory, or the file vanished. Best-effort:
+    // never throws, so a capture is never blocked by an unreadable file. Multi-file selections take the
+    // first file only (v1).
+    public static FileDrop? TryReadFileDrop(long maxBytes)
+    {
+        if (!Win32.IsClipboardFormatAvailable(Win32.CF_HDROP))
+            return null;
+        if (!TryOpen(IntPtr.Zero))
+            return null;
+        try
+        {
+            var hDrop = Win32.GetClipboardData(Win32.CF_HDROP);
+            if (hDrop == IntPtr.Zero)
+                return null;
+
+            if (Win32.DragQueryFile(hDrop, 0xFFFFFFFF, null, 0) == 0)
+                return null; // no files in the drop
+
+            var len = Win32.DragQueryFile(hDrop, 0, null, 0);
+            if (len == 0)
+                return null;
+            var sb = new System.Text.StringBuilder((int)len + 1);
+            if (Win32.DragQueryFile(hDrop, 0, sb, (uint)sb.Capacity) == 0)
+                return null;
+            var path = sb.ToString();
+
+            // A copied folder also rides CF_HDROP — we only sync a single file (not a tree) in v1.
+            if (!System.IO.File.Exists(path))
+                return null;
+
+            var info = new System.IO.FileInfo(path);
+            byte[]? bytes = null;
+            if (info.Length <= maxBytes)
+            {
+                try { bytes = System.IO.File.ReadAllBytes(path); }
+                catch (System.IO.IOException) { bytes = null; }            // locked -> metadata only
+                catch (UnauthorizedAccessException) { bytes = null; }      // access denied -> metadata only
+            }
+            return new FileDrop(info.Name, info.Length, bytes);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            Win32.CloseClipboard();
+        }
+    }
+
     // Copies a HGLOBAL-backed clipboard format (CF_DIB / CF_DIBV5) into a managed byte[]. Best-effort.
     private static byte[]? ReadGlobalBlob(uint format)
     {
