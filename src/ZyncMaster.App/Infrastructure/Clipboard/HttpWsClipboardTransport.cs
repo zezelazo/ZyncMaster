@@ -90,6 +90,12 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
                 return;
             body["payloadBase64"] = Convert.ToBase64String(encrypted.CipherText);
         }
+        else if (encrypted.Type == ClipboardEntryType.File)
+        {
+            // File rides as metadata only — name in "preview", size in "sizeBytes". The bytes go to the
+            // blob store via UploadBlobAsync, never on this frame, so payloadBase64 stays absent.
+            body["preview"] = encrypted.FileName;
+        }
         else
         {
             if (encrypted.ImageBytes is { Length: > 0 })
@@ -99,6 +105,37 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
         }
 
         await SendAsync(HttpMethod.Post, "/api/clipboard/items", body, ct).ConfigureAwait(false);
+    }
+
+    public async Task UploadBlobAsync(string id, byte[] content, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        var url = $"{_httpBaseUrl}/api/clipboard/blobs/{Uri.EscapeDataString(id)}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        var apiKey = await _apiKeyProvider(ct).ConfigureAwait(false);
+        request.Headers.Add(ApiKeyHeader, apiKey);
+        request.Content = new ByteArrayContent(content); // raw bytes; the server reads the body verbatim
+        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw new SyncClientException(
+                $"Clipboard blob upload {url} failed with status {(int)response.StatusCode}.",
+                (int)response.StatusCode);
+    }
+
+    public async Task<byte[]?> DownloadBlobAsync(string id, CancellationToken ct = default)
+    {
+        var url = $"{_httpBaseUrl}/api/clipboard/blobs/{Uri.EscapeDataString(id)}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        var apiKey = await _apiKeyProvider(ct).ConfigureAwait(false);
+        request.Headers.Add(ApiKeyHeader, apiKey);
+        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return null; // not yet uploaded / evicted by retention — caller shows "loading" and retries
+        if (!response.IsSuccessStatusCode)
+            throw new SyncClientException(
+                $"Clipboard blob download {url} failed with status {(int)response.StatusCode}.",
+                (int)response.StatusCode);
+        return await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<ClipboardEntry>> GetHistoryAsync(CancellationToken ct = default)
@@ -414,6 +451,11 @@ public sealed class HttpWsClipboardTransport : IClipboardTransport, IDisposable
 
         if (type == ClipboardEntryType.Text)
             return entry with { CipherText = payload };
+
+        if (type == ClipboardEntryType.File)
+            // File: metadata only — name from "preview", size already on the entry. The bytes are
+            // fetched lazily by id via DownloadBlobAsync when the user pastes.
+            return entry with { FileName = obj["preview"]?.Value<string>() };
 
         return entry with
         {

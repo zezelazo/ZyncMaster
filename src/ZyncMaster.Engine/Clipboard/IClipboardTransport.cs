@@ -12,6 +12,13 @@ public interface IClipboardTransport
     Task PublishAsync(ClipboardEntry encrypted, CancellationToken ct = default);
     Task<IReadOnlyList<ClipboardEntry>> GetHistoryAsync(CancellationToken ct = default);
 
+    // Lazy-blob transfer for File items: upload the raw bytes to the blob store keyed by the item id,
+    // and download them on demand. Kept separate from PublishAsync so the item frame stays metadata-only
+    // and the bytes move only when a device actually pastes. DownloadBlobAsync returns null when the
+    // blob is absent (not yet uploaded, or evicted by retention) so the caller can show "loading"/retry.
+    Task UploadBlobAsync(string id, byte[] content, CancellationToken ct = default);
+    Task<byte[]?> DownloadBlobAsync(string id, CancellationToken ct = default);
+
     // Removes one history entry (DELETE /api/clipboard/items/{id}). User-scoped server-side, so an
     // unknown/foreign id is a silent no-op. The server fans a "deleted" frame out to the user's OTHER
     // devices; this caller already removed it locally, so it does not get its own deletion echoed back.

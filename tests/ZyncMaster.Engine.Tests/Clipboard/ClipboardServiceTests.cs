@@ -26,6 +26,7 @@ public sealed class ClipboardServiceTests
     {
         public readonly List<ClipboardEntry> Published = new();
         public readonly List<ClipboardSettings> UpdatedSettings = new();
+        public readonly Dictionary<string, byte[]> Uploaded = new(); // blob id -> bytes
         public Exception? PublishError;
 
         // Optional gate to simulate a SLOW upload (e.g. a multi-MB image): when set, PublishAsync
@@ -56,6 +57,13 @@ public sealed class ClipboardServiceTests
             Task.FromResult((IReadOnlyList<ClipboardDeviceKeyInfo>)Array.Empty<ClipboardDeviceKeyInfo>());
         public Task<bool> RelayKeyAsync(string fromDeviceId, string targetDeviceId, byte[] wrappedKey, CancellationToken ct = default) =>
             Task.FromResult(true);
+        public Task UploadBlobAsync(string id, byte[] content, CancellationToken ct = default)
+        {
+            Uploaded[id] = content;
+            return Task.CompletedTask;
+        }
+        public Task<byte[]?> DownloadBlobAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(Uploaded.TryGetValue(id, out var b) ? b : null);
         public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public event Action<ClipboardEntry>? ItemReceived;
@@ -176,7 +184,73 @@ public sealed class ClipboardServiceTests
         OriginDeviceId = "dev-a",
     };
 
+    private static ClipboardEntry FileEntry(string name, byte[]? bytes, long? size = null) => new()
+    {
+        Id = Guid.NewGuid().ToString(),
+        Type = ClipboardEntryType.File,
+        FileName = name,
+        FileBytes = bytes,
+        SizeBytes = size ?? bytes?.Length,
+        OriginDeviceId = "dev-a",
+    };
+
     private static async Task SettleAsync() => await Task.Delay(50);
+
+    [Fact]
+    public async Task Captured_File_UploadsBlob_ThenPublishesMetadataOnly()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        var bytes = new byte[] { 1, 2, 3, 4, 5 };
+        var entry = FileEntry("report.pdf", bytes);
+
+        h.Capture.Raise(entry);
+        await SettleAsync();
+
+        h.Transport.Uploaded.Should().ContainKey(entry.Id);
+        h.Transport.Uploaded[entry.Id].Should().Equal(bytes);
+        h.Transport.Published.Should().HaveCount(1);
+        var published = h.Transport.Published[0];
+        published.Type.Should().Be(ClipboardEntryType.File);
+        published.FileName.Should().Be("report.pdf");
+        published.SizeBytes.Should().Be(5);
+        published.FileBytes.Should().BeNull(); // bytes never ride the item frame
+    }
+
+    [Fact]
+    public async Task Captured_File_OverCap_PublishesMetadata_WithoutBlob()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        var entry = FileEntry("huge.zip", bytes: null, size: 250L * 1024 * 1024);
+
+        h.Capture.Raise(entry);
+        await SettleAsync();
+
+        h.Transport.Uploaded.Should().BeEmpty();
+        h.Transport.Published.Should().HaveCount(1);
+        h.Transport.Published[0].FileName.Should().Be("huge.zip");
+        h.Transport.Published[0].SizeBytes.Should().Be(250L * 1024 * 1024);
+    }
+
+    [Fact]
+    public async Task Received_File_IsNotAutoApplied_ToOsClipboard()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+
+        h.Transport.RaiseItem(FileEntry("doc.txt", bytes: null, size: 100));
+        await SettleAsync();
+
+        h.Sink.Set.Should().BeEmpty(); // files are never auto-written; the user retrieves them explicitly
+    }
+
+    [Fact]
+    public async Task DownloadFileAsync_ReturnsTheUploadedBlobBytes()
+    {
+        var h = new Harness(TextCrypto.NewKey());
+        var bytes = new byte[] { 9, 8, 7 };
+        await h.Transport.UploadBlobAsync("f1", bytes);
+
+        (await h.Service.DownloadFileAsync("f1")).Should().Equal(bytes);
+    }
 
     [Fact]
     public async Task Captured_Text_IsEncryptedAndPublished_NotInClear()

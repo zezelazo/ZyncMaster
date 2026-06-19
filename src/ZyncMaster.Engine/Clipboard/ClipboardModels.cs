@@ -1,6 +1,6 @@
 namespace ZyncMaster.Engine;
 
-public enum ClipboardEntryType { Text, Image }
+public enum ClipboardEntryType { Text, Image, File }
 
 public sealed record ClipboardEntry
 {
@@ -17,6 +17,13 @@ public sealed record ClipboardEntry
     public DateTimeOffset CreatedUtc { get; init; }
     public string OriginDeviceId { get; init; } = "";
     public string? OriginDeviceName { get; init; }
+
+    // File items: FileName is the display name (rides the wire as the metadata "preview"). FileBytes is
+    // the file content used ONLY locally on the publish side — the service uploads it to the lazy-blob
+    // store, never on the item frame — and is null on receive (the bytes are fetched on demand by id).
+    // A File whose content is over the size cap carries FileName + SizeBytes but FileBytes == null.
+    public string? FileName { get; init; }
+    public byte[]? FileBytes { get; init; }
 }
 
 public sealed record ClipboardSettings

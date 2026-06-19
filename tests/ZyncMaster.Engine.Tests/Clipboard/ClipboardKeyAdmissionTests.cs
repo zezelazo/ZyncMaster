@@ -83,6 +83,8 @@ public sealed class ClipboardKeyAdmissionTests
             return Task.FromResult(DeliveredFor(targetDeviceId));
         }
 
+        public Task UploadBlobAsync(string id, byte[] content, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<byte[]?> DownloadBlobAsync(string id, CancellationToken ct = default) => Task.FromResult<byte[]?>(null);
         public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public event Action<ClipboardEntry> ItemReceived { add { } remove { } }

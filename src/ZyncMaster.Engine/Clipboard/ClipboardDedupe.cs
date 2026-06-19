@@ -66,9 +66,14 @@ public sealed class ClipboardDedupe
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        var payload = entry.Type == ClipboardEntryType.Image
-            ? entry.ImageBytes ?? Array.Empty<byte>()
-            : Encoding.UTF8.GetBytes(entry.Text ?? string.Empty);
+        var payload = entry.Type switch
+        {
+            ClipboardEntryType.Image => entry.ImageBytes ?? Array.Empty<byte>(),
+            // A File has no inline bytes here; key the identity on its name + size so distinct files
+            // hash distinctly (else every File collides to one hash and only the first ever publishes).
+            ClipboardEntryType.File => Encoding.UTF8.GetBytes($"{entry.FileName}|{entry.SizeBytes}"),
+            _ => Encoding.UTF8.GetBytes(entry.Text ?? string.Empty),
+        };
 
         var buffer = new byte[1 + payload.Length];
         buffer[0] = (byte)entry.Type;

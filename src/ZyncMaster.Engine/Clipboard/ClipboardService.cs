@@ -117,6 +117,16 @@ public sealed class ClipboardService
         catch (Exception ex) { _logger.Log(LogLevel.Warning, $"Relayed clipboard key from device '{fromDeviceId}' could not be processed; waiting for the next relay.", ex); }
     }
 
+    // The lazy half of lazy-blob: fetch a received File's bytes from the blob store on demand, for the
+    // App to save under the item's file name. Returns null when the blob is not available yet (still
+    // uploading) or was evicted by retention — the caller shows "not ready, try again". File bytes are
+    // never auto-applied to the OS clipboard, so this is the only path that materialises a synced file.
+    public Task<byte[]?> DownloadFileAsync(string id, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        return _transport.DownloadBlobAsync(id, ct);
+    }
+
     // Every drop on this path is logged with its reason: a user watching the log must be able to
     // tell WHY a copy never reached the other devices. User-intended gates (send off) and echo
     // suppression are Debug noise; everything else — missing key, oversize image, transport
@@ -184,6 +194,34 @@ public sealed class ClipboardService
             // mirror keeps the plaintext entry — only the transport ever sees the ciphertext.
             if (textPublished)
                 ItemPublished?.Invoke(entry);
+            return;
+        }
+
+        if (entry.Type == ClipboardEntryType.File)
+        {
+            var fileSize = entry.SizeBytes ?? entry.FileBytes?.Length ?? 0;
+            // The bytes never ride the item frame: upload them to the blob store first (when present
+            // and within the cap) so the blob is ready by the time the metadata reaches a peer, then
+            // publish the metadata-only item. A file over the cap carries no bytes — it lands as a
+            // "too large to sync" entry (name + size, no blob).
+            var fileEntry = entry with { SizeBytes = fileSize, FileBytes = null, Text = null };
+            var filePublished = false;
+            try
+            {
+                _dedupe.OnNewContentCaptured(hash);
+                _dedupe.MarkPublished(hash);
+                if (entry.FileBytes is { Length: > 0 })
+                    await _transport.UploadBlobAsync(entry.Id, entry.FileBytes, ct).ConfigureAwait(false);
+                await _transport.PublishAsync(fileEntry, ct).ConfigureAwait(false);
+                filePublished = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.Log(LogLevel.Warning, $"Clipboard file publish failed: {ex.Message}", ex);
+            }
+
+            if (filePublished)
+                ItemPublished?.Invoke(fileEntry);
             return;
         }
 
@@ -270,6 +308,16 @@ public sealed class ClipboardService
 
             _keyExchange.ReportDecryptSuccess();
             entry = entry with { Text = plain };
+        }
+
+        if (entry.Type == ClipboardEntryType.File)
+        {
+            // A received File is metadata only — its bytes are not local and files are NOT auto-written
+            // to the OS clipboard. The item lands in the in-app history/viewer; the user retrieves it
+            // explicitly (DownloadFileAsync) which fetches the blob on demand. Nothing to apply here.
+            _logger.Log(LogLevel.Debug,
+                "Clipboard file received: available in the viewer; retrieving it fetches the bytes on demand.");
+            return;
         }
 
         if (!settings.AutoSync)
