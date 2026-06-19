@@ -22,12 +22,31 @@ public class PublishItemRequestValidatorTests
         Sut.Validate(Valid("Image")).IsValid.Should().BeTrue();
     }
 
+    // A File carries only metadata here (its bytes go via the lazy-blob endpoint): name + size are
+    // required, payload is empty.
+    private static PublishItemRequest ValidFile() =>
+        new("id1", "File", "dev1", "Dev One", 4096, "", null, "report.pdf");
+
     [Fact]
-    public void File_publish_is_rejected()
+    public void File_publish_is_accepted_with_name_and_size()
     {
-        var result = Sut.Validate(Valid("File"));
+        Sut.Validate(ValidFile()).IsValid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void File_publish_without_a_name_is_rejected()
+    {
+        var result = Sut.Validate(ValidFile() with { Preview = null });
         result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.ErrorMessage == "Files are not supported in F1a.");
+        result.Errors.Should().Contain(e => e.PropertyName == "Preview");
+    }
+
+    [Fact]
+    public void File_publish_without_a_size_is_rejected()
+    {
+        var result = Sut.Validate(ValidFile() with { SizeBytes = null });
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.PropertyName == "SizeBytes");
     }
 
     [Fact]

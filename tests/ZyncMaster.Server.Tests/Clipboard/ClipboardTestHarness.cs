@@ -53,14 +53,20 @@ internal static class ClipboardTestHarness
     private static Db? _shared;
 
     public static IClipboardHistoryStore HistoryStore(
-        string userId, ClipboardOptions? opts = null, bool shareDb = false)
+        string userId, ClipboardOptions? opts = null, bool shareDb = false, IClipboardBlobStore? blobs = null)
     {
         var db = shareDb ? SharedDb() : new Db();
         return new EfClipboardHistoryStore(
             db.Factory,
             new FixedCurrentUser(userId),
+            blobs ?? TempBlobStore(),
             Options.Create(opts ?? new ClipboardOptions()));
     }
+
+    // A throwaway disk blob store under a unique temp folder, for tests that don't care about blobs.
+    public static IClipboardBlobStore TempBlobStore() =>
+        new DiskClipboardBlobStore(
+            System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zm-clip-test-blobs", System.Guid.NewGuid().ToString("N")));
 
     public static IClipboardSettingsStore SettingsStore(string userId, bool shareDb = false)
     {

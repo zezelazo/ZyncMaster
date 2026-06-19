@@ -18,6 +18,45 @@ public class ClipboardHistoryStoreTests
         Id = id, UserId = "u1", Type = ClipboardItemType.Image, OriginDeviceId = "d1",
         CreatedUtc = t, SizeBytes = size, Payload = new byte[size], Thumbnail = new byte[] { 9 },
     };
+    private static ClipboardItem FileItem(string id, DateTimeOffset t) => new()
+    {
+        Id = id, UserId = "u1", Type = ClipboardItemType.File, OriginDeviceId = "d1",
+        CreatedUtc = t, Preview = id + ".bin", SizeBytes = 10, // File: metadata only; bytes live in the blob store
+    };
+
+    [Fact]
+    public async Task Append_File_stores_metadata_only_no_inline_payload()
+    {
+        var store = ClipboardTestHarness.HistoryStore("u1");
+        await store.AppendAsync(FileItem("f1", DateTimeOffset.UtcNow));
+        var item = (await store.ListAsync()).Single();
+        item.Type.Should().Be(ClipboardItemType.File);
+        item.Preview.Should().Be("f1.bin");
+        item.SizeBytes.Should().Be(10);
+        item.Payload.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Evicting_a_File_deletes_its_blob()
+    {
+        var blobs = ClipboardTestHarness.TempBlobStore();
+        var store = ClipboardTestHarness.HistoryStore("u1", new ClipboardOptions { MaxItemsPerUser = 1 }, blobs: blobs);
+        await blobs.SaveAsync("u1", "f-old", new System.IO.MemoryStream(new byte[] { 1, 2, 3 }));
+        await store.AppendAsync(FileItem("f-old", DateTimeOffset.UtcNow.AddSeconds(1)));
+        await store.AppendAsync(Text("newer", DateTimeOffset.UtcNow.AddSeconds(2))); // FIFO cap 1 evicts f-old
+        (await blobs.OpenReadAsync("u1", "f-old")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Remove_a_File_deletes_its_blob()
+    {
+        var blobs = ClipboardTestHarness.TempBlobStore();
+        var store = ClipboardTestHarness.HistoryStore("u1", blobs: blobs);
+        await blobs.SaveAsync("u1", "f1", new System.IO.MemoryStream(new byte[] { 1 }));
+        await store.AppendAsync(FileItem("f1", DateTimeOffset.UtcNow));
+        await store.RemoveAsync("f1");
+        (await blobs.OpenReadAsync("u1", "f1")).Should().BeNull();
+    }
 
     [Fact]
     public async Task Append_then_List_returns_newest_first()
