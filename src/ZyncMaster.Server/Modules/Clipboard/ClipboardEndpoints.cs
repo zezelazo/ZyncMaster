@@ -1,4 +1,6 @@
 using System.Net.WebSockets;
+using Microsoft.EntityFrameworkCore;
+using ZyncMaster.Server.Data;
 
 namespace ZyncMaster.Server;
 
@@ -26,6 +28,37 @@ public static class ClipboardEndpoints
         {
             var items = await store.ListAsync(ct);
             return Results.Ok(items.Select(ClipboardDto.ToWire));
+        }).RequireCookieOrApiKeyOrIdentityBearer();
+
+        // GET the caller's clipboard retention window (hours), or null when unset (server default applies).
+        app.MapGet("/api/clipboard/retention", async (
+            IDbContextFactory<ZyncMasterDbContext> dbf,
+            ICurrentUserAccessor currentUser,
+            CancellationToken ct) =>
+        {
+            await using var db = await dbf.CreateDbContextAsync(ct);
+            var hours = await db.Users.Where(u => u.Id == currentUser.UserId)
+                .Select(u => u.ClipboardRetentionHours).FirstOrDefaultAsync(ct);
+            return Results.Ok(new { hours });
+        }).RequireCookieOrApiKeyOrIdentityBearer();
+
+        // PUT the caller's clipboard retention window. Body: { "hours": <1..720 | null> }. null clears the
+        // override (server default applies). Out-of-range is 400.
+        app.MapPut("/api/clipboard/retention", async (
+            SetRetentionRequest req,
+            IDbContextFactory<ZyncMasterDbContext> dbf,
+            ICurrentUserAccessor currentUser,
+            CancellationToken ct) =>
+        {
+            if (req.Hours is int h && (h < 1 || h > 720))
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["hours"] = new[] { "Retention must be between 1 and 720 hours, or null for the default." },
+                });
+            await using var db = await dbf.CreateDbContextAsync(ct);
+            var rows = await db.Users.Where(u => u.Id == currentUser.UserId)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.ClipboardRetentionHours, req.Hours), ct);
+            return rows > 0 ? Results.Ok(new { hours = req.Hours }) : Results.NotFound();
         }).RequireCookieOrApiKeyOrIdentityBearer();
 
         // POST publish — validate, decode, append (user-scoped), then fan out to the user's OTHER

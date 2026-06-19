@@ -944,4 +944,48 @@ public class ClipboardEndpointsTests
         history.GetArrayLength().Should().Be(1);
         history[0].GetProperty("sizeBytes").GetInt64().Should().Be(16);
     }
+
+    [Fact]
+    public async Task Retention_get_defaults_to_null()
+    {
+        using var h = new Harness();
+        await h.SignInAndUserIdAsync("oid-r1", "r1@test", "R1");
+        var client = await CookieAuthHelper.SignInAsync(h.Factory);
+
+        var resp = await client.GetAsync("/api/clipboard/retention");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.TryGetProperty("hours", out var hours).Should().BeTrue();
+        hours.ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Retention_put_then_get_roundtrips()
+    {
+        using var h = new Harness();
+        await h.SignInAndUserIdAsync("oid-r2", "r2@test", "R2");
+        var client = await CookieAuthHelper.SignInAsync(h.Factory);
+
+        var put = await client.PutAsJsonAsync("/api/clipboard/retention", new { hours = 6 });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var get = await client.GetAsync("/api/clipboard/retention");
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await get.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("hours").GetInt32().Should().Be(6);
+    }
+
+    [Fact]
+    public async Task Retention_put_out_of_range_returns_400()
+    {
+        using var h = new Harness();
+        await h.SignInAndUserIdAsync("oid-r3", "r3@test", "R3");
+        var client = await CookieAuthHelper.SignInAsync(h.Factory);
+
+        var low = await client.PutAsJsonAsync("/api/clipboard/retention", new { hours = 0 });
+        low.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var high = await client.PutAsJsonAsync("/api/clipboard/retention", new { hours = 1000 });
+        high.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
 }

@@ -68,3 +68,6 @@ public sealed class RelayKeyRequestValidator : AbstractValidator<RelayKeyRequest
         RuleFor(x => x.WrappedKeyBase64).NotEmpty();
     }
 }
+
+// Body for PUT /api/clipboard/retention. Hours null = clear the override (use the server default).
+public sealed record SetRetentionRequest(int? Hours);
