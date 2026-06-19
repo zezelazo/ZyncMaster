@@ -59,9 +59,16 @@ public sealed class EfClipboardHistoryStore : IClipboardHistoryStore
             .OrderByDescending(x => x.CreatedUtc)
             .ToList();
         var stale = new HashSet<string>(byNewest.Skip(_opts.MaxItemsPerUser).Select(x => x.Id));
-        if (_opts.RetentionMaxAge > TimeSpan.Zero)
+        // Per-account retention: this user's ClipboardRetentionHours (if set) overrides the server
+        // default. null => the global RetentionMaxAge. Resolved from the same DbContext, no extra round-trip cost.
+        var userHours = await db.Users
+            .Where(u => u.Id == _user.UserId)
+            .Select(u => u.ClipboardRetentionHours)
+            .FirstOrDefaultAsync(ct);
+        var window = userHours is int h && h > 0 ? TimeSpan.FromHours(h) : _opts.RetentionMaxAge;
+        if (window > TimeSpan.Zero)
         {
-            var cutoff = DateTimeOffset.UtcNow - _opts.RetentionMaxAge;
+            var cutoff = DateTimeOffset.UtcNow - window;
             foreach (var x in byNewest)
                 if (x.CreatedUtc < cutoff) stale.Add(x.Id);
         }

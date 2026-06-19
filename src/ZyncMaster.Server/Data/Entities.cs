@@ -18,6 +18,11 @@ public sealed class UserRow
 
     // Subscription plan slug; null means "everything unlocked" (no plan gating).
     public string? Plan { get; set; }
+
+    // Per-account clipboard retention window, in HOURS. null = use the server default
+    // (ClipboardOptions.RetentionMaxAge, 24h). Clipboard records older than this are evicted on append
+    // AND swept periodically by EphemeralPurgeService. Range enforced by the API: 1..720 (30 days).
+    public int? ClipboardRetentionHours { get; set; }
 }
 
 public sealed class ConnectedAccountRow

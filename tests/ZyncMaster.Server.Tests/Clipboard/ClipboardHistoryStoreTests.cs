@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Xunit;
+using ZyncMaster.Server.Data;
 
 namespace ZyncMaster.Server.Tests.Clipboard;
 
@@ -165,5 +166,32 @@ public class ClipboardHistoryStoreTests
         await store.AppendAsync(Text("drop", DateTimeOffset.UtcNow.AddSeconds(2)));
         await store.RemoveAsync("drop");
         (await store.ListAsync()).Select(i => i.Id).Should().Equal("keep");
+    }
+
+    [Fact]
+    public async Task Append_uses_user_ClipboardRetentionHours_when_set()
+    {
+        // Seed u1 with a 1-hour window on its OWN DB so the store reads it on the next append.
+        // Server default (RetentionMaxAge) is disabled (Zero) so anything kept is because of the
+        // user's window, not the server default. Uses a private DB (not shareDb) so xUnit's
+        // parallel test runs do not race with other tests on the shared connection.
+        var store = ClipboardTestHarness.HistoryStoreWithUserRetention("u1", retentionHours: 1,
+            opts: new ClipboardOptions { RetentionMaxAge = TimeSpan.Zero, MaxItemsPerUser = 100 });
+        await store.AppendAsync(Text("stale", DateTimeOffset.UtcNow.AddHours(-2))); // outside the user's 1h window
+        await store.AppendAsync(Text("fresh", DateTimeOffset.UtcNow.AddMinutes(-1))); // inside the window
+        (await store.ListAsync()).Select(i => i.Id).Should().BeEquivalentTo(new[] { "fresh" });
+    }
+
+    [Fact]
+    public async Task Append_falls_back_to_server_default_when_user_has_no_window()
+    {
+        // No UserRow seeded for u2: ClipboardRetentionHours lookup returns null, so the store falls
+        // back to ClipboardOptions.RetentionMaxAge. Server default = 2h, items outside that window
+        // are evicted on the next append. Uses a private DB so we never collide with parallel runs.
+        var store = ClipboardTestHarness.HistoryStoreWithUserRetention("u2", retentionHours: null,
+            opts: new ClipboardOptions { RetentionMaxAge = TimeSpan.FromHours(2), MaxItemsPerUser = 100 });
+        await store.AppendAsync(Text("stale", DateTimeOffset.UtcNow.AddHours(-3)));
+        await store.AppendAsync(Text("fresh", DateTimeOffset.UtcNow.AddMinutes(-1)));
+        (await store.ListAsync()).Select(i => i.Id).Should().BeEquivalentTo(new[] { "fresh" });
     }
 }

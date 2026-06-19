@@ -16,6 +16,11 @@ namespace ZyncMaster.Server.Tests.Clipboard;
 // stores under different users hit the same physical tables.
 internal static class ClipboardTestHarness
 {
+    // Exposes the shared DbContextFactory for tests that need to seed users / read rows directly
+    // (e.g. the per-user ClipboardRetentionHours window tests). Matches the SQLite connection the
+    // shareDb:true stores run on.
+    public static IDbContextFactory<ZyncMasterDbContext> SharedDbFactory() => SharedDb().Factory;
+
     private sealed class FixedCurrentUser : ICurrentUserAccessor
     {
         public FixedCurrentUser(string userId) => UserId = userId;
@@ -72,6 +77,33 @@ internal static class ClipboardTestHarness
     {
         var db = shareDb ? SharedDb() : new Db();
         return new EfClipboardSettingsStore(db.Factory, new FixedCurrentUser(userId));
+    }
+
+    // Builds a history store on a brand-new in-memory DB, with a UserRow pre-seeded for the given
+    // userId / retentionHours so the per-user window path is exercised end-to-end. Avoids
+    // shareDb:true (race-prone with xUnit parallel test runs).
+    public static IClipboardHistoryStore HistoryStoreWithUserRetention(
+        string userId, int? retentionHours, ClipboardOptions? opts = null, IClipboardBlobStore? blobs = null)
+    {
+        var db = new Db();
+        using (var seed = db.Factory.CreateDbContext())
+        {
+            seed.Users.Add(new UserRow
+            {
+                Id = userId,
+                Provider = "microsoft",
+                Subject = $"subject-{userId}",
+                PrimaryEmail = $"{userId}@test",
+                CreatedUtc = DateTimeOffset.UtcNow,
+                ClipboardRetentionHours = retentionHours,
+            });
+            seed.SaveChanges();
+        }
+        return new EfClipboardHistoryStore(
+            db.Factory,
+            new FixedCurrentUser(userId),
+            blobs ?? TempBlobStore(),
+            Options.Create(opts ?? new ClipboardOptions()));
     }
 
     private static Db SharedDb()

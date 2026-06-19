@@ -29,11 +29,15 @@ public sealed class EphemeralPurgeService : BackgroundService
     private readonly ILogger<EphemeralPurgeService> _logger;
     private readonly TimeSpan _interval;
     private readonly int _pendingPairingTtlMinutes;
+    private readonly IClipboardBlobStore? _blobs;
+    private readonly TimeSpan _clipboardDefaultWindow;
 
     public EphemeralPurgeService(
         IDbContextFactory<ZyncMasterDbContext> factory,
         ILogger<EphemeralPurgeService> logger,
-        IOptions<ServerOptions>? options = null)
+        IOptions<ServerOptions>? options = null,
+        IClipboardBlobStore? blobs = null,
+        IOptions<ClipboardOptions>? clipboardOptions = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -41,6 +45,8 @@ public sealed class EphemeralPurgeService : BackgroundService
         _interval = TimeSpan.FromHours(hours <= 0 ? 6 : hours);
         var ttl = options?.Value.PendingPairingTtlMinutes ?? 15;
         _pendingPairingTtlMinutes = ttl <= 0 ? 15 : ttl;
+        _blobs = blobs;
+        _clipboardDefaultWindow = clipboardOptions?.Value.RetentionMaxAge ?? TimeSpan.FromHours(24);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -110,6 +116,51 @@ public sealed class EphemeralPurgeService : BackgroundService
         var pairings = await db.Database.ExecuteSqlInterpolatedAsync(
             $@"DELETE FROM ""PendingPairings"" WHERE ""CreatedUtc"" < {pairingCutoff}", ct).ConfigureAwait(false);
 
-        return access + refresh + magic + locks + pairings;
+        var clipboard = await PurgeClipboardAsync(now, db, ct).ConfigureAwait(false);
+
+        return access + refresh + magic + locks + pairings + clipboard;
+    }
+
+    // Deletes clipboard records older than each user's retention window (their ClipboardRetentionHours, or
+    // the server default), and removes the on-disk blob of every deleted File. Runs on the same 6h sweep,
+    // so old records are purged even for users who stopped copying (append-time eviction alone would never
+    // fire for them). The slim projection is bounded by the per-user FIFO cap, so materialising it is cheap.
+    private async Task<int> PurgeClipboardAsync(DateTimeOffset now, ZyncMasterDbContext db, CancellationToken ct)
+    {
+        // userId -> window (hours override, else the server default).
+        var users = await db.Users
+            .Select(u => new { u.Id, u.ClipboardRetentionHours })
+            .ToListAsync(ct).ConfigureAwait(false);
+        var windowByUser = users.ToDictionary(
+            u => u.Id,
+            u => u.ClipboardRetentionHours is int h && h > 0 ? TimeSpan.FromHours(h) : _clipboardDefaultWindow);
+
+        // Slim projection (no payloads). DateTimeOffset compare done in memory — SQLite cannot translate it.
+        var items = await db.ClipboardItems
+            .Select(x => new { x.Id, x.UserId, x.Type, x.CreatedUtc })
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var staleIds = new List<string>();
+        var staleFileByUser = new List<(string UserId, string Id)>();
+        foreach (var it in items)
+        {
+            var window = windowByUser.TryGetValue(it.UserId, out var w) ? w : _clipboardDefaultWindow;
+            if (window <= TimeSpan.Zero) continue;          // 0/negative disables age purge for that user
+            if (it.CreatedUtc >= now - window) continue;     // still inside the window
+            staleIds.Add(it.Id);
+            if (it.Type == nameof(ClipboardItemType.File))
+                staleFileByUser.Add((it.UserId, it.Id));
+        }
+
+        if (staleIds.Count == 0) return 0;
+
+        await db.ClipboardItems.Where(x => staleIds.Contains(x.Id)).ExecuteDeleteAsync(ct).ConfigureAwait(false);
+
+        // Best-effort blob cleanup for the deleted files (a missing blob is a no-op in the store).
+        if (_blobs is not null)
+            foreach (var f in staleFileByUser)
+                await _blobs.DeleteAsync(f.UserId, f.Id, ct).ConfigureAwait(false);
+
+        return staleIds.Count;
     }
 }
