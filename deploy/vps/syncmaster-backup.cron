@@ -1,0 +1,7 @@
+# /etc/cron.d/syncmaster-backup — nightly backup of bd_syncmaster at 02:30.
+# Install: sudo install -m 0644 syncmaster-backup.cron /etc/cron.d/syncmaster-backup
+# Logs to /var/log/syncmaster-backup.log. The script reads /etc/default/syncmaster-backup for
+# the off-box target + encryption recipient (see syncmaster-backup.sh header).
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+30 2 * * * root /var/www/devlabperu.com/api/.scripts/syncmaster-backup.sh >> /var/log/syncmaster-backup.log 2>&1

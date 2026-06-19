@@ -131,5 +131,28 @@ La web Angular se sirve como estático puro desde `https://api.devlabperu.com/zy
 Manual: GitHub → Actions → **Deploy SyncMaster (VPS)** → Run workflow. El job compila, genera el
 `efbundle` linux-x64, lo sube + los binarios a staging, corre `deploy-syncmaster.sh` (swap +
 migrate como postgres + restart) y verifica `https://api.devlabperu.com/zync/health`. Todo online,
-sin artifacts. Rollback: el deploy detiene el servicio antes de sincronizar; si el health falla,
-revertí el commit y re-dispará.
+sin artifacts.
+
+## Rollback automático
+
+`deploy-syncmaster.sh` **snapshotea** el build vivo (`cp -al` → `…/syncmaster.prev`) antes de tocarlo,
+hace un **health-gate in-process** contra `127.0.0.1:5007/zync/health` tras el restart, y si el swap /
+migración / restart / health **falla**, un `trap ERR` **restaura el build anterior y reinicia**. El
+snapshot se descarta solo cuando el build nuevo prueba estar sano. (Re-instalá el script en el VPS
+cuando cambie: el workflow corre la copia en `/var/www/devlabperu.com/api/.scripts/`, no la del repo.)
+
+## Backup de la BD (crítico)
+
+`bd_syncmaster` guarda el **key ring de DataProtection + los refresh tokens cifrados** → perder el
+disco = reset total. Instalá el backup nocturno (one-time, como root):
+
+```
+sudo install -m 0755 deploy/vps/syncmaster-backup.sh /var/www/devlabperu.com/api/.scripts/syncmaster-backup.sh
+sudo install -m 0644 deploy/vps/syncmaster-backup.cron /etc/cron.d/syncmaster-backup
+# off-box + cifrado en /etc/default/syncmaster-backup (SYNCMASTER_BACKUP_AGE_RECIPIENT, _RCLONE_REMOTE)
+sudo /var/www/devlabperu.com/api/.scripts/syncmaster-backup.sh   # probar + verificar el restore
+```
+
+`pg_dump -Fc` por peer-auth (sin password), cifra con `age` si hay recipient, copia off-box con
+`rclone` si hay remote, poda local a 14 días. **Configurá el off-box** — un backup en el mismo disco
+no protege de una falla de disco. Detalle en el header de `syncmaster-backup.sh`.
