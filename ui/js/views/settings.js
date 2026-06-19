@@ -220,14 +220,24 @@ export function registerSettingsViews(ctx) {
   // boot (desktop App) and falls back to the hardcoded VERSION constant (web panel / not yet set).
   function aboutSection() {
     const displayVersion = live.appVersion || VERSION;
-    return el('div', { class: 'glass glass--card config-section' },
+    const card = el('div', { class: 'glass glass--card config-section' },
       navRow({ label: 'About Zync Master', sublabel: 'Version, credits, links', value: displayVersion, onClick: () => navigate('about') }));
+    // The App has no auto-update, so when the boot check found a newer GitHub release, surface a
+    // download row right under About (live.updateAvailable is set by app.js's update check).
+    const up = live.updateAvailable;
+    if (up && up.version) {
+      card.append(cfgRow(
+        'Update available',
+        el('div', { class: 'cfg-row__hint', text: `v${up.version} is out · you have ${displayVersion}` }),
+        el('a', { class: 'about-link', href: up.url, target: '_blank', rel: 'noopener noreferrer', text: 'Download' })));
+    }
+    return card;
   }
 
   // ---------------- Screen: About ----------------
   // External destinations. The landing is the product's website/source; release notes ("What's
   // new") live on the GitHub Releases page. Rendered as real <a target="_blank"> links.
-  const ABOUT_WEBSITE_URL = 'https://zyncmaster.azurewebsites.net';
+  const ABOUT_WEBSITE_URL = 'https://api.devlabperu.com/zync/';
   const ABOUT_RELEASES_URL = 'https://github.com/zezelazo/ZyncMaster/releases';
   // Company site (DevLab-Pe), distinct from the product landing above.
   const ABOUT_COMPANY_URL = 'https://devlabperu.com';

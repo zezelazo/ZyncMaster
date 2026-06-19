@@ -320,7 +320,23 @@ if (mql && mql.addEventListener) {
 // getAppVersion at boot and stores it in live.appVersion; all About renders read live.appVersion
 // first and fall back to VERSION when it is not yet set.
 // Mantener sincronizado con <Version> en src/ZyncMaster.App/ZyncMaster.App.csproj.
-const VERSION = '0.4.2';
+const VERSION = '0.4.6';
+
+// isNewerVersion(latest, current) — true when the dotted numeric `latest` is strictly newer than
+// `current` ("0.4.6" > "0.4.5"). Tolerant of missing/non-numeric parts (treated as 0). Drives the
+// "update available" check against the latest GitHub release.
+function isNewerVersion(latest, current) {
+  const parse = (v) => String(v || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const a = parse(latest);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
 const state = {
   view: 'home',          // home | calendar | add-pair | add-calendar | config | about | pairing
   returnTo: 'calendar',  // where add-calendar returns to
@@ -417,6 +433,9 @@ const live = {
   // Host assembly version resolved via getAppVersion at boot (desktop App only). Falls back to
   // the hardcoded VERSION constant until the bridge reply lands (or when running as web panel).
   appVersion: '',
+  // { version, url } when a newer GitHub release than the running build exists (desktop App only);
+  // null otherwise. Drives the "Update available" chip in Settings (the App has no auto-update).
+  updateAvailable: null,
   // ---- Per-pair sync runtime (client-only, this session) ----
   // syncing      — Set of pair ids with a sync in flight. Single-flight: a click while the id is
   //                present is ignored, so the user cannot stack dozens of concurrent runs.
@@ -1872,6 +1891,23 @@ async function boot() {
     Bridge.call('getAppVersion')
       .then((r) => { if (r && r.version) { live.appVersion = r.version; rerenderInPlace(); } })
       .catch(() => {});
+
+    // Update check (desktop App only, no auto-update): compare the running build to the latest GitHub
+    // release so the user finds out a newer version exists. Best-effort — offline / rate-limited fails
+    // are silently ignored. Surfaces as a chip + download link in Settings (live.updateAvailable).
+    if (Bridge.desktopApp) {
+      fetch('https://api.github.com/repos/zezelazo/ZyncMaster/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((rel) => {
+          if (!rel || !rel.tag_name) return;
+          const latest = String(rel.tag_name).replace(/^v/i, '');
+          if (isNewerVersion(latest, live.appVersion || VERSION)) {
+            live.updateAvailable = { version: latest, url: rel.html_url };
+            rerenderInPlace();
+          }
+        })
+        .catch(() => {});
+    }
 
     // Desktop App: warm up the server FIRST. The Azure F1 free tier cold-starts, so before the
     // identity gate (which talks to the server) we ping /health and show "waking up" feedback.
