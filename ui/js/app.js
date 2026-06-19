@@ -320,7 +320,7 @@ if (mql && mql.addEventListener) {
 // getAppVersion at boot and stores it in live.appVersion; all About renders read live.appVersion
 // first and fall back to VERSION when it is not yet set.
 // Mantener sincronizado con <Version> en src/ZyncMaster.App/ZyncMaster.App.csproj.
-const VERSION = '0.4.6';
+const VERSION = '0.4.7';
 
 // isNewerVersion(latest, current) — true when the dotted numeric `latest` is strictly newer than
 // `current` ("0.4.6" > "0.4.5"). Tolerant of missing/non-numeric parts (treated as 0). Drives the
