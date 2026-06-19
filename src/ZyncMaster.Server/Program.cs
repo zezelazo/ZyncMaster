@@ -10,6 +10,11 @@ using ZyncMaster.Server.Infrastructure.Email;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Console logging with scopes on a single line, so the per-request correlation id pushed by the
+// request-id middleware (below) shows on every log line and a single request is traceable across
+// the journal — addressing the "logs without correlation" gap without taking on a metrics/tracing stack.
+builder.Logging.AddSimpleConsole(o => { o.IncludeScopes = true; o.SingleLine = true; });
+
 builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection("Server"));
 builder.Services.Configure<ZyncMaster.Server.Configuration.MailjetOptions>(builder.Configuration.GetSection("Mailjet"));
 
@@ -378,6 +383,22 @@ if (!string.IsNullOrWhiteSpace(pathBase))
     app.UsePathBase(pathBase);
 
 app.UseForwardedHeaders();
+
+// Per-request correlation id. Reuse an upstream X-Request-Id if present (else ASP.NET's per-request
+// TraceIdentifier), echo it back in the response header, and push it into the logging scope so every
+// log line emitted while handling this request carries RequestId — turning a pile of independent log
+// lines into one traceable request. Placed early so it covers the whole pipeline.
+app.Use(async (context, next) =>
+{
+    var requestId = context.Request.Headers["X-Request-Id"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(requestId))
+        requestId = context.TraceIdentifier;
+    context.Response.Headers["X-Request-Id"] = requestId;
+
+    var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ZyncMaster.Request");
+    using (logger.BeginScope(new Dictionary<string, object> { ["RequestId"] = requestId }))
+        await next();
+});
 
 // Security headers (L3). Applied to every response, including static panel/UI assets.
 //   X-Frame-Options: DENY        — the panel is never meant to be framed (clickjacking).
