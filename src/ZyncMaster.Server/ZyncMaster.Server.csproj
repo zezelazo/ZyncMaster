@@ -26,8 +26,12 @@
   <ItemGroup>
     <!-- Bundle the marketing landing (repo-root web/) into wwwroot so the published server
          serves it at the site root. Program.cs serves from ../../web in a local checkout and
-         falls back to this bundled copy in the published layout. -->
+         falls back to this bundled copy in the published layout. EXCLUDE the Angular workspace
+         (web/zync-web) — it is built and deployed separately to /zync-web, and its node_modules
+         (~300 MB) would otherwise be copied into wwwroot, bloating the publish and stalling the
+         build when it is present locally. -->
     <Content Include="..\..\web\**\*"
+             Exclude="..\..\web\zync-web\**"
              Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
     <!-- Bundle the canonical Liquid Glass dashboard UI (repo-root ui/) into wwwroot/app so the
