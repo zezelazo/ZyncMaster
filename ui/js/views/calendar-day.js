@@ -122,10 +122,19 @@ export function registerCalendarDayView(ctx) {
       <button class="btn" id="calDayNext" aria-label="Next">›</button>
       <span class="num" id="calDayLabel"></span>
       <span class="calday-legend" id="calDayLegend"></span>
-      <button class="btn" id="calDayStatus" aria-label="Sync status">Status</button>
+      <button class="btn calday-statusicon" id="calDayStatus" aria-label="Sync status" title="Sync status"></button>
       <button class="btn calday-gear" id="calDayConfig" aria-label="Calendar sync settings" title="Sync settings"></button>
       <button class="btn primary" id="calDayNew">+ New event</button>`;
     head.querySelector('#calDayConfig').appendChild(iconEl('settings', 15, 1.7));
+    // Status button shows a health glyph: a warn triangle when any active pair's last run failed or its
+    // pinned origin device is offline (the same signal status-model.calendarDot uses), else a check.
+    (() => {
+      const raws = (live.pairs || []).filter((p) => p && p.state === 'active');
+      const anyError = raws.some((p) => (p.lastResult && (p.lastResult.failed || 0) > 0) || p.pinnedDeviceOnline === false);
+      const btn = head.querySelector('#calDayStatus');
+      btn.classList.toggle('warn', anyError);
+      btn.appendChild(iconEl(anyError ? 'alert' : 'check', 15, 1.8));
+    })();
     wrap.appendChild(head);
 
     const body = document.createElement('div');
@@ -664,47 +673,18 @@ export function registerCalendarDayView(ctx) {
       el('span', { class: 'calday-status-arrow', html: icon('arrowright', { size: 11, stroke: 1.8 }) }),
       el('span', { class: 'calday-status-name', text: `${vm.dst.svc} · ${vm.dst.acct}` })));
 
-    // Stats: synced / new / last-run / next ETA.
-    const stat = (label, value) => el('span', { class: 'calday-status-stat' },
-      el('span', { class: 'calday-status-stat-lbl', text: label }),
-      el('span', { class: 'calday-status-stat-val num', text: String(value) }));
-    row.append(el('div', { class: 'calday-status-stats' },
-      stat('Synced', syncedCount),
-      stat('New', newCount),
-      stat('Last run', lastRun),
-      stat('Next', nextStr)));
+    // Stats as a label/value form: route endpoints + last-run counts + next ETA.
+    const statLine = (label, value) => el('div', { class: 'calday-status-line' },
+      el('span', { class: 'calday-status-line-lbl', text: label }),
+      el('span', { class: 'calday-status-line-val num', text: String(value) }));
+    row.append(el('div', { class: 'calday-status-form' },
+      statLine('Source', `${vm.src.svc} · ${vm.src.acct}`),
+      statLine('Destination', `${vm.dst.svc} · ${vm.dst.acct}`),
+      statLine('New events', newCount),
+      statLine('Synced', syncedCount),
+      statLine('Last run', lastRun),
+      statLine('Next', nextStr)));
 
-    // Force-sync (run-now). Routes exactly like the pairs card: a COM source on ANOTHER device signals
-    // the origin (syncPairRemote -> requestPairSync), otherwise a local run (runPairNow). Disabled
-    // while a run is in flight (single-flight) or when the origin device is offline / unclaimed, with
-    // the same honest reasons the pairs card surfaces.
-    const comBlocked = vm.comOffline || vm.comUnclaimed;
-    const disabledReason = vm.comOffline
-      ? `Force-sync unavailable — origin device ${vm.pinnedDeviceName || 'is'} is offline`
-      : vm.comUnclaimed
-        ? 'Force-sync unavailable — no source device has claimed this sync yet'
-        : '';
-    const forceBtn = el('button', {
-      class: 'btn btn--ghost calday-status-force', type: 'button',
-      disabled: comBlocked || busy,
-      title: busy ? 'Sync in progress…' : (disabledReason || 'Force-sync now'),
-      'aria-label': busy ? 'Sync in progress' : (disabledReason || 'Force-sync now'),
-      onclick: () => {
-        if (busy) return;                          // single-flight guard at the click site
-        // Fire the run and let the sync-state observer drive every repaint. beginPairSync (inside
-        // runPairNow/syncPairRemote) flips the spinner ON immediately, and endPairSync flips it OFF
-        // AFTER runPairNow/syncPairRemote have already awaited loadPairs() — so by the time our
-        // subscriber refreshes the rows, live.pairs already carries the new lastResult and the counts
-        // update in the same pass. We deliberately do NOT race an independent loadPairs() here: that
-        // resolved long before the actual mirror finished and repainted stale counts (CalendarIA-t2).
-        if (vm.comRemote) syncPairRemote(raw); else runPairNow(vm.id);
-      },
-    },
-      busy
-        ? el('span', { class: 'spinner', style: 'width:12px;height:12px;border-width:1.6px' })
-        : el('span', { style: 'display:inline-flex', html: icon('sync', { size: 12, stroke: 1.8 }) }),
-      el('span', { text: busy ? 'Syncing…' : 'Force-sync' }));
-    row.append(el('div', { class: 'calday-status-act' }, forceBtn));
     return row;
   }
 
@@ -721,7 +701,27 @@ export function registerCalendarDayView(ctx) {
       container.replaceChildren(el('p', { class: 'calday-empty', text: 'No active sync pairs. Open the gear to add or resume a pair.' }));
       return;
     }
-    const children = [el('p', { class: 'calday-hint', style: 'padding:0 0 var(--s-2)', text: 'Read-only overview. Use the gear to add, edit or pause pairs.' })];
+    const anyBusy = raws.some((raw) => !!pairViewModel(raw).inFlight);
+    const forceAll = el('button', {
+      class: 'btn primary calday-status-forceall', type: 'button', disabled: anyBusy,
+      title: anyBusy ? 'Sync in progress…' : 'Force-sync all active pairs now',
+      onclick: () => {
+        if (anyBusy) return;
+        raws.forEach((raw) => {
+          const vm = pairViewModel(raw);
+          if (vm.comOffline || vm.comUnclaimed || vm.inFlight) return;
+          if (vm.comRemote) syncPairRemote(raw); else runPairNow(vm.id);
+        });
+      },
+    },
+      anyBusy
+        ? el('span', { class: 'spinner', style: 'width:12px;height:12px;border-width:1.6px' })
+        : el('span', { style: 'display:inline-flex', html: icon('sync', { size: 12, stroke: 1.8 }) }),
+      el('span', { text: anyBusy ? 'Syncing…' : 'Force-sync' }));
+    const children = [
+      el('div', { class: 'calday-status-bar' }, forceAll),
+      el('p', { class: 'calday-hint', style: 'padding:0 0 var(--s-2)', text: 'Read-only run state per pair. The gear adds, edits or pauses pairs.' }),
+    ];
     raws.forEach((raw) => children.push(statusPairRow(pairViewModel(raw), raw)));
     container.replaceChildren(...children);
   }
