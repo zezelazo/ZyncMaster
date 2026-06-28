@@ -641,15 +641,10 @@ public partial class App : Application
         try
         {
             var items = await engine.Actions.GetClipboardHistoryAsync(_shutdown.Token);
+            var now = DateTimeOffset.UtcNow;
             var rows = new System.Collections.Generic.List<ClipboardRow>(items.Count);
             foreach (var it in items)
-                rows.Add(new ClipboardRow
-                {
-                    Id = it.Id,
-                    Kind = ClipboardRowKind(it.Type),
-                    Title = ClipboardRowTitle(it),
-                    Meta = ClipboardRowMeta(it),
-                });
+                rows.Add(ClipboardRowMapper.ToRow(it, now));
             viewer.SetRows(rows);
         }
         catch (OperationCanceledException) { /* shutdown */ }
@@ -657,41 +652,6 @@ public partial class App : Application
         {
             engine.Logger.Log(LogLevel.Warning, "Clipboard viewer refresh failed.", ex);
         }
-    }
-
-    // Maps the wire Type ("Text" | "Image" | "File") to the row kind the native template branches on.
-    private static string ClipboardRowKind(string type)
-        => string.Equals(type, "Image", StringComparison.OrdinalIgnoreCase) ? "image"
-         : string.Equals(type, "File", StringComparison.OrdinalIgnoreCase) ? "file"
-         : "text";
-
-    // The primary line of a row: a one-line text preview (capped), or a typed label for image/file.
-    // The wire item carries no file name, so a File row shows a generic "File" label.
-    private static string ClipboardRowTitle(ClipboardHistoryItem it)
-    {
-        if (string.Equals(it.Type, "Image", StringComparison.OrdinalIgnoreCase)) return "Image";
-        if (string.Equals(it.Type, "File", StringComparison.OrdinalIgnoreCase)) return "File";
-        var text = (it.Text ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
-        if (text.Length == 0) return "(empty)";
-        return text.Length > 80 ? text[..80] + "…" : text;
-    }
-
-    // The secondary line: "{origin device} · {short age}", e.g. "DEVLAB2 · 1 min".
-    private static string ClipboardRowMeta(ClipboardHistoryItem it)
-    {
-        var device = string.IsNullOrWhiteSpace(it.OriginDeviceName) ? "Unknown" : it.OriginDeviceName!.Trim();
-        return $"{device} · {ShortAge(it.CreatedUtc)}";
-    }
-
-    // A compact relative age for a history row: "now", "3 min", "2 h", "5 d".
-    private static string ShortAge(DateTimeOffset whenUtc)
-    {
-        var delta = DateTimeOffset.UtcNow - whenUtc;
-        if (delta < TimeSpan.Zero) delta = TimeSpan.Zero;
-        if (delta.TotalMinutes < 1) return "now";
-        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes} min";
-        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours} h";
-        return $"{(int)delta.TotalDays} d";
     }
 
     // The host executable path registered for login auto-start.
