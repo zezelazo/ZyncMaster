@@ -106,6 +106,24 @@ class FakeNode {
 
   hasClass(c) { return this.className.split(/\s+/).includes(c); }
 
+  // Minimal classList over the className string (the shipped status-icon toggles a 'warn' class).
+  get classList() {
+    const self = this;
+    const parts = () => self.className.split(/\s+/).filter(Boolean);
+    return {
+      add: (c) => { if (!self.hasClass(c)) self.className = [...parts(), c].join(' '); },
+      remove: (c) => { self.className = parts().filter((x) => x !== c).join(' '); },
+      contains: (c) => self.hasClass(c),
+      toggle: (c, force) => {
+        const want = force === undefined ? !self.hasClass(c) : !!force;
+        self.className = want
+          ? (self.hasClass(c) ? self.className : [...parts(), c].join(' '))
+          : parts().filter((x) => x !== c).join(' ');
+        return want;
+      },
+    };
+  }
+
   // Deep collect every descendant whose className includes `cls`.
   collectByClass(cls, out = []) {
     for (const c of this.children) {
@@ -283,57 +301,57 @@ test('fillStatusBody shows the non-bridge message when the bridge is unavailable
   assert.match(empty[0].text, /desktop app/);
 });
 
-test('statusPairRow: Synced = created+updated+skipped, New = created, Last-run / never formatting', () => {
+test('statusPairRow form: New events / Synced / Last-run lines (created+updated+skipped; never)', () => {
   const h = makeHarness([
     { id: 'p1', state: 'active', lastResult: { created: 2, updated: 1, skipped: 3 }, lastRunUtc: '2026-06-13T10:00:00Z' },
     { id: 'p2', state: 'active' },                                   // never run -> 0 / never
   ]);
   const modal = h.open();
   const [r1, r2] = modal.body.collectByClass('calday-status-row');
-  const v1 = r1.collectByClass('calday-status-stat-val').map((s) => s.text);
-  assert.equal(v1[0], '6', 'Synced = 2+1+3');
-  assert.equal(v1[1], '2', 'New = created');
-  assert.notEqual(v1[2], 'never', 'last run is formatted, not "never"');
-  const v2 = r2.collectByClass('calday-status-stat-val').map((s) => s.text);
-  assert.equal(v2[0], '0', 'no lastResult -> 0 synced');
-  assert.equal(v2[1], '0', 'no lastResult -> 0 new');
-  assert.equal(v2[2], 'never', 'no lastRunUtc -> never');
+  // Form value cells, in order: Source, Destination, New events, Synced, Last run, Next.
+  const v1 = r1.collectByClass('calday-status-line-val').map((s) => s.text);
+  assert.equal(v1[2], '2', 'New events = created');
+  assert.equal(v1[3], '6', 'Synced = 2+1+3');
+  assert.notEqual(v1[4], 'never', 'last run is formatted, not "never"');
+  const v2 = r2.collectByClass('calday-status-line-val').map((s) => s.text);
+  assert.equal(v2[2], '0', 'no lastResult -> 0 new');
+  assert.equal(v2[3], '0', 'no lastResult -> 0 synced');
+  assert.equal(v2[4], 'never', 'no lastRunUtc -> never');
 });
 
 test('statusPairRow: Next is an em-dash while a run is in flight, mm:ss otherwise', () => {
   const h = makeHarness([{ id: 'p1', state: 'active', intervalMin: 5 }]);
   const modal = h.open();
-  // Idle -> mm:ss for a 5-min interval (300s).
-  let next = modal.body.collectByClass('calday-status-stat-val')[3].text;
+  // Idle -> mm:ss for a 5-min interval (300s). Next is the 6th form value cell (index 5).
+  let next = modal.body.collectByClass('calday-status-line-val')[5].text;
   assert.equal(next, '05:00', 'idle Next shows mm:ss');
-  // Start a run -> beginPairSync flips inFlight; the observer repaints the body in place, so Next
-  // becomes an em-dash (no meaningful countdown mid-sync) WITHOUT reopening the popup.
-  modal.body.collectByClass('calday-status-force')[0].click();
-  next = modal.body.collectByClass('calday-status-stat-val')[3].text;
+  // The single Force-sync starts the active pair -> beginPairSync flips inFlight; the observer repaints
+  // the body in place, so Next becomes an em-dash (no meaningful countdown mid-sync) WITHOUT reopening.
+  modal.body.collectByClass('calday-status-forceall')[0].click();
+  next = modal.body.collectByClass('calday-status-line-val')[5].text;
   assert.equal(next, '—', 'busy Next shows an em-dash');
 });
 
-test('Force-sync is disabled with an honest reason when the origin device is offline', () => {
+test('Force-sync skips a pair whose origin device is offline', () => {
   const h = makeHarness([{ id: 'p1', state: 'active', comRemote: true, comOffline: true, pinnedDeviceName: 'Laptop' }]);
   const modal = h.open();
-  const btn = modal.body.collectByClass('calday-status-force')[0];
-  assert.equal(btn.disabled, true, 'offline origin disables Force-sync');
-  assert.match(btn.title, /offline/);
-  assert.match(btn.title, /Laptop/);
+  modal.body.collectByClass('calday-status-forceall')[0].click();
+  assert.deepEqual(h.calls.syncPairRemote, [], 'an offline origin is not signalled');
+  assert.deepEqual(h.calls.runPairNow, [], 'and not run locally');
 });
 
-test('Force-sync is disabled with an honest reason when the sync is unclaimed', () => {
+test('Force-sync skips a pair whose sync is unclaimed', () => {
   const h = makeHarness([{ id: 'p1', state: 'active', comRemote: false, comUnclaimed: true }]);
   const modal = h.open();
-  const btn = modal.body.collectByClass('calday-status-force')[0];
-  assert.equal(btn.disabled, true);
-  assert.match(btn.title, /no source device has claimed/i);
+  modal.body.collectByClass('calday-status-forceall')[0].click();
+  assert.deepEqual(h.calls.runPairNow, [], 'an unclaimed sync is not run');
+  assert.deepEqual(h.calls.syncPairRemote, []);
 });
 
 test('Force-sync routes to syncPairRemote when the source is on another device', () => {
   const h = makeHarness([{ id: 'p1', state: 'active', comRemote: true, pinnedDeviceName: 'Laptop' }]);
   const modal = h.open();
-  modal.body.collectByClass('calday-status-force')[0].click();
+  modal.body.collectByClass('calday-status-forceall')[0].click();
   assert.deepEqual(h.calls.syncPairRemote, ['p1'], 'comRemote -> syncPairRemote');
   assert.deepEqual(h.calls.runPairNow, [], 'comRemote must NOT runPairNow locally');
 });
@@ -341,7 +359,7 @@ test('Force-sync routes to syncPairRemote when the source is on another device',
 test('Force-sync routes to runPairNow for a local pair', () => {
   const h = makeHarness([{ id: 'p1', state: 'active' }]);
   const modal = h.open();
-  modal.body.collectByClass('calday-status-force')[0].click();
+  modal.body.collectByClass('calday-status-forceall')[0].click();
   assert.deepEqual(h.calls.runPairNow, ['p1']);
   assert.deepEqual(h.calls.syncPairRemote, []);
 });
@@ -350,30 +368,31 @@ test('STUCK-SPINNER FIX: spinner clears + counts update after the run resolves (
   const h = makeHarness([{ id: 'p1', state: 'active', lastResult: { created: 0, updated: 0, skipped: 0 } }]);
   const modal = h.open();
 
-  // Before the run: idle button labelled "Force-sync", enabled.
-  let btn = modal.body.collectByClass('calday-status-force')[0];
+  // Before the run: the single Force-sync is labelled "Force-sync", enabled.
+  let btn = modal.body.collectByClass('calday-status-forceall')[0];
   assert.match(btn.text, /Force-sync/);
   assert.equal(btn.disabled, false);
 
   // Click -> beginPairSync flips spinner ON and notifies; the observer repaints the body in place.
   btn.click();
 
-  btn = modal.body.collectByClass('calday-status-force')[0];
-  assert.equal(btn.disabled, true, 'spinner row is disabled mid-run');
+  btn = modal.body.collectByClass('calday-status-forceall')[0];
+  assert.equal(btn.disabled, true, 'the button is disabled mid-run');
   assert.match(btn.text, /Syncing/, 'shows the Syncing… label mid-run');
   assert.equal(modal.body.collectByClass('spinner').length, 1, 'spinner element present mid-run');
 
   // The run completes: loadPairs refreshes live.pairs with new counts, THEN endPairSync notifies.
   h.lastRun().complete({ lastResult: { created: 4, updated: 1, skipped: 2 }, lastRunUtc: '2026-06-13T12:00:00Z' });
 
-  btn = modal.body.collectByClass('calday-status-force')[0];
+  btn = modal.body.collectByClass('calday-status-forceall')[0];
   assert.equal(btn.disabled, false, 'spinner CLEARS after the run resolves');
   assert.match(btn.text, /Force-sync/, 'label returns to Force-sync (no stuck spinner)');
   assert.equal(modal.body.collectByClass('spinner').length, 0, 'no spinner after completion');
 
-  const vals = modal.body.collectByClass('calday-status-stat-val').map((s) => s.text);
-  assert.equal(vals[0], '7', 'Synced updates to 4+1+2 after the run (no stale 0)');
-  assert.equal(vals[1], '4', 'New updates to created=4 after the run');
+  // Counts come from the per-pair form: New events (index 2), Synced (index 3).
+  const vals = modal.body.collectByClass('calday-status-line-val').map((s) => s.text);
+  assert.equal(vals[2], '4', 'New events updates to created=4 after the run');
+  assert.equal(vals[3], '7', 'Synced updates to 4+1+2 after the run (no stale 0)');
 });
 
 test('closing the popup unsubscribes the sync-state observer (no stale repaint of a detached node)', () => {
