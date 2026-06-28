@@ -39,6 +39,7 @@ export function registerCalendarDayView(ctx) {
                             // {id, displayName, isDefault, owner}) — replicate destinations
     rules: [],              // parsed prefix rules
     rulesError: null,
+    hiddenAccounts: {},     // email -> true when the user toggled that account's column off
   };
 
   // Loads the unified day payload(s) for the current date/mode plus the panel data sources.
@@ -92,12 +93,8 @@ export function registerCalendarDayView(ctx) {
     // a single Escape that closes the overlay does NOT also close the calendar's detail panel.
     if (e.defaultPrevented) return;
     if (state.view !== 'calendar-day') return;
-    if (calDay.panel) {
-      e.preventDefault();
-      calDay.panel = null;
-      calDay.selected = null;
-      rerenderInPlace();
-    }
+    // Detail surfaces are modals now; openModal owns Escape (it closes the open modal in the capture
+    // phase). With no inline panel left to dismiss, Escape on the bare grid is a no-op.
   }
   document.addEventListener('keydown', onCalDayKeydown);
 
@@ -138,14 +135,10 @@ export function registerCalendarDayView(ctx) {
     wrap.appendChild(head);
 
     const body = document.createElement('div');
-    body.className = 'calday';
+    body.className = 'calday calday--full';
     const gridWrap = document.createElement('div');
     gridWrap.className = 'calday-grid-wrap';
     body.appendChild(gridWrap);
-    const panel = document.createElement('aside');
-    panel.className = 'calday-panel';
-    panel.id = 'calDayPanel';
-    body.appendChild(panel);
     wrap.appendChild(body);
     root.appendChild(wrap);
 
@@ -155,19 +148,23 @@ export function registerCalendarDayView(ctx) {
     head.querySelector('#calDayPrev').onclick = () => { calDay.date = shiftDate(calDay.date, calDay.mode === 'week' ? -7 : -1); loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayNext').onclick = () => { calDay.date = shiftDate(calDay.date, calDay.mode === 'week' ? 7 : 1); loadCalendarDay(); rerenderInPlace(); };
     head.querySelector('#calDayToday').onclick = () => { calDay.date = todayIso(); loadCalendarDay(); rerenderInPlace(); };
-    head.querySelector('#calDayNew').onclick = () => { calDay.panel = 'new-event'; rerenderInPlace(); };
+    head.querySelector('#calDayNew').onclick = () => openCalPanel('new-event');
     // Gear -> the pairs/accounts CONFIGURATION sub-route (unchanged content, just relocated here from
     // the old "Calendar Sync" landing). Status -> read-only run-state popup with per-pair Force-sync.
     head.querySelector('#calDayConfig').onclick = () => navigate('calendar');
     head.querySelector('#calDayStatus').onclick = openStatusPopup;
 
     const data = calDay.days[calDay.date];
+    const noAccounts = data && !(data.accounts || []).length;
     if (calDay.loading && !data) { gridWrap.innerHTML = '<p class="calday-empty">Loading the day…</p>'; }
     else if (calDay.error) { gridWrap.innerHTML = `<p class="calday-empty">${escapeHtml(calDay.error)}</p>`; }
+    else if (noAccounts) {
+      gridWrap.innerHTML = '<p class="calday-empty">No calendar accounts are visible here yet. '
+        + 'Connect a calendar (gear → accounts) — your signed-in account can be connected in one click.</p>';
+    }
     else if (calDay.mode === 'day') renderCalDayGrid(gridWrap, head.querySelector('#calDayLegend'), data, calDay.date, true);
     else renderCalWeekGrid(gridWrap, head.querySelector('#calDayLegend'));
 
-    renderCalDayPanel(panel);
     if (!data && !calDay.loading) loadCalendarDay();
   }
 
@@ -176,14 +173,19 @@ export function registerCalendarDayView(ctx) {
   // "Wed, June 13" banner above the columns, false (week mode, where each cell already carries its
   // own weekday+date header) to skip it.
   function renderCalDayGrid(container, legendEl, data, dateIso, showDateHeader) {
-    const accounts = (data && data.accounts) || [];
+    const allAccounts = (data && data.accounts) || [];
+    const accounts = allAccounts.filter((a) => !calDay.hiddenAccounts[a.email]);
     if (legendEl) {
-      legendEl.replaceChildren(...accounts.map((a, i) => {
-        const s = document.createElement('span');
-        const fresh = freshnessLabel(a.freshness); // "live" → null (no badge); "snapshot_unavailable" → badge
+      legendEl.replaceChildren(...allAccounts.map((a, i) => {
+        const off = !!calDay.hiddenAccounts[a.email];
+        const s = document.createElement('button');
+        s.type = 'button';
+        s.className = 'calday-legend-chip' + (off ? ' off' : '');
+        const fresh = freshnessLabel(a.freshness);
         s.innerHTML = `<span class="sw" data-acc="${i}"></span>${escapeHtml(a.email || 'Account')}`
           + (fresh ? `<span class="calday-fresh">${fresh}</span>` : '');
         s.querySelector('.sw').style.background = `var(--${{ az: 'azure', aq: 'aqua', cy: 'cyan' }[accountColorClass(i)]})`;
+        s.onclick = () => { calDay.hiddenAccounts[a.email] = !off; rerenderInPlace(); };
         return s;
       }));
     }
@@ -240,11 +242,8 @@ export function registerCalendarDayView(ctx) {
       const mark = ev.isReplica ? ' <span class="calday-link">⛓ replica</span>' : '';
       btn.innerHTML = `<b>${escapeHtml(ev.title || '(no title)')}${link}${mark}</b>`
         + `<span class="num">${fmtRange(ev.start, ev.end)}</span>`;
-      btn.onclick = () => {
-        calDay.selected = { ev, account };
-        calDay.panel = 'replicate';
-        rerenderInPlace();
-      };
+      btn.title = `${ev.title || '(no title)'} · ${fmtRange(ev.start, ev.end)} · ${account.email || ''}`;
+      btn.onclick = () => { calDay.selected = { ev, account }; openCalPanel('replicate'); };
       col.appendChild(btn);
     });
     return col;
@@ -288,22 +287,37 @@ export function registerCalendarDayView(ctx) {
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  // Panel router: replicate (task 7) / rules (task 7-8) / new-event (task 9) / zero state.
-  function renderCalDayPanel(panel) {
-    panel.replaceChildren();
-    if (calDay.panel === 'replicate' && calDay.selected) return renderReplicatePanel(panel);
-    if (calDay.panel === 'new-event') return renderNewEventPanel(panel);
-    if (calDay.panel === 'rules') return renderPrefixRulesPanel(panel);
-    panel.innerHTML = '<p class="calday-empty">Select an event to replicate it, or create a new one.</p>';
-    appendPrefixRulesSummary(panel);
+  // Opens one calendar detail surface (replicate / new-event / prefix-rules) as a modal. openModal
+  // supplies the title bar + close affordance (its own ✕ / Esc / backdrop), so the render functions
+  // no longer draw their own header — they receive `close` (which dismisses the modal) and `onClose`
+  // resets state. Prefix rules is reached only from the Replicate panel ("Manage"); when it carries a
+  // selection it round-trips back to Replicate on close so the user lands where they started.
+  function openCalPanel(kind) {
+    const body = document.createElement('div');
+    body.className = 'calday-modal';
+    calDay.panel = kind;
+    const returnToReplicate = kind === 'rules' && !!calDay.selected;
+    let modal = null;
+    const close = () => { if (modal) modal.close(); };
+    let title = 'Calendar';
+    if (kind === 'replicate' && calDay.selected) { title = 'Replicate event'; renderReplicatePanel(body, close); }
+    else if (kind === 'new-event') { title = 'New event'; renderNewEventPanel(body, close); }
+    else if (kind === 'rules') { title = 'Prefix rules'; renderPrefixRulesPanel(body, close); }
+    modal = openModal({
+      title, body,
+      onClose: () => {
+        calDay.panel = null;
+        if (returnToReplicate) openCalPanel('replicate');
+        else { calDay.selected = null; rerenderInPlace(); }
+      },
+    });
   }
 
   // ---------------- Calendar v2: Replicate panel (task 7) ----------------
-  function renderReplicatePanel(panel) {
+  // Renders into a modal body; openCalPanel supplies the title bar + close. `close` dismisses the modal.
+  function renderReplicatePanel(panel, close) {
     const { ev, account } = calDay.selected;
     panel.innerHTML = `
-      <header><h2>Replicate event</h2>
-        <button class="x btn" id="calDayPanelClose" aria-label="Close">✕</button></header>
       <div class="calday-sect">
         <div class="calday-src"><span class="bar"></span><div>
           <b>${escapeHtml(ev.title || '(no title)')}</b>
@@ -374,9 +388,15 @@ export function registerCalendarDayView(ctx) {
       cta.disabled = !checked.length || missing;
       cta.textContent = replicateButtonLabel(checked.length, missing);
     }
-    panel.querySelector('#calDayPanelClose').onclick = closePanel;
     panel.querySelector('#calDayCancelReplicate').onclick = closePanel;
-    panel.querySelector('#calDayManageRules').onclick = () => { calDay.panel = 'rules'; rerenderInPlace(); };
+    panel.querySelector('#calDayManageRules').onclick = () => {
+      // Round-trip to Prefix rules and back: remember the source event across the modal swap so closing
+      // rules returns to THIS replicate panel (close() clears selected via the modal's onClose).
+      const sel = calDay.selected;
+      close();
+      calDay.selected = sel;
+      openCalPanel('rules');
+    };
     cta.onclick = () => {
       const req = replicateRequest(ev.accountId, ev.eventId, rows);
       if (!req) return;
@@ -400,7 +420,7 @@ export function registerCalendarDayView(ctx) {
         });
     };
 
-    function closePanel() { calDay.panel = null; calDay.selected = null; rerenderInPlace(); }
+    function closePanel() { close(); }
   }
 
   // Read-only summary of the prefix rules inside the Replicate panel (full CRUD is task 8).
@@ -423,13 +443,12 @@ export function registerCalendarDayView(ctx) {
   }
 
   // ---------------- Calendar v2: New event with replicate-on-create (task 9) ----------------
-  function renderNewEventPanel(panel) {
+  // Renders into a modal body; openCalPanel supplies the title bar + close. `close` dismisses the modal.
+  function renderNewEventPanel(panel, close) {
     // REAL bridge shapes (see 6.3): CalendarAccountSummary {id, accountEmail, scope, displayName,
     // ...} + .calendars CalendarInfo[]; scope compared case-insensitively ("ReadWrite").
     const writable = (calDay.accounts || []).filter((a) => (a.scope || '').toLowerCase() === 'readwrite');
     panel.innerHTML = `
-      <header><h2>New event</h2>
-        <button class="x btn" id="calDayNewClose" aria-label="Close">✕</button></header>
       <div class="calday-sect calday-form">
         <label for="evtCalendar">Calendar</label>
         <select id="evtCalendar"></select>
@@ -505,8 +524,6 @@ export function registerCalendarDayView(ctx) {
       });
     });
 
-    const close = () => { calDay.panel = null; rerenderInPlace(); };
-    panel.querySelector('#calDayNewClose').onclick = close;
     panel.querySelector('#evtCancel').onclick = close;
     panel.querySelector('#evtCreate').onclick = () => {
       const [accountId, calendarId] = (calSel.value || '|').split('|');
@@ -526,11 +543,10 @@ export function registerCalendarDayView(ctx) {
       Bridge.call('createCalendarEvent', JSON.stringify(payload))
         .then(() => {
           announce('Event created');
-          calDay.panel = null;
+          close();
           delete calDay.days[payload.start.slice(0, 10)];
           delete calDay.days[calDay.date];
           loadCalendarDay();
-          rerenderInPlace();
         })
         .catch((err) => {
           btn.disabled = false; btn.textContent = 'Create event';
@@ -540,10 +556,10 @@ export function registerCalendarDayView(ctx) {
   }
 
   // ---------------- Calendar v2: Prefix rules panel (task 8) ----------------
-  function renderPrefixRulesPanel(panel) {
+  // Renders into a modal body; openCalPanel supplies the title bar + close. Reached only from the
+  // Replicate panel, so closing the modal round-trips back to Replicate (handled in openCalPanel).
+  function renderPrefixRulesPanel(panel, close) {
     panel.innerHTML = `
-      <header><h2>Prefix rules</h2>
-        <button class="x btn" id="calDayRulesClose" aria-label="Close">✕</button></header>
       <div class="calday-sect">
         <p class="calday-hint">A “[Lunch] X” event is renamed to “X” and replicated as “Lunch” to
           every destination of the rule. Graph readwrite accounts only.</p>
@@ -562,8 +578,6 @@ export function registerCalendarDayView(ctx) {
           <button class="btn primary" id="ruleNewSave">Add rule</button>
         </div>
       </div>`;
-
-    panel.querySelector('#calDayRulesClose').onclick = () => { calDay.panel = calDay.selected ? 'replicate' : null; rerenderInPlace(); };
 
     // ---- existing rules: enabled toggle + delete ----
     const list = panel.querySelector('#calDayRulesList');

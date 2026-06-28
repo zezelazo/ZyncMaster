@@ -108,3 +108,27 @@
 .calday-status-line-lbl { font-size: var(--t-micro); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); }
 .calday-status-line-val { color: var(--ink-1); text-align: right; }
 .calday-statusicon.warn { color: var(--warn); border-color: var(--warn); }
+
+/* Detail surfaces are modals now: the day/week grid fills the whole body (no right aside). */
+.calday--full { grid-template-columns: 1fr; }
+
+/* Account legend chips double as a per-account visibility toggle (off = that column is hidden). */
+.calday-legend-chip { display: inline-flex; align-items: center; font: inherit; font-size: var(--t-micro);
+  font-weight: var(--w-micro); color: var(--ink-2); background: transparent; border: 1px solid transparent;
+  border-radius: var(--r-sm); padding: 2px 8px; cursor: pointer;
+  transition: color var(--d-fast), border-color var(--d-fast), opacity var(--d-fast); }
+.calday-legend-chip:hover { border-color: var(--ctrl-stroke); color: var(--ink-1); }
+.calday-legend-chip.off { opacity: .42; text-decoration: line-through; }
+
+/* Calendar detail panels rendered inside a modal body: the modal card already pads + frames them,
+   so drop the aside-era horizontal section padding and the bottom-anchored actions. */
+.calday-modal .calday-sect, .calday-modal .calday-actions { padding-left: 0; padding-right: 0; }
+.calday-modal .calday-sect:first-child { padding-top: 0; }
+.calday-modal .calday-sect:last-child { border-bottom: 0; }
+.calday-modal .calday-actions { margin-top: var(--s-3); }
+
+/* Flat, minimal calendar header controls (azure look; no pill radius). */
+.calday-head .btn { border-radius: var(--r-sm); }
+.calday-head .btn.primary { border-radius: var(--r-sm); }
+.calday-seg { border-radius: var(--r-sm); overflow: hidden; }
+.calday-statusicon, .calday-gear { border-radius: var(--r-sm); }
