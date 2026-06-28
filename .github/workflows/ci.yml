@@ -1,7 +1,13 @@
 name: CI
 
-# Build + test on every push and pull request. Runs red when anything fails. No artifacts are
-# uploaded or stored: each job builds and tests in-process and discards its output.
+# Build + test on pushes to main and on every pull request. Runs red when anything fails. No
+# artifacts are uploaded or stored: each job builds and tests in-process and discards its output.
+#
+# `push` is restricted to `main` deliberately: a feature branch with an open PR is already covered by
+# the `pull_request` event, so without this restriction every push fired TWO identical runs (one for
+# the push, one for the PR) that the concurrency group cannot dedupe — push and PR carry different
+# refs (refs/heads/<branch> vs refs/pull/<n>/merge). Now a PR branch runs CI once (via the PR), and
+# main runs CI once on merge.
 #
 # Two independent jobs:
 #   * dotnet — builds the whole solution in Release and runs every .NET test project. It runs on
@@ -12,6 +18,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 # Read-only: CI only needs the checkout, no cloud credentials or write scopes.
