@@ -16,10 +16,15 @@ name: CI
 #     nor network access, so they run headless on the runner.
 #   * js — runs the dependency-free node unit tests for the web panel transport.
 
+# `paths-ignore` skips a run when EVERY changed file is docs-only (markdown / LICENSE / .gitignore) —
+# a mixed change that also touches code still runs. NOTE: if branch protection ever REQUIRES these
+# checks, a docs-only PR would have no run to satisfy them; revisit this then.
 on:
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'LICENSE', '.gitignore']
   pull_request:
+    paths-ignore: ['**/*.md', 'LICENSE', '.gitignore']
 
 # Read-only: CI only needs the checkout, no cloud credentials or write scopes.
 permissions:
