@@ -6,14 +6,18 @@
         WindowDecorations="None"
         ExtendClientAreaToDecorationsHint="True"
         Background="Transparent"
-        TransparencyLevelHint="AcrylicBlur, Blur, Transparent"
+        TransparencyLevelHint="Transparent"
         CanResize="False"
         Topmost="True"
         ShowInTaskbar="False"
         WindowStartupLocation="CenterScreen">
-  <!-- The clipboard quick-viewer: a small, frameless, top-most popup the global hotkey toggles. It
-       hosts ui/clipboard-viewer.html through the SAME WebView2 + virtual-host bridge as the main
-       window (just a different start page). Closes on Esc, after a paste, and on focus loss
-       (deactivation) — all driven from the code-behind. Width is set per density at open time. -->
-  <Panel x:Name="HostPanel" />
+  <Border x:Name="Card" CornerRadius="14" Padding="8" Background="#14000000">
+    <DockPanel LastChildFill="True">
+      <TextBlock x:Name="HeaderText" DockPanel.Dock="Top" Margin="6,4,6,8"
+                 FontSize="11" Foreground="#9FB0CC" Text="CLIPBOARD" />
+      <TextBlock x:Name="HintText" DockPanel.Dock="Bottom" Margin="6,8,6,2"
+                 FontSize="10" Foreground="#7F8AA3" Text="↑↓ move · ↵ paste · Del remove · Esc close" />
+      <ListBox x:Name="List" Background="Transparent" BorderThickness="0" Padding="0" />
+    </DockPanel>
+  </Border>
 </Window>

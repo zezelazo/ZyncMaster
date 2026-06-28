@@ -10,12 +10,13 @@ namespace ZyncMaster.App.Windows;
 // The clipboard quick-viewer popup. Small, frameless, TOP-MOST, sized for a 13" screen. The global
 // hotkey toggles it: Open() captures the window that currently has focus FIRST (so a later paste can
 // target it), then shows the viewer focused. It closes on Esc, after a paste, and on deactivation
-// (focus loss). "Close" here means HIDE — the window instance is reused across hotkey presses so the
-// embedded WebView2 (and its bridge) are created once.
+// (focus loss). "Close" here means HIDE — the window instance is reused across hotkey presses.
 //
-// It hosts ui/clipboard-viewer.html through an IWebHost (the embedded WebView2 on Windows), mounted
-// into HostPanel exactly like MainWindow mounts its host. The C# side owns the window + navigation;
-// the UI side owns the page contents.
+// This is a NATIVE Avalonia window — NOT a WebView2 host. A child WebView2 HWND composites opaque, so
+// an acrylic translucent popup is impossible with it (every prior attempt failed). The translucency
+// comes from a DWM system backdrop (DWMSBT_TRANSIENTWINDOW) applied in OnOpened, with a faint Card
+// veil as the fallback on older Windows. The rows are plain Avalonia controls the composition root
+// fills via SetRows; PasteRequested/DeleteRequested surface the user's choice back to the host.
 public partial class ClipboardViewerWindow : Window
 {
     // Rich vs mini density widths, tuned for a 13" work area. Height is capped to ~70% of the work
@@ -23,8 +24,6 @@ public partial class ClipboardViewerWindow : Window
     private const double RichWidth = 316;
     private const double MiniWidth = 240;
     private const double MaxWorkAreaHeightFraction = 0.70;
-
-    private IWebHost? _webHost;
 
     // The foreground window that was active when the viewer was opened (the user's real paste target).
     // Captured on Open BEFORE the viewer steals focus; re-asserted on close so focus returns there and
@@ -37,13 +36,22 @@ public partial class ClipboardViewerWindow : Window
     // paste to land in. IntPtr.Zero when nothing was captured.
     public IntPtr PriorForeground => _priorForeground;
 
+    // Raised when the user chose to paste a row (Enter / double-tap). The host resolves the entry and
+    // synthesizes the OS paste into the captured foreground window. Carries the chosen row.
+    public event Action<ClipboardRow>? PasteRequested;
+
+    // Raised when the user chose to remove a row (Del / trash button). The host deletes it server-side
+    // and refreshes the list. Carries the chosen row.
+    public event Action<ClipboardRow>? DeleteRequested;
+
     public ClipboardViewerWindow()
     {
         InitializeComponent();
+        var list = this.FindControl<ListBox>("List")!;
+        list.DoubleTapped += (_, _) => RequestPasteSelected();
 
-        // Esc closes (hides) the viewer. KeyDown on the window catches it before the WebView2 child in
-        // the common case; the UI page also forwards Esc through the bridge (closeClipboardViewer) as a
-        // belt-and-braces path when the WebView has keyboard focus.
+        // Esc closes (hides) the viewer; Enter pastes the selection; Del removes it. KeyDown on the
+        // window catches them — the list owns keyboard focus while the popup is open.
         KeyDown += OnKeyDown;
 
         // Focus loss dismisses the popup, matching the OS quick-pickers (Win+V etc.). Guarded by
@@ -53,22 +61,39 @@ public partial class ClipboardViewerWindow : Window
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
-    // Mounts the web host that renders ui/clipboard-viewer.html. Called once by the composition root
-    // after the window is constructed; mirrors MainWindow.AttachWebHost (mount the Control, Load()).
-    public void AttachWebHost(IWebHost webHost)
+    // Applies the DWM system backdrop (the acrylic-like transient material) and rounded corners once
+    // the native HWND exists. Windows-only; an older OS / a failed call simply keeps the Card veil.
+    protected override void OnOpened(EventArgs e)
     {
-        _webHost = webHost ?? throw new ArgumentNullException(nameof(webHost));
-
-        var hostPanel = this.FindControl<Panel>("HostPanel");
-        if (webHost is Control control && hostPanel != null)
+        base.OnOpened(e);
+        if (!OperatingSystem.IsWindows()) return;
+        try
         {
-            hostPanel.Children.Clear();
-            control.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
-            control.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
-            hostPanel.Children.Add(control);
+            var hwnd = TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+            if (hwnd == IntPtr.Zero) return;
+            int backdrop = Platform.Clipboard.Win32.DWMSBT_TRANSIENTWINDOW;
+            Platform.Clipboard.Win32.DwmSetWindowAttribute(
+                hwnd, Platform.Clipboard.Win32.DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+            int corner = Platform.Clipboard.Win32.DWMWCP_ROUND;
+            Platform.Clipboard.Win32.DwmSetWindowAttribute(
+                hwnd, Platform.Clipboard.Win32.DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
         }
+        catch { /* old OS: keep the Card veil */ }
+    }
 
-        webHost.Load();
+    // Replaces the list with a fresh snapshot; selection always resets to the first (newest) row.
+    public void SetRows(System.Collections.Generic.IReadOnlyList<ClipboardRow> rows)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var list = this.FindControl<ListBox>("List")!;
+            list.ItemTemplate = BuildRowTemplate();
+            list.ItemsSource = rows;
+            list.SelectedIndex = rows.Count > 0 ? 0 : -1;
+            var h = this.FindControl<TextBlock>("HeaderText");
+            if (h != null) h.Text = $"CLIPBOARD · {rows.Count} ITEM{(rows.Count == 1 ? "" : "S")}";
+            if (rows.Count > 0) Dispatcher.UIThread.Post(() => list.ScrollIntoView(0));
+        });
     }
 
     // Toggles the viewer. If already visible, this is a second hotkey press → hide it. Otherwise
@@ -107,11 +132,10 @@ public partial class ClipboardViewerWindow : Window
         Show();
         Activate();
 
-        // Activate() focuses the WINDOW, not the embedded WebView2 content — without an explicit
-        // hand-off the page's key handlers (Arrow/Enter/Esc) stay dead until the user clicks inside
-        // the card. Move keyboard focus into the web content so the hotkey → arrows → Enter flow
-        // works immediately.
-        _webHost?.FocusContent();
+        // Activate() focuses the WINDOW, not the list — without an explicit hand-off the key handlers
+        // (Arrow/Enter/Del/Esc) stay dead until the user clicks inside the card. Move keyboard focus
+        // into the list so the hotkey → arrows → Enter flow works immediately.
+        this.FindControl<ListBox>("List")?.Focus();
 
         Dispatcher.UIThread.Post(() => _suppressDeactivate = false, DispatcherPriority.Background);
     }
@@ -141,12 +165,72 @@ public partial class ClipboardViewerWindow : Window
 
     private bool _suppressDeactivate;
 
+    private Avalonia.Controls.Templates.IDataTemplate BuildRowTemplate()
+    {
+        return new Avalonia.Controls.Templates.FuncDataTemplate<ClipboardRow>((row, _) =>
+        {
+            var title = new TextBlock
+            {
+                Text = row.Title, Foreground = Avalonia.Media.Brushes.White, FontSize = 13,
+                TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+            };
+            var meta = new TextBlock
+            {
+                Text = row.Meta,
+                Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#8AA0C0")),
+                FontSize = 11,
+            };
+            var stack = new StackPanel { Spacing = 2, Children = { title, meta } };
+
+            var trash = new Button
+            {
+                Content = "🗑", Padding = new Avalonia.Thickness(6, 2),
+                Background = Avalonia.Media.Brushes.Transparent, BorderThickness = new Avalonia.Thickness(0),
+                Opacity = 0, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            trash.Click += (_, e) => { e.Handled = true; DeleteRequested?.Invoke(row); };
+
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Avalonia.Thickness(2),
+            };
+            Grid.SetColumn(stack, 0);
+            Grid.SetColumn(trash, 1);
+            grid.Children.Add(stack);
+            grid.Children.Add(trash);
+
+            var border = new Border
+            {
+                CornerRadius = new Avalonia.CornerRadius(8), Padding = new Avalonia.Thickness(10, 8),
+                Background = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#14FFFFFF")),
+                Child = grid,
+            };
+            border.PointerEntered += (_, _) => trash.Opacity = 1;
+            border.PointerExited += (_, _) => trash.Opacity = 0;
+            return border;
+        });
+    }
+
+    private void RequestPasteSelected()
+    {
+        if (this.FindControl<ListBox>("List")?.SelectedItem is ClipboardRow row)
+            PasteRequested?.Invoke(row);
+    }
+
+    private void RequestDeleteSelected()
+    {
+        if (this.FindControl<ListBox>("List")?.SelectedItem is ClipboardRow row)
+            DeleteRequested?.Invoke(row);
+    }
+
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape)
+        switch (e.Key)
         {
-            e.Handled = true;
-            Dismiss();
+            case Key.Escape: e.Handled = true; Dismiss(); break;
+            case Key.Enter:  e.Handled = true; RequestPasteSelected(); break;
+            case Key.Delete: e.Handled = true; RequestDeleteSelected(); break;
         }
     }
 
