@@ -37,7 +37,9 @@
   color: var(--ink-1);
   background: var(--ctrl-fill);
   border: 1px solid var(--ctrl-stroke);
-  border-radius: var(--r-pill);
+  /* Flat, minimal radius app-wide (matches the calendar header); pill is reserved for genuinely
+     pill-shaped things — chips, dots, toggles, sliders, the nav bar, progress + scrollbar tracks. */
+  border-radius: var(--r-sm);
   cursor: pointer;
   isolation: isolate;
   /* No transform here: the button box (and thus its hit area) must never move on
@@ -472,13 +474,13 @@
   gap: 2px;
   background: var(--ctrl-fill);
   border: 1px solid var(--ctrl-stroke);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
 }
 .segmented__item {
   height: 26px; padding: 0 12px;
   display: inline-flex; align-items: center; gap: 5px;
   border: 0; background: transparent;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-xs);
   font-size: var(--t-meta); font-weight: 600;
   color: var(--ink-2);
   cursor: pointer;
