@@ -203,7 +203,9 @@ export function registerCalendarDayView(ctx) {
     const cols = document.createElement('div');
     cols.className = 'calday-cols';
     cols.style.gridTemplateColumns = `repeat(${Math.max(accounts.length, 1)}, 1fr)`;
-    accounts.forEach((account, i) => cols.appendChild(buildCalDayColumn(account, i)));
+    // Color each column by the account's STABLE position in allAccounts (not its filtered index), so a
+    // visible account keeps the same swatch as its legend chip even when another account is toggled off.
+    accounts.forEach((account) => cols.appendChild(buildCalDayColumn(account, allAccounts.indexOf(account))));
     grid.appendChild(cols);
 
     // Sticky date banner above the grid so "what day is this?" is answered without reading the head
