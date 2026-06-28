@@ -34,12 +34,10 @@ public partial class App : Application
     private RegisteredWaitHandle? _showWindowWait;
     private readonly CancellationTokenSource _shutdown = new();
 
-    // Clipboard quick-viewer (Plan 3 Task 6): its own frameless top-most window with its own WebView2
-    // host + bridge over the SHARED EngineActions. Created lazily on first hotkey press so the second
-    // WebView2 is not spun up on machines/sessions that never use the clipboard.
+    // Clipboard quick-viewer (Plan 3 Task 6): a frameless top-most NATIVE Avalonia window (no WebView2 —
+    // a child WebView2 HWND composites opaque, so an acrylic translucent popup is impossible with it).
+    // Created lazily on first hotkey press; its rows are refreshed from history on every mutation.
     private ClipboardViewerWindow? _clipboardViewer;
-    private UiBridge? _clipboardViewerBridge;
-    private IWebHost? _clipboardViewerHost;
     private Task? _clipboardTask;
 
     // FIX G — the long-running background loops are kept in fields so Exit can cancel AND drain them
@@ -129,7 +127,6 @@ public partial class App : Application
                 _showWindowWait?.Unregister(null);
                 _tray?.Dispose();
                 _bridge = null;
-                _clipboardViewerBridge = null;
                 _engineHost?.Dispose();
                 (_webHost as IDisposable)?.Dispose();
                 _shutdown.Dispose();
@@ -461,7 +458,6 @@ public partial class App : Application
             try { (engine.ClipboardTransport as IDisposable)?.Dispose(); } catch { }
         }
 
-        try { (_clipboardViewerHost as IDisposable)?.Dispose(); } catch { }
         try
         {
             var viewer = _clipboardViewer;
@@ -534,8 +530,9 @@ public partial class App : Application
     {
         try { _bridge?.PushClipboardItem(item); }
         catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard item push failed.", ex); }
-        try { _clipboardViewerBridge?.PushClipboardItem(item); }
-        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard item viewer push failed.", ex); }
+        // The native viewer has no bridge: refresh its rows from history so a new/echoed item shows live.
+        if (_clipboardViewer != null)
+            RefreshClipboardViewerRows(_clipboardViewer);
     }
 
     // The live online roster changed (a server presence frame arrived, or the socket dropped and the
@@ -565,8 +562,9 @@ public partial class App : Application
     {
         try { _bridge?.PushClipboardKeyChanged(); }
         catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard key push failed.", ex); }
-        try { _clipboardViewerBridge?.PushClipboardKeyChanged(); }
-        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard key viewer push failed.", ex); }
+        // Previously-undecryptable rows just became readable: refresh the native viewer from history.
+        if (_clipboardViewer != null)
+            RefreshClipboardViewerRows(_clipboardViewer);
     }
 
     // A Sync pair run completed on another of the user's sessions (a peer machine, or a cron RunDue on
@@ -595,13 +593,13 @@ public partial class App : Application
     {
         try { _bridge?.PushClipboardDeleted(id); }
         catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard deleted push failed.", ex); }
-        try { _clipboardViewerBridge?.PushClipboardDeleted(id); }
-        catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard deleted viewer push failed.", ex); }
+        // Drop the row live in the native viewer by refreshing from history.
+        if (_clipboardViewer != null)
+            RefreshClipboardViewerRows(_clipboardViewer);
     }
 
-    // Creates (once) the clipboard viewer window + its own WebView2 host + bridge over the shared
-    // EngineActions, so the viewer page can call the clipboard bridge actions and receive the live
-    // "clipboard:item" push. Reused across hotkey presses (the window hides instead of closing).
+    // Creates (once) the native clipboard viewer window and wires its paste/delete intents to the
+    // shared EngineActions. Reused across hotkey presses (the window hides instead of closing).
     private ClipboardViewerWindow EnsureClipboardViewer()
     {
         if (_clipboardViewer != null)
@@ -609,28 +607,91 @@ public partial class App : Application
 
         var viewer = new ClipboardViewerWindow();
 
-#if WIN_WEBVIEW2
-        if (OperatingSystem.IsWindows())
+        if (_engineHost != null)
         {
-            // App-local paste-panel opacity (0..100, clamped in AppSettingsResolver). Injected into the
-            // viewer document as the --cb-paste-opacity CSS variable, and paired with a transparent
-            // WebView2/window background so only the (semi-transparent) glass card shows over the desktop.
-            var opacity = _engineHost?.Settings.PastePanelOpacity ?? 70;
-            var host = new WebView2WebHost(
-                startPage: "clipboard-viewer.html",
-                documentCreatedScript: WebView2WebHost.BuildPasteOpacityScript(opacity),
-                transparentBackground: true);
-            _clipboardViewerHost = host;
-            if (_engineHost != null)
-                _clipboardViewerBridge = new UiBridge(
-                    new WebViewBridgeTransport((IBridgeTransport)host),
-                    _engineHost.Actions);
-            viewer.AttachWebHost(host);
+            // Paste: PasteClipboardEntryAsync resolves the captured paste target (via
+            // PasteTargetWindowProvider → viewer.PriorForeground) and asks the host to dismiss the
+            // viewer. The finally guarantees the popup closes even on an early no-op paste (unknown id).
+            viewer.PasteRequested += async (row) =>
+            {
+                try { await _engineHost.Actions.PasteClipboardEntryAsync(row.Id, _shutdown.Token); }
+                catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard paste failed.", ex); }
+                finally { viewer.Dismiss(); }
+            };
+            viewer.DeleteRequested += async (row) =>
+            {
+                try { await _engineHost.Actions.DeleteClipboardEntryAsync(row.Id, _shutdown.Token); }
+                catch (Exception ex) { _engineHost?.Logger.Log(LogLevel.Warning, "Clipboard delete failed.", ex); }
+                RefreshClipboardViewerRows(viewer);
+            };
+            RefreshClipboardViewerRows(viewer);
         }
-#endif
 
         _clipboardViewer = viewer;
         return viewer;
+    }
+
+    // Refreshes the native viewer's rows from the current clipboard history. The native window has no
+    // bridge push path, so every mutation re-pulls the decrypted history and rebuilds the list. Fire-
+    // and-forget: SetRows marshals to the UI thread itself, so this is safe to call from any thread.
+    private async void RefreshClipboardViewerRows(ClipboardViewerWindow viewer)
+    {
+        var engine = _engineHost;
+        if (engine == null) return;
+        try
+        {
+            var items = await engine.Actions.GetClipboardHistoryAsync(_shutdown.Token);
+            var rows = new System.Collections.Generic.List<ClipboardRow>(items.Count);
+            foreach (var it in items)
+                rows.Add(new ClipboardRow
+                {
+                    Id = it.Id,
+                    Kind = ClipboardRowKind(it.Type),
+                    Title = ClipboardRowTitle(it),
+                    Meta = ClipboardRowMeta(it),
+                });
+            viewer.SetRows(rows);
+        }
+        catch (OperationCanceledException) { /* shutdown */ }
+        catch (Exception ex)
+        {
+            engine.Logger.Log(LogLevel.Warning, "Clipboard viewer refresh failed.", ex);
+        }
+    }
+
+    // Maps the wire Type ("Text" | "Image" | "File") to the row kind the native template branches on.
+    private static string ClipboardRowKind(string type)
+        => string.Equals(type, "Image", StringComparison.OrdinalIgnoreCase) ? "image"
+         : string.Equals(type, "File", StringComparison.OrdinalIgnoreCase) ? "file"
+         : "text";
+
+    // The primary line of a row: a one-line text preview (capped), or a typed label for image/file.
+    // The wire item carries no file name, so a File row shows a generic "File" label.
+    private static string ClipboardRowTitle(ClipboardHistoryItem it)
+    {
+        if (string.Equals(it.Type, "Image", StringComparison.OrdinalIgnoreCase)) return "Image";
+        if (string.Equals(it.Type, "File", StringComparison.OrdinalIgnoreCase)) return "File";
+        var text = (it.Text ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (text.Length == 0) return "(empty)";
+        return text.Length > 80 ? text[..80] + "…" : text;
+    }
+
+    // The secondary line: "{origin device} · {short age}", e.g. "DEVLAB2 · 1 min".
+    private static string ClipboardRowMeta(ClipboardHistoryItem it)
+    {
+        var device = string.IsNullOrWhiteSpace(it.OriginDeviceName) ? "Unknown" : it.OriginDeviceName!.Trim();
+        return $"{device} · {ShortAge(it.CreatedUtc)}";
+    }
+
+    // A compact relative age for a history row: "now", "3 min", "2 h", "5 d".
+    private static string ShortAge(DateTimeOffset whenUtc)
+    {
+        var delta = DateTimeOffset.UtcNow - whenUtc;
+        if (delta < TimeSpan.Zero) delta = TimeSpan.Zero;
+        if (delta.TotalMinutes < 1) return "now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes} min";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours} h";
+        return $"{(int)delta.TotalDays} d";
     }
 
     // The host executable path registered for login auto-start.

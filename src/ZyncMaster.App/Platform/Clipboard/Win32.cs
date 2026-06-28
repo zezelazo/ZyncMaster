@@ -245,4 +245,15 @@ internal static class Win32
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    // ----- DWM system backdrop (Windows 11 22621+) -----
+    // 38 = DWMWA_SYSTEMBACKDROP_TYPE; 3 = DWMSBT_TRANSIENTWINDOW (the acrylic-like transient material).
+    public const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
+    public const int DWMSBT_TRANSIENTWINDOW = 3;
+    public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    public const int DWMWCP_ROUND = 2;
+
+    [DllImport("dwmapi.dll", SetLastError = true)]
+    public static extern int DwmSetWindowAttribute(
+        IntPtr hwnd, int attribute, ref int pvAttribute, int cbAttribute);
 }
