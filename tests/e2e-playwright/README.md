@@ -10,37 +10,28 @@ complementing the deterministic .NET API e2e in
 
 ## What it covers
 
-### `tests/clipboard-viewer.spec.js` — clipboard paste overlay (self-contained)
-
-Drives the served `ui/clipboard-viewer.html` (the frameless overlay the desktop App pops up on
-the global viewer hotkey) in a real Chromium. **No running Server is needed**: the spec serves the
-viewer page + its CSS/JS straight from `ui/` via route interception, and injects a mock
-`window.chrome.webview` so `clipboard-viewer.js` picks its native transport. The mock answers the
-shared-bridge actions (`getClipboardDevices`, `getClipboardHistory`) and records
-`pasteClipboardEntry` / `closeClipboardViewer`. It asserts the rich render (filters + meta + help),
-arrow-key selection, `PageDown` jumping to item #11, the `Img` filter hiding text rows, that a long
-URL row never overflows (`scrollWidth <= clientWidth`), that mini density hides filters/meta/help,
-and that `Enter` pastes the selected item's id. Run it on its own (it ignores `BASE_URL`):
-
-```
-npx playwright test clipboard-viewer
-```
+> The clipboard paste popup is now a **native Avalonia window** (a DWM-backed acrylic popup, not a
+> WebView2 page), so it is no longer browser-testable — the old `clipboard-viewer.spec.js` was
+> removed. Its native row-mapping logic is covered by `ClipboardRowMapperTests` in the .NET suite.
 
 ### `tests/calendar-app-day.spec.js` — desktop App Calendar v2 day view (self-contained)
 
 Drives the App shell's unified calendar day view in a real Chromium. **No running App or Server
 is needed**: it serves `ui/` from disk via route interception and injects a mock
-`window.chrome.webview` answering the real bridge contract (same technique as
-`clipboard-viewer.spec.js`); every mock mirrors the exact `/api/calendar/day` wire shape and the
-bridge's serialized DTOs. It covers:
+`window.chrome.webview` answering the real bridge contract; every mock mirrors the exact
+`/api/calendar/day` wire shape and the bridge's serialized DTOs. It covers:
 
 - the unified day **grid** (event rendered positioned, COM account degraded with the visible
   "snapshot unavailable" badge);
-- the **Replicate panel** mask contract (decision D6): checking a destination with a blank mask
+- the **Replicate modal** mask contract (decision D6): checking a destination with a blank mask
   keeps the CTA disabled ("Type a title for each destination"); typing a mask enables
   "Create 1 replica"; the `createEventReplicas` payload carries the typed mask and the
   two-segment event identity, and **never** the origin title;
-- the **Prefix rules panel** listing the rules returned by the bridge.
+- the **Prefix rules modal** listing the rules returned by the bridge (reached via the Replicate
+  modal's "Manage");
+- the **gear** routing to the pairs/accounts configuration sub-route;
+- the read-only **Status popup** single Force-sync clearing its spinner and refreshing the per-pair
+  form counts when the real run completes (the stuck-spinner regression guard).
 
 ```
 npx playwright test calendar-app-day
