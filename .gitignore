@@ -36,6 +36,9 @@ CLAUDE.md
 # Internal design docs (specs, plans, UI design) — not part of the repo
 docs/
 
+# Runtime clipboard blob store (DiskClipboardBlobStore writes synced payloads here at runtime)
+src/ZyncMaster.Server/clipboard-blobs/
+
 # OS noise
 Thumbs.db
 .DS_Store
