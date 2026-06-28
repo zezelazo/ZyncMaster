@@ -191,9 +191,10 @@ kbd.kbd {
 /* ---- tablero today (home) ---- */
 .board {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: var(--s-5);
   align-items: start;
+  min-width: 0;
 }
 @media (max-width: 920px) { .board { grid-template-columns: 1fr; } }
 .board-card { padding: 0; }
@@ -210,6 +211,7 @@ kbd.kbd {
   padding: var(--s-3) var(--s-4);
   border-top: 1px solid var(--border-1);
   min-height: 32px;
+  min-width: 0;
 }
 .board-row__time { font-size: var(--t-meta); color: var(--ink-2); width: 92px; flex: none; }
 .board-row__title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
