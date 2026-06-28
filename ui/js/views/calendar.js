@@ -7,7 +7,7 @@ import { pairsRenderState } from '../pairs-render-state.js';
 
 export function registerCalendarViews(ctx) {
   const {
-    $, el, iconEl, icon, Bridge, state, live, navigate, rerender, rerenderInPlace, softRepaint,
+    $, el, iconEl, icon, Bridge, state, live, identityAuth, navigate, rerender, rerenderInPlace, softRepaint,
     announce, openModal, confirmModal, showToast,
     viewHeader, navRow, actionChip, activityRow, pairBadge,
     cfgSection, cfgRow,
@@ -1531,6 +1531,7 @@ export function registerCalendarViews(ctx) {
       accounts.forEach((acc) => { accountRows.push(accountCard(acc)); });
     }
 
+    maybeRenderConnectMyAccount(root);
     root.append(cfgSection('Your calendar accounts', ...accountRows));
 
     // Connect section — its own card so the heading explains what connecting does, with a one-click
@@ -1656,6 +1657,32 @@ export function registerCalendarViews(ctx) {
   // account list; identity lives in Settings). Adding an account never changes your sign-in; the copy
   // says so. Two scopes: a source-only mailbox connects read-only (least privilege, friendlier to
   // enterprise tenants); a destination connects read/write.
+  // One-click connect for the SIGNED-IN account's own calendar. Sign-in (identityAuth.me) and the
+  // connected calendar accounts are separate grants, so when the user's own email is not yet a calendar
+  // account we offer to connect it in a single click (read & write, so it can be a source or a target).
+  // Reuses the real connectAccount flow (button spinner + cancel + account reload) — not a raw call.
+  function maybeRenderConnectMyAccount(root) {
+    const me = identityAuth && identityAuth.me;
+    const myEmail = ((me && me.email) || '').trim();
+    if (!myEmail) return;
+    const have = (live.accounts || []).some((a) => (a.email || '').toLowerCase() === myEmail.toLowerCase());
+    if (have) return;
+
+    const wrap = el('div', { class: 'connect-cal__wrap' });
+    const repaint = () => { if (state.view === 'calendar-settings') softRepaint(); };
+    const btn = el('button', { class: 'btn btn--primary connect-cal', type: 'button',
+      onclick: () => connectAccount({ scope: 'readwrite', btn, wrap, onConnected: repaint }) },
+      iconEl('link', 13, 1.8),
+      el('span', { class: 'connect-cal__label', text: `Connect the calendar for ${myEmail}` }));
+    wrap.append(btn);
+
+    root.append(cfgSection('Connect your own calendar',
+      el('div', { class: 'cfg-row__hint', style: 'padding:0 2px 6px',
+        text: 'Your sign-in and your calendars are separate grants. Connect the calendar for your ' +
+              'signed-in account in one click — it can be a sync source or a destination.' }),
+      wrap));
+  }
+
   function connectAccountCard() {
     const wrap = el('div', { class: 'connect-cal__wrap' });
     const repaint = () => { if (state.view === 'calendar-settings') softRepaint(); };
