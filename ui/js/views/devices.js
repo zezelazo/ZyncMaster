@@ -10,7 +10,7 @@
 // pinning vive a nivel PAIR, no device, y no hay acción de unpair).
 
 export function registerDevicesViews(ctx) {
-  const { el, icon, Bridge, live, settings, registry, loadClipboardDevices, devicesStatusDot } = ctx;
+  const { el, icon, Bridge, live, identityAuth, settings, registry, loadClipboardDevices, devicesStatusDot } = ctx;
 
   // ---------------- Device-name live availability (✓/✗) ----------------
   // Tracks the latest known availability so saveDeviceName can refuse a name we already know is
@@ -171,8 +171,28 @@ export function registerDevicesViews(ctx) {
       isThis ? el('span', { class: 'chip chip--info', text: 'this device' }) : null);
   }
 
+  // Identity + this-device summary. Sign-in (identityAuth.me) is a separate grant from the device
+  // roster, so surface both: who the user is signed in as, and which device this is. The current
+  // device name comes from the roster's isThis entry, falling back to the live device / local config.
+  function renderIdentityCard() {
+    const me = (Bridge.desktopApp && identityAuth && identityAuth.me) || null;
+    const email = (me && me.email) || '—';
+    const name = (me && me.displayName) || '';
+    const roster = (live.clipboardDevices && live.clipboardDevices.devices) || [];
+    const thisDev = roster.find((d) => d.isThis);
+    const dev = (thisDev && thisDev.name) || (live.device && live.device.name) || settings.deviceName || '—';
+    return el('section', { class: 'glass glass--card devices-id' },
+      el('div', { class: 'devices-id-row' },
+        el('span', { class: 'devices-id-lbl', text: 'Signed in as' }),
+        el('span', { class: 'devices-id-val', text: name ? `${name} · ${email}` : email })),
+      el('div', { class: 'devices-id-row' },
+        el('span', { class: 'devices-id-lbl', text: 'This device' }),
+        el('span', { class: 'devices-id-val', text: dev })));
+  }
+
   function renderDevices(root) {
     if (Bridge.desktopApp) loadClipboardDevices('devices');
+    root.append(renderIdentityCard());
     const devices = (live.clipboardDevices && live.clipboardDevices.devices) || [];
     const list = el('div', { class: 'device-list' });
     if (!devices.length) {

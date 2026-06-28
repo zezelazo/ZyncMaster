@@ -760,3 +760,9 @@
 /* Consolidated identity hint (Signed-in chip + email on one line). */
 .identity-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
 .identity-hint__email { color: var(--ink-2); }
+
+/* Devices screen identity + this-device summary card. */
+.devices-id { margin-bottom: var(--s-4); }
+.devices-id-row { display: flex; justify-content: space-between; gap: var(--s-3); padding: 4px 0; }
+.devices-id-lbl { color: var(--ink-3); font-size: var(--t-meta); }
+.devices-id-val { color: var(--ink-1); }
