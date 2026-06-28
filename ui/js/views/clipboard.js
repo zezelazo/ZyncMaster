@@ -1,8 +1,8 @@
 // views/clipboard.js — módulo Clipboard: la in-app clipboard VIEW (historial compartido
 // con copy/delete) y la tab Settings consolidada (los 7 knobs de "this device" + el
 // roster "Your devices"). Extraído VERBATIM de app.js — solo restyle de shell, lógica
-// intacta. El viewer flotante (clipboard-viewer.html) NO se toca; esto es el panel
-// in-dashboard. Registrado vía registerClipboardViews(ctx).
+// intacta. El popup flotante de pegado es una ventana NATIVA Avalonia (ClipboardViewerWindow), no
+// esta vista; esto es el panel in-dashboard. Registrado vía registerClipboardViews(ctx).
 //
 // Estado del historial: live.clipboardHistory (compartido vía ctx con home/palette).
 // loadClipboardHistory vive AQUÍ pero se re-expone en ctx.loadClipboardHistory para que

@@ -1,5 +1,5 @@
 /* =========================================================
-   CLIPBOARD module — viewer overlay + settings screen.
+   CLIPBOARD module — in-dashboard clipboard view + settings screen.
    Built on the shared liquid-glass tokens (tokens.css / glass.css) and the
    existing component vocabulary (.segmented, .toggle, .cfg-row, .status-dot,
    .section-head). No hardcoded hex — palette colours come from CSS variables
@@ -9,71 +9,9 @@
    hints-toggle, glass-settings, settings-natural-accordion.
    ========================================================= */
 
-/* ---------------------------------------------------------
-   VIEWER OVERLAY
-   The viewer is its own frameless window (ui/clipboard-viewer.html). The host
-   window and the WebView2 surface are both transparent, so html + body MUST
-   paint nothing: any full-bleed background here would render as an opaque
-   rectangle around the card. The .cb-viewer glass card is the ONLY visible
-   surface on this page.
-   --------------------------------------------------------- */
-html.cb-viewer-page,
-html.cb-viewer-page body,
-.cb-viewer-body {
-  background: transparent;
-}
-.cb-viewer-body {
-  margin: 0;
-  overflow: hidden;
-}
-
-.cb-stage {
-  position: relative;
-  z-index: 1;
-  min-height: 100vh;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  /* No padding: the host window is transparent and sized to the card, so any padding here would show
-     as an empty border of desktop around the card. The card carries its own internal padding. */
-  padding: 0;
-}
-
-/* The glass card. Recipe matches glass.css but tuned for the dense list:
-   blur(28px) saturate(180%), top specular rim, layered stroke + drop shadow.
-   The fill is a dark wash whose ALPHA is driven by --cb-paste-opacity (0..100, injected by the App
-   from the App-local pastePanelOpacity setting; default 70). At 70 the card is 70% opaque dark over
-   the live desktop (30% transparent). This applies ONLY to the floating hotkey viewer — the
-   in-dashboard clipboard view never loads this stage and uses its own glass tokens. */
-.cb-viewer {
-  width: 316px;           /* rich default; mini overrides below */
-  max-width: 100%;
-  color: var(--ink-1);
-  /* 14px + overflow:hidden so the corners are genuinely rounded over the bare desktop
-     (nothing else on the page paints, so a clipped square would show as-is). */
-  border-radius: var(--r-md);
-  padding: 8px;
-  overflow: hidden;
-  background: rgba(12, 14, 22, calc(var(--cb-paste-opacity, 70) / 100));
-  -webkit-backdrop-filter: blur(28px) saturate(180%);
-  backdrop-filter: blur(28px) saturate(180%);
-  border: 1px solid var(--glass-stroke);
-  box-shadow:
-    var(--glass-shadow),
-    inset 0 1px 0 0 var(--glass-rim),
-    inset 0 0 0 1px var(--glass-stroke-2);
-  font-family: var(--font);
-  display: flex;
-  flex-direction: column;
-  max-height: 100vh;
-}
-.cb-viewer--mini { width: 240px; }
-
-@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  /* No blur support: keep the dark fill at the configured opacity rather than swapping to the fully
-     opaque surface token, so the panel stays semi-transparent as intended. */
-  .cb-viewer { background: rgba(12, 14, 22, calc(var(--cb-paste-opacity, 70) / 100)); }
-}
+/* The floating clipboard popup is a NATIVE Avalonia window now (see ClipboardViewerWindow); its old
+   WebView2 overlay styles (.cb-viewer / .cb-viewer--mini / .cb-viewer-page / .cb-viewer-body /
+   .cb-stage) were removed. The .cb-* rules below are SHARED with the in-dashboard clipboard view. */
 
 /* Header: status dot + "Clipboard · N items". */
 .cb-top {
@@ -183,7 +121,6 @@ html.cb-viewer-page body,
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cb-viewer--mini .cb-title { font-size: 12px; }
 .cb-meta {
   font-size: 10px;
   line-height: 13px;
@@ -235,30 +172,11 @@ html.cb-viewer-page body,
   background: var(--glass-fill-2);
 }
 
-/* Selected-image expand preview (RICH only — gated to :not(.cb-viewer--mini) because the JS only
-   appends the preview in rich; in mini a selected image must render as a plain selected row). The
-   selected image row grows to a single column and shows a large thumbnail keeping aspect ratio. */
-.cb-viewer:not(.cb-viewer--mini) .cb-row--img.is-selected {
-  grid-template-columns: 1fr;
-  gap: 7px;
-  padding: 8px 9px;
-}
-.cb-viewer:not(.cb-viewer--mini) .cb-row--img.is-selected .cb-row__head {
-  display: grid;
-  grid-template-columns: 21px minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-}
-/* When the avatar is an inline thumbnail, the expanded head keeps the wider avatar column. */
-.cb-viewer:not(.cb-viewer--mini) .cb-row--thumb.is-selected .cb-row__head {
-  grid-template-columns: 38px minmax(0, 1fr);
-}
-/* In the un-expanded state the head IS the row content (no wrapper grid needed). This covers all
-   non-image rows, un-selected image rows, and — because the expand grid above is rich-only — every
-   image row in mini (including the selected one). */
+/* The head IS the row content (no wrapper grid needed) for non-image rows and un-selected image
+   rows. The selected-image expand preview was a floating-viewer-only treatment (it was scoped under
+   .cb-viewer) and went away with the native popup. */
 .cb-row:not(.cb-row--img) .cb-row__head,
-.cb-row--img:not(.is-selected) .cb-row__head,
-.cb-viewer--mini .cb-row--img .cb-row__head { display: contents; }
+.cb-row--img:not(.is-selected) .cb-row__head { display: contents; }
 
 .cb-preview {
   width: 100%;

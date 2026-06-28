@@ -31,8 +31,8 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     // system browser) by the native fallback panel when the runtime is missing.
     public const string RuntimeDownloadUrl = "https://developer.microsoft.com/microsoft-edge/webview2/";
 
-    // The page this host navigates to. The main dashboard uses index.html; the clipboard viewer
-    // window reuses the SAME bundled site through this seam by passing "clipboard-viewer.html".
+    // The page this host navigates to. The main dashboard uses index.html; the seam accepts a
+    // different bundled page via the startPage ctor arg if another window ever needs one.
     private readonly string _startUrl;
     private readonly string _uiRoot;
     private readonly string? _documentCreatedScript;
@@ -54,9 +54,9 @@ public sealed class WebView2WebHost : NativeControlHost, IWebHost, IBridgeTransp
     // to show the fallback panel even if it attaches after the failure was raised.
     public bool HasFailed { get; private set; }
 
-    // startPage: the file under the bundled site to navigate to (default "index.html"). The clipboard
-    // viewer passes "clipboard-viewer.html" so its window renders the viewer page through the SAME
-    // virtual-host mapping + bridge channel as the main window.
+    // startPage: the file under the bundled site to navigate to (default "index.html"). A second
+    // window could pass a different bundled page to render it through the SAME virtual-host mapping +
+    // bridge channel as the main window.
     //
     // documentCreatedScript: optional JavaScript run on EVERY document BEFORE its own scripts (via
     // CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync). The clipboard viewer uses it to set the
