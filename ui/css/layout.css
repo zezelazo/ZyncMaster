@@ -110,6 +110,7 @@
   position: relative;
   padding: var(--s-6);
   overflow-y: auto;
+  overflow-x: hidden;
   z-index: 1;
 }
 .view[hidden] { display: none; }
