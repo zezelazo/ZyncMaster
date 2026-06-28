@@ -102,11 +102,9 @@
 .calday-status-name { font-size: var(--t-meta); font-weight: var(--w-title); color: var(--ink-1);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .calday-status-arrow { color: var(--ink-3); display: inline-flex; flex: none; }
-.calday-status-stats { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); flex: 1 1 auto; }
-.calday-status-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.calday-status-stat-lbl { font-size: var(--t-micro); font-weight: var(--w-micro); letter-spacing: .04em;
-  text-transform: uppercase; color: var(--ink-3); }
-.calday-status-stat-val { font-size: var(--t-meta); color: var(--ink-1); }
-.calday-status-act { flex: none; margin-left: auto; }
-.calday-status-force { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
-  font-size: var(--t-meta); }
+.calday-status-bar { display: flex; justify-content: flex-end; padding: 0 0 var(--s-2); }
+.calday-status-form { display: flex; flex-direction: column; gap: 4px; margin-top: var(--s-2); }
+.calday-status-line { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-3); }
+.calday-status-line-lbl { font-size: var(--t-micro); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); }
+.calday-status-line-val { color: var(--ink-1); text-align: right; }
+.calday-statusicon.warn { color: var(--warn); border-color: var(--warn); }
