@@ -4,10 +4,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 // Smoke of the desktop App's Calendar v2 day view. Serves ui/ from disk and injects a MOCK
-// window.chrome.webview that answers the bridge contract (same technique as
-// clipboard-viewer.spec.js), so the REAL render code runs with deterministic data. Every mock
-// below mirrors the EXACT wire shape pinned in the plan header (regenerated from the backend
-// plan's endpoint tests) and the EXACT serialized bridge DTOs — never an invented shape.
+// window.chrome.webview that answers the bridge contract, so the REAL render code runs with
+// deterministic data. Every mock below mirrors the EXACT wire shape pinned in the plan header
+// (regenerated from the backend plan's endpoint tests) and the EXACT serialized bridge DTOs —
+// never an invented shape.
+//
+// Calendar detail surfaces (Replicate / New event / Prefix rules) open in the shared modal now
+// (openModal supplies the title bar + close), so their title is `.modal__title` text, not a heading.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const uiRoot = path.resolve(here, '../../../ui');
@@ -119,7 +122,7 @@ test('replicate panel requires a typed mask title before creating', async ({ pag
   // gotoDayView: sidebar → Calendar aterriza directo en la vista día.
   await gotoDayView(page);
   await page.locator('.calday-ev').click();
-  await expect(page.getByRole('heading', { name: 'Replicate event' })).toBeVisible();
+  await expect(page.getByText('Replicate event', { exact: true })).toBeVisible();
 
   const destRow = page.locator('.calday-dest').first();
   await destRow.locator('input[type="checkbox"]').check();
@@ -151,10 +154,12 @@ test('prefix rules panel lists the rules from the bridge', async ({ page }) => {
   await gotoDayView(page);  // sidebar → Calendar aterriza directo en la vista día
   await page.locator('.calday-ev').click();
   await page.locator('#calDayManageRules').click();
-  await expect(page.getByRole('heading', { name: 'Prefix rules' })).toBeVisible();
-  // exact: the static hint copy also mentions “[Lunch] X”; the rule row from the bridge is the
-  // element whose text is exactly the bracketed prefix.
-  await expect(page.getByText('[Lunch]', { exact: true })).toBeVisible();
+  const rulesModal = page.getByRole('dialog', { name: 'Prefix rules' });
+  await expect(rulesModal).toBeVisible();
+  // Scope to the Prefix-rules dialog: while the Replicate modal cross-fades out it still carries its
+  // own read-only [Lunch] summary, so an unscoped match is briefly ambiguous. The rule row from the
+  // bridge is the element whose text is exactly the bracketed prefix.
+  await expect(rulesModal.getByText('[Lunch]', { exact: true })).toBeVisible();
 });
 
 test('the gear opens the pairs/accounts configuration sub-route', async ({ page }) => {
@@ -223,11 +228,16 @@ test('Status popup Force-sync clears the spinner and updates counts when the run
 
   const row = page.locator('.calday-status-row');
   await expect(row).toHaveCount(1);
-  const force = row.locator('.calday-status-force');
+  // The single Force-sync (runs every active pair) lives in the bar above the rows, not per-row.
+  const force = page.locator('.calday-status-forceall');
   await expect(force).toContainText('Force-sync');
-  // Pre-run counts: Synced 0, New 0.
-  await expect(row.locator('.calday-status-stat-val').nth(0)).toHaveText('0');
-  await expect(row.locator('.calday-status-stat-val').nth(1)).toHaveText('0');
+  // The per-pair form lists Source, Destination, New events, Synced, Last run, Next — so the
+  // last-run counts are the 3rd (New events) and 4th (Synced) value cells.
+  const newEvents = row.locator('.calday-status-line-val').nth(2);
+  const synced = row.locator('.calday-status-line-val').nth(3);
+  // Pre-run counts: New events 0, Synced 0.
+  await expect(newEvents).toHaveText('0');
+  await expect(synced).toHaveText('0');
 
   await force.click();
   // Mid-run: the spinner shows and the button is disabled — the popup reflects the live run state.
@@ -241,7 +251,7 @@ test('Status popup Force-sync clears the spinner and updates counts when the run
   await expect(force.locator('.spinner')).toHaveCount(0);
   await expect(force).toBeEnabled();
   await expect(force).toContainText('Force-sync');
-  // Fresh counts: Synced 4+1+2 = 7, New = created = 4.
-  await expect(row.locator('.calday-status-stat-val').nth(0)).toHaveText('7');
-  await expect(row.locator('.calday-status-stat-val').nth(1)).toHaveText('4');
+  // Fresh counts: New events = created = 4, Synced = 4+1+2 = 7.
+  await expect(newEvents).toHaveText('4');
+  await expect(synced).toHaveText('7');
 });
